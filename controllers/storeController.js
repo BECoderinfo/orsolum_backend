@@ -10,7 +10,6 @@ import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
 import { processGoogleMapsLink } from '../helper/latAndLong.js';
 import ShiprocketService from "../helper/shiprocketService.js";
-import ShiprocketClient from "../helper/shiprocketClient.js";
 
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
@@ -40,8 +39,8 @@ export const createStore = async (req, res) => {
         address,
         email,
         location,
-        createdBy: req.user._id,
-        updatedBy: req.user._id,
+        createdBy: req.user?._id || null,
+        updatedBy: req.user?._id || null,
       });
   
       const savedStore = await store.save();
@@ -53,17 +52,17 @@ export const createStore = async (req, res) => {
         email: savedStore.email || "noreply@orsolum.com",
         phone: savedStore.phone,
         address: savedStore.address,
-        city: "Delhi", // You can replace with dynamic location data if available
+        city: "Delhi",
         state: "Delhi",
         country: "India",
-        pin_code: "110001", // Replace dynamically if you have pincode in `req.body`
+        pin_code: "110001",
       };
   
       const response = await ShiprocketService.createPickupAddress(pickupPayload);
   
-      if (response && response.data?.pickup_location) {
+      if (response && response.pickup_location) {
         savedStore.shiprocket = {
-          pickup_address_id: response.data.pickup_location,
+          pickup_address_id: response.pickup_location,
           pickup_location: pickupPayload,
         };
         await savedStore.save();
@@ -76,10 +75,11 @@ export const createStore = async (req, res) => {
       });
   
     } catch (error) {
-      console.error("Error creating store:", error);
+      console.error("❌ Error creating store:", error);
       res.status(500).json({ success: false, message: error.message });
     }
   };
+
 
 export const editStore = async (req, res) => {
     try {
