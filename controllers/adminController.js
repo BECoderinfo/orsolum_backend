@@ -42,30 +42,52 @@ export const createAdmin = async (req, res) => {
 
 export const loginAdmin = async (req, res) => {
     try {
-        const { email, password } = req.body;
-
-        if (!email || !password) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter Credentials` });
-        }
-
-        const admin = await Admin.findOne({ email });
-        if (!admin) {
-            return res.status(status.Unauthorized).json({ status: jsonStatus.Unauthorized, success: false, message: "Invalid credentials" });
-        }
-
-        const checkPass = await bcrypt.compareSync(password, admin.password);
-        if (!checkPass) {
-            return res.status(status.Unauthorized).json({ status: jsonStatus.Unauthorized, success: false, message: "Invalid Credentials." });
-        }
-
-        const token = generateToken(admin._id);
-
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, token });
+      const { email, password } = req.body;
+  
+      if (!email || !password) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Please enter credentials",
+        });
+      }
+  
+      const admin = await Admin.findOne({ email });
+      if (!admin) {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Invalid credentials (email not found)",
+        });
+      }
+  
+      const checkPass = bcrypt.compareSync(password, admin.password);
+      if (!checkPass) {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Invalid credentials (password mismatch)",
+        });
+      }
+  
+      const token = generateToken(admin._id);
+  
+      res.status(status.OK).json({
+        status: jsonStatus.OK,
+        success: true,
+        token,
+      });
     } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('loginAdmin', error, req, res);
+      console.error("❌ loginAdmin error:", error.message);
+      res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: error.message,
+      });
+      return catchError("loginAdmin", error, req, res);
     }
-};
+  };
+  
 
 export const uploadStoreCategoryImage = async (req, res) => {
     try {

@@ -2,7 +2,8 @@
 import PickupAddress from '../models/PickupAddress.js';
 import Store from '../models/Store.js';
 import { apiResponse } from '../helper/api.responses.js';
-import ShiprocketService from '../helper/shiprocketService.js';
+import ShiprocketService from "../helper/shiprocketService.js";
+import ShiprocketClient from "../helper/shiprocketClient.js";
 
 // ✅ Add new pickup address
 export const addPickupAddress = async (req, res) => {
