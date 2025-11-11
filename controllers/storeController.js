@@ -1,19 +1,18 @@
-const { jsonStatus, status } = require('../helper/api.responses.js');
-const { catchError } = require('../helper/service.js');
-const User = require('../models/User.js');
-const Store = require('../models/Store.js');
-const Product = require('../models/Product.js');
-const StorePopularProduct = require('../models/StorePopularProduct.js');
-const StoreOffer = require('../models/StoreOffer.js');
-const StoreCategory = require('../models/StoreCategory.js');
-const mongoose = require('mongoose');
-const { signedUrl } = require('../helper/s3.config.js');
-const { processGoogleMapsLink } = require('../helper/latAndLong.js');
-const ShiprocketService = require("../helper/shiprocketService.js");
+import { jsonStatus, status } from '../helper/api.responses.js';
+import { catchError } from '../helper/service.js';
+import User from '../models/User.js';
+import Store from '../models/Store.js';
+import Product from '../models/Product.js';
+import StorePopularProduct from '../models/StorePopularProduct.js';
+import StoreOffer from '../models/StoreOffer.js';
+import StoreCategory from '../models/StoreCategory.js';
+import mongoose from 'mongoose';
+import { signedUrl } from '../helper/s3.config.js';
+import { processGoogleMapsLink } from '../helper/latAndLong.js';
+import ShiprocketService from "../helper/shiprocketService.js";
 
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
-
 const { ObjectId } = mongoose.Types;
 
 export const uploadStoreImage = async (req, res) => {
@@ -263,368 +262,368 @@ export const storeDetails = async (req, res) => {
     });
   }
 };
-  
+
 export const deleteStoreImage = async (req, res) => {
-    try {
+  try {
 
-        const store = await Store.findOne({ createdBy: req.user._id });
-        if (!store) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "You have not created any store with this account" });
-        }
-
-        const { index } = req.body;
-
-        if (typeof index !== "number" || index < 0) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Invalid index provided." });
-        }
-
-        if (index >= store.images.length) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Index out of bounds." });
-        }
-
-        const updatedStore = await Store.findByIdAndUpdate(
-            store._id,
-            {
-                $pull: {
-                    images: store.images[index]
-                }
-            },
-            { new: true, runValidators: true }
-        );
-
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: updatedStore });
-    } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('deleteStoreImage', error, req, res);
+    const store = await Store.findOne({ createdBy: req.user._id });
+    if (!store) {
+      return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "You have not created any store with this account" });
     }
+
+    const { index } = req.body;
+
+    if (typeof index !== "number" || index < 0) {
+      return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Invalid index provided." });
+    }
+
+    if (index >= store.images.length) {
+      return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Index out of bounds." });
+    }
+
+    const updatedStore = await Store.findByIdAndUpdate(
+      store._id,
+      {
+        $pull: {
+          images: store.images[index]
+        }
+      },
+      { new: true, runValidators: true }
+    );
+
+    res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: updatedStore });
+  } catch (error) {
+    res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+    return catchError('deleteStoreImage', error, req, res);
+  }
 };
 
 export const listOfCategories = async (req, res) => {
-    try {
+  try {
 
-        const listCategories = await StoreCategory.aggregate([
-            {
-                $match: {
-                    deleted: false
-                }
-            }
-        ]);
+    const listCategories = await StoreCategory.aggregate([
+      {
+        $match: {
+          deleted: false
+        }
+      }
+    ]);
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: listCategories });
-    } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('listOfCategories', error, req, res);
-    }
+    res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: listCategories });
+  } catch (error) {
+    res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+    return catchError('listOfCategories', error, req, res);
+  }
 };
 
 export const saveAllOffers = async (req, res) => {
-    try {
-        const { offers } = req.body;
+  try {
+    const { offers } = req.body;
 
-        const store = await Store.findOne({ createdBy: req.user._id });
-        if (!store) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "You have not created any store with this account" });
-        }
-
-        if (!Array.isArray(offers)) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Offers must be an array." });
-        }
-
-        const userId = req.user._id;
-
-        const offerDocuments = offers.map(offer => ({
-            offer,
-            createdBy: userId,
-            storeId: store._id
-        }));
-
-        await StoreOffer.deleteMany({ storeId: store._id, createdBy: userId });
-
-        const insertedOffers = await StoreOffer.insertMany(offerDocuments);
-
-        res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: insertedOffers });
-    } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('saveAllOffers', error, req, res);
+    const store = await Store.findOne({ createdBy: req.user._id });
+    if (!store) {
+      return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "You have not created any store with this account" });
     }
+
+    if (!Array.isArray(offers)) {
+      return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Offers must be an array." });
+    }
+
+    const userId = req.user._id;
+
+    const offerDocuments = offers.map(offer => ({
+      offer,
+      createdBy: userId,
+      storeId: store._id
+    }));
+
+    await StoreOffer.deleteMany({ storeId: store._id, createdBy: userId });
+
+    const insertedOffers = await StoreOffer.insertMany(offerDocuments);
+
+    res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: insertedOffers });
+  } catch (error) {
+    res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+    return catchError('saveAllOffers', error, req, res);
+  }
 };
 
 export const createStoreOffer = async (req, res) => {
-    try {
-        const { offer } = req.body;
-        const { id } = req.params;
+  try {
+    const { offer } = req.body;
+    const { id } = req.params;
 
-        if (!offer) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Please enter offer" });
-        }
-
-        const store = await Store.findOne({ _id: id, createdBy: req.user._id });
-        if (!store) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store not found" });
-        }
-
-        let newStoreOffer = new StoreOffer({ offer, createdBy: req.user._id, storeId: id });
-        newStoreOffer = await newStoreOffer.save();
-
-        res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: newStoreOffer });
-    } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('createStoreOffer', error, req, res);
+    if (!offer) {
+      return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Please enter offer" });
     }
+
+    const store = await Store.findOne({ _id: id, createdBy: req.user._id });
+    if (!store) {
+      return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store not found" });
+    }
+
+    let newStoreOffer = new StoreOffer({ offer, createdBy: req.user._id, storeId: id });
+    newStoreOffer = await newStoreOffer.save();
+
+    res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: newStoreOffer });
+  } catch (error) {
+    res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+    return catchError('createStoreOffer', error, req, res);
+  }
 };
 
 export const deleteStoreOffer = async (req, res) => {
-    try {
-        const { store, offer } = req.params;
+  try {
+    const { store, offer } = req.params;
 
-        const findOffer = await StoreOffer.findOne({ _id: offer, storeId: store, createdBy: req.user._id });
-        if (!findOffer) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store Offer not found" });
-        }
-
-        await StoreOffer.findByIdAndDelete(findOffer._id);
-
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true });
-    } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('deleteStoreOffer', error, req, res);
+    const findOffer = await StoreOffer.findOne({ _id: offer, storeId: store, createdBy: req.user._id });
+    if (!findOffer) {
+      return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store Offer not found" });
     }
+
+    await StoreOffer.findByIdAndDelete(findOffer._id);
+
+    res.status(status.OK).json({ status: jsonStatus.OK, success: true });
+  } catch (error) {
+    res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+    return catchError('deleteStoreOffer', error, req, res);
+  }
 };
 
 export const createOffers = async (req, res) => {
-    try {
-        const { storeId, offers } = req.body; // Accepting an array of offers
+  try {
+    const { storeId, offers } = req.body; // Accepting an array of offers
 
-        // Validation: Ensure required fields are present
-        if (!storeId || !Array.isArray(offers) || offers.length === 0) {
-            return res.status(400).json({ success: false, message: 'storeId and at least one offer are required.' });
-        }
-
-        // Array to store new offers
-        let newOffers = [];
-
-        for (let offer of offers) {
-            const { offerType, discountValue, minOrderValue, selectedProducts, title } = offer;
-
-            // Validate offerType
-            if (!offerType) {
-                return res.status(400).json({ success: false, message: 'offerType is required for all offers.' });
-            }
-
-            // Validation: If offerType is 'buy_one_get_one', selectedProducts must be provided
-            if (offerType === 'buy_one_get_one' && (!selectedProducts || selectedProducts.length === 0)) {
-                return res.status(400).json({ success: false, message: 'For Buy One Get One, selectedProducts is required.' });
-            }
-
-            // Validation: If offerType is percentage or flat discount, discountValue must be provided
-            if ((offerType === 'percentage_discount' || offerType === 'flat_discount') && (discountValue === undefined || discountValue <= 0)) {
-                return res.status(400).json({ success: false, message: 'Discount value must be greater than 0 for discount offers.' });
-            }
-
-            // Creating offer object
-            newOffers.push({
-                storeId,
-                createdBy: req.user._id,
-                offerType,
-                discountValue: offerType === 'buy_one_get_one' ? null : discountValue, // No discount value for BOGO
-                minOrderValue: minOrderValue || 0, // Default to 0
-                selectedProducts: offerType === 'buy_one_get_one' ? selectedProducts : [], // Only include products for BOGO
-                title: title || ''
-            });
-        }
-
-        // Bulk insert into MongoDB
-        const savedOffers = await StoreOffer.insertMany(newOffers);
-
-        res.status(201).json({
-            success: true,
-            message: `${savedOffers.length} offers created successfully`,
-            data: savedOffers
-        });
-
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-        return catchError('createOffers', error, req, res);
+    // Validation: Ensure required fields are present
+    if (!storeId || !Array.isArray(offers) || offers.length === 0) {
+      return res.status(400).json({ success: false, message: 'storeId and at least one offer are required.' });
     }
+
+    // Array to store new offers
+    let newOffers = [];
+
+    for (let offer of offers) {
+      const { offerType, discountValue, minOrderValue, selectedProducts, title } = offer;
+
+      // Validate offerType
+      if (!offerType) {
+        return res.status(400).json({ success: false, message: 'offerType is required for all offers.' });
+      }
+
+      // Validation: If offerType is 'buy_one_get_one', selectedProducts must be provided
+      if (offerType === 'buy_one_get_one' && (!selectedProducts || selectedProducts.length === 0)) {
+        return res.status(400).json({ success: false, message: 'For Buy One Get One, selectedProducts is required.' });
+      }
+
+      // Validation: If offerType is percentage or flat discount, discountValue must be provided
+      if ((offerType === 'percentage_discount' || offerType === 'flat_discount') && (discountValue === undefined || discountValue <= 0)) {
+        return res.status(400).json({ success: false, message: 'Discount value must be greater than 0 for discount offers.' });
+      }
+
+      // Creating offer object
+      newOffers.push({
+        storeId,
+        createdBy: req.user._id,
+        offerType,
+        discountValue: offerType === 'buy_one_get_one' ? null : discountValue, // No discount value for BOGO
+        minOrderValue: minOrderValue || 0, // Default to 0
+        selectedProducts: offerType === 'buy_one_get_one' ? selectedProducts : [], // Only include products for BOGO
+        title: title || ''
+      });
+    }
+
+    // Bulk insert into MongoDB
+    const savedOffers = await StoreOffer.insertMany(newOffers);
+
+    res.status(201).json({
+      success: true,
+      message: `${savedOffers.length} offers created successfully`,
+      data: savedOffers
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+    return catchError('createOffers', error, req, res);
+  }
 };
 
 export const saveAllPopularProducts = async (req, res) => {
-    try {
-        const { productIds, storeId } = req.body;
+  try {
+    const { productIds, storeId } = req.body;
 
-        // 🧩 1️⃣ Validate Input
-        if (!Array.isArray(productIds) || !storeId) {
-            return res.status(400).json({
-                status: jsonStatus.BadRequest,
-                success: false,
-                message: "Please provide a valid array of Product IDs and a Store ID."
-            });
-        }
-
-        // 🧩 2️⃣ Validate Store Ownership
-        const store = await Store.findOne({ _id: storeId, createdBy: req.user._id });
-        if (!store) {
-            return res.status(status.NotFound).json({
-                status: jsonStatus.NotFound,
-                success: false,
-                message: "Store not found or does not belong to you."
-            });
-        }
-
-        // 🧩 3️⃣ Check if all products belong to this store
-        const products = await Product.find({
-            _id: { $in: productIds },
-            storeId: storeId, // ✅ Matching by store instead of createdBy
-        });
-
-        if (products.length !== productIds.length) {
-            return res.status(404).json({
-                status: jsonStatus.NotFound,
-                success: false,
-                message: "Some products were not found in this store."
-            });
-        }
-
-        // 🧩 4️⃣ Remove old popular products for this store
-        await StorePopularProduct.deleteMany({ storeId, createdBy: req.user._id });
-
-        // 🧩 5️⃣ Create new popular product documents
-        const popularProductDocs = productIds.map(productId => ({
-            productId,
-            storeId,
-            createdBy: req.user._id
-        }));
-
-        // 🧩 6️⃣ Insert new ones
-        const insertedPopularProducts = await StorePopularProduct.insertMany(popularProductDocs);
-
-        // 🧩 7️⃣ Respond with success
-        res.status(status.Create).json({
-            status: jsonStatus.Create,
-            success: true,
-            message: "Popular products saved successfully.",
-            data: insertedPopularProducts
-        });
-
-    } catch (error) {
-        // 🧩 8️⃣ Catch and log errors
-        console.error("Error in saveAllPopularProducts:", error);
-        res.status(status.InternalServerError).json({
-            status: jsonStatus.InternalServerError,
-            success: false,
-            message: error.message
-        });
-        return catchError('saveAllPopularProducts', error, req, res);
+    // 🧩 1️⃣ Validate Input
+    if (!Array.isArray(productIds) || !storeId) {
+      return res.status(400).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Please provide a valid array of Product IDs and a Store ID."
+      });
     }
+
+    // 🧩 2️⃣ Validate Store Ownership
+    const store = await Store.findOne({ _id: storeId, createdBy: req.user._id });
+    if (!store) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Store not found or does not belong to you."
+      });
+    }
+
+    // 🧩 3️⃣ Check if all products belong to this store
+    const products = await Product.find({
+      _id: { $in: productIds },
+      storeId: storeId, // ✅ Matching by store instead of createdBy
+    });
+
+    if (products.length !== productIds.length) {
+      return res.status(404).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Some products were not found in this store."
+      });
+    }
+
+    // 🧩 4️⃣ Remove old popular products for this store
+    await StorePopularProduct.deleteMany({ storeId, createdBy: req.user._id });
+
+    // 🧩 5️⃣ Create new popular product documents
+    const popularProductDocs = productIds.map(productId => ({
+      productId,
+      storeId,
+      createdBy: req.user._id
+    }));
+
+    // 🧩 6️⃣ Insert new ones
+    const insertedPopularProducts = await StorePopularProduct.insertMany(popularProductDocs);
+
+    // 🧩 7️⃣ Respond with success
+    res.status(status.Create).json({
+      status: jsonStatus.Create,
+      success: true,
+      message: "Popular products saved successfully.",
+      data: insertedPopularProducts
+    });
+
+  } catch (error) {
+    // 🧩 8️⃣ Catch and log errors
+    console.error("Error in saveAllPopularProducts:", error);
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message
+    });
+    return catchError('saveAllPopularProducts', error, req, res);
+  }
 };
 
 export const createPopularProduct = async (req, res) => {
-    try {
-        const { productId, storeId } = req.body;
+  try {
+    const { productId, storeId } = req.body;
 
-        if (!productId || !storeId) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Please enter Product ID and Store ID" });
-        }
-
-        const store = await Store.findOne({ _id: storeId, createdBy: req.user._id });
-        if (!store) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store not found" });
-        }
-
-        const product = await Product.findOne({ _id: productId, createdBy: req.user._id });
-        if (!product) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product not found" });
-        }
-
-        const popularProductFind = await StorePopularProduct.findOne({ productId, storeId, createdBy: req.user._id });
-        if (popularProductFind) {
-            return res.status(status.ResourceExist).json({ status: jsonStatus.ResourceExist, success: false, message: "Popular product already added" });
-        }
-
-        let newPopularProduct = new StorePopularProduct({ productId, storeId, createdBy: req.user._id });
-        newPopularProduct = await newPopularProduct.save();
-
-        res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: newPopularProduct });
-    } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('createPopularProduct', error, req, res);
+    if (!productId || !storeId) {
+      return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Please enter Product ID and Store ID" });
     }
+
+    const store = await Store.findOne({ _id: storeId, createdBy: req.user._id });
+    if (!store) {
+      return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store not found" });
+    }
+
+    const product = await Product.findOne({ _id: productId, createdBy: req.user._id });
+    if (!product) {
+      return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product not found" });
+    }
+
+    const popularProductFind = await StorePopularProduct.findOne({ productId, storeId, createdBy: req.user._id });
+    if (popularProductFind) {
+      return res.status(status.ResourceExist).json({ status: jsonStatus.ResourceExist, success: false, message: "Popular product already added" });
+    }
+
+    let newPopularProduct = new StorePopularProduct({ productId, storeId, createdBy: req.user._id });
+    newPopularProduct = await newPopularProduct.save();
+
+    res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: newPopularProduct });
+  } catch (error) {
+    res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+    return catchError('createPopularProduct', error, req, res);
+  }
 };
 
 export const deleteStoreSelectedOffer = async (req, res) => {
-    try {
-        const { id } = req.params;
+  try {
+    const { id } = req.params;
 
-        const findOffer = await StoreOffer.findOne({ createdBy: req.user._id, _id: id });
-        if (!findOffer) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Offer not found" });
-        }
-
-        findOffer.deleted = true;
-        await findOffer.save();
-
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true });
-    } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('deleteStoreSelectedOffer', error, req, res);
+    const findOffer = await StoreOffer.findOne({ createdBy: req.user._id, _id: id });
+    if (!findOffer) {
+      return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Offer not found" });
     }
+
+    findOffer.deleted = true;
+    await findOffer.save();
+
+    res.status(status.OK).json({ status: jsonStatus.OK, success: true });
+  } catch (error) {
+    res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+    return catchError('deleteStoreSelectedOffer', error, req, res);
+  }
 };
 
 export const deletePopularProduct = async (req, res) => {
-    try {
-        const { store, id } = req.params;
+  try {
+    const { store, id } = req.params;
 
-        const storeDetails = await Store.findOne({ _id: store, createdBy: req.user._id });
-        if (!storeDetails) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store not found" });
-        }
-
-        const findPopProduct = await StorePopularProduct.findById(id);
-        if (!findPopProduct) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Popular product not found with this ID" });
-        }
-
-        await StorePopularProduct.findByIdAndDelete(id);
-
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true });
-    } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('deletePopularProduct', error, req, res);
+    const storeDetails = await Store.findOne({ _id: store, createdBy: req.user._id });
+    if (!storeDetails) {
+      return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store not found" });
     }
+
+    const findPopProduct = await StorePopularProduct.findById(id);
+    if (!findPopProduct) {
+      return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Popular product not found with this ID" });
+    }
+
+    await StorePopularProduct.findByIdAndDelete(id);
+
+    res.status(status.OK).json({ status: jsonStatus.OK, success: true });
+  } catch (error) {
+    res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+    return catchError('deletePopularProduct', error, req, res);
+  }
 };
 
 export const searchPopularProduct = async (req, res) => {
-    try {
-        const { search } = req.query;
-        let { skip } = req.query;
-        skip = skip || 1;
+  try {
+    const { search } = req.query;
+    let { skip } = req.query;
+    skip = skip || 1;
 
-        const list = await Product.aggregate([
-            {
-                $match: {
-                    deleted: false,
-                    createdBy: new ObjectId(req.user._id),
-                    productName: {
-                        $regex: search, $options: 'i'
-                    }
-                }
-            },
-            {
-                $sort: {
-                    createdAt: -1
-                }
-            },
-            {
-                $skip: (Number(skip) - 1) * limit
-            },
-            {
-                $limit: limit
-            }
-        ]);
+    const list = await Product.aggregate([
+      {
+        $match: {
+          deleted: false,
+          createdBy: new ObjectId(req.user._id),
+          productName: {
+            $regex: search, $options: 'i'
+          }
+        }
+      },
+      {
+        $sort: {
+          createdAt: -1
+        }
+      },
+      {
+        $skip: (Number(skip) - 1) * limit
+      },
+      {
+        $limit: limit
+      }
+    ]);
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: list });
-    } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('searchPopularProduct', error, req, res);
-    }
+    res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: list });
+  } catch (error) {
+    res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+    return catchError('searchPopularProduct', error, req, res);
+  }
 };
