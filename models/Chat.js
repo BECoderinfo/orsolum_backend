@@ -11,6 +11,11 @@ const ChatSchema = new mongoose.Schema({
         type: ObjectId,
         ref: 'admin',
         required: true
+    },
+    chatType: {
+        type: String,
+        enum: ['general', 'farming_tools', 'agriculture_advice'],
+        default: 'general'
     }
 }, { timestamps: true });
 

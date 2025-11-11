@@ -2,6 +2,7 @@ import express from "express";
 import { sellerAuthentication } from "../middlewares/middleware.js";
 import { uploadStoreImagesMulter } from "../helper/uploadImage.js";
 import { createSellerStore } from "../controllers/sellerStoreController.js";
+import { listOfCategories } from "../controllers/storeController.js";
 import { 
   sendRegisterOtp, 
   verifyRegisterOtp, 
@@ -24,5 +25,8 @@ sellerRouter.post(
   uploadStoreImagesMulter.array("images", 10),
   createSellerStore
 );
+
+// 📋 Seller store categories
+sellerRouter.get("/seller/categories/list/v1", sellerAuthentication, listOfCategories);
 
 export default sellerRouter;
