@@ -9,11 +9,7 @@ import StoreCategory from '../models/StoreCategory.js';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
 import { processGoogleMapsLink } from '../helper/latAndLong.js';
-<<<<<<< HEAD
-import ShiprocketService from '../helper/shiprocketService.js';
-=======
 import ShiprocketService from "../helper/shiprocketService.js";
->>>>>>> c056d99ffa5243d1bcd9916c4c520688dc620129
 
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
@@ -61,15 +57,9 @@ export const createStore = async (req, res) => {
         phone,
         address,
         email,
-<<<<<<< HEAD
-        location: geoLocation,
-        createdBy: req.user._id,
-        updatedBy: req.user._id,
-=======
         location,
         createdBy: req.user?._id || null,
         updatedBy: req.user?._id || null,
->>>>>>> c056d99ffa5243d1bcd9916c4c520688dc620129
       });
   
       const savedStore = await store.save();
@@ -108,14 +98,8 @@ export const createStore = async (req, res) => {
       res.status(500).json({ success: false, message: error.message });
     }
   };
-<<<<<<< HEAD
-  
-  export const editStore = async (req, res) => {
-=======
-
 
 export const editStore = async (req, res) => {
->>>>>>> c056d99ffa5243d1bcd9916c4c520688dc620129
     try {
       const { name, category, information, phone, address, email, location, directMe } = req.body;
       const { id } = req.params;
