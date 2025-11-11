@@ -16,7 +16,7 @@ limit = limit ? Number(limit) : 10;
 
 const { ObjectId } = mongoose.Types;
 
-const uploadStoreImage = async (req, res) => {
+export const uploadStoreImage = async (req, res) => {
   try {
     await signedUrl(req, res, 'Store/');
   } catch (error) {
@@ -29,7 +29,7 @@ const uploadStoreImage = async (req, res) => {
   }
 };
 
-const createStore = async (req, res) => {
+export const createStore = async (req, res) => {
   try {
     const { name, category, information, phone, address, email, location, directMe } = req.body;
 
@@ -103,7 +103,7 @@ const createStore = async (req, res) => {
   }
 };
 
-const editStore = async (req, res) => {
+export const editStore = async (req, res) => {
   try {
     const { name, category, information, phone, address, email, location, directMe } = req.body;
     const { id } = req.params;
@@ -179,7 +179,7 @@ const editStore = async (req, res) => {
   }
 };
 
-const storeDetails = async (req, res) => {
+export const storeDetails = async (req, res) => {
   try {
     if (!req.user || !req.user._id) {
       return res
