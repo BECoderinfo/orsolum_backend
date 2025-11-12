@@ -300,7 +300,7 @@ export const createArticle = async (req, res) => {
 
 export const deleteArticle = async (req, res) => {
     try {
-        const article = await ArticleModel.findByIdAndUpdate(
+        const article = await Article.findByIdAndUpdate(
             req.params.id,
             { deleted: true },
             { new: true }
@@ -327,7 +327,7 @@ export const deleteArticle = async (req, res) => {
 
 export const getOneArticle = async (req, res) => {
     try {
-        const article = await ArticleModel.findOne({ _id: req.params.id, deleted: false }).populate("createdBy");
+        const article = await Article.findOne({ _id: req.params.id, deleted: false }).populate("createdBy");
 
         if (!article) {
             return res.status(404).json({
@@ -350,7 +350,7 @@ export const getOneArticle = async (req, res) => {
 
 export const getArticleList = async (req, res) => {
     try {
-        const articles = await ArticleModel.find({ deleted: false }).sort({ createdAt: -1 }).populate("createdBy");
+        const articles = await Article.find({ deleted: false }).sort({ createdAt: -1 }).populate("createdBy");
 
         res.status(200).json({
             status: "OK",
@@ -368,7 +368,7 @@ export const updateArticle = async (req, res) => {
         const updateFields = { ...req.body };
         delete updateFields.createdBy; // Prevent changing the creator
 
-        const article = await ArticleModel.findOneAndUpdate(
+        const article = await Article.findOneAndUpdate(
             { _id: req.params.id, deleted: false },
             updateFields,
             { new: true }

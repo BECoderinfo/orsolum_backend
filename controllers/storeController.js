@@ -9,6 +9,7 @@ import StoreCategory from '../models/StoreCategory.js';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
 import { processGoogleMapsLink } from '../helper/latAndLong.js';
+import ShiprocketService from '../helper/shiprocketService.js';
 
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
@@ -25,203 +26,273 @@ export const uploadStoreImage = async (req, res) => {
 }
 
 
+/**
+ * @route   POST /api/retailer/create/store/v1
+ * @desc    Create a new retailer store
+ * @access  Private (Retailer)
+ */
 export const createStore = async (req, res) => {
-    try {
-      const { name, category, information, phone, address, email, location } = req.body;
-  
-      // ✅ Create store in MongoDB
-      const store = new Store({
-        name,
-        category,
-        information,
-        phone,
-        address,
-        email,
-        location,
-        createdBy: req.user._id,
-        updatedBy: req.user._id,
+  try {
+    const { name, category, information, phone, address, email, location, directMe } = req.body;
+
+    if (!name || !category || !information || !phone || !address || !email) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Please fill all required fields (name, category, info, phone, address, email)",
       });
-  
-      const savedStore = await store.save();
-  
-      // ✅ Create Shiprocket pickup address automatically
+    }
+
+    // Prevent multiple stores for one retailer
+    const existingStore = await Store.findOne({ createdBy: req.user._id });
+    if (existingStore) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "A store already exists for this retailer account",
+      });
+    }
+
+    // Handle Google Maps link or custom location
+    let geoLocation = null;
+    if (directMe) {
+      const coords = await processGoogleMapsLink(directMe);
+      if (coords?.lat && coords?.lng) {
+        geoLocation = { type: "Point", coordinates: [coords.lng, coords.lat] };
+      } else {
+        geoLocation = { type: "Point", coordinates: [77.209, 28.6139] }; // fallback to Delhi
+      }
+    } else if (location?.coordinates) {
+      geoLocation = location;
+    } else {
+      geoLocation = { type: "Point", coordinates: [77.209, 28.6139] };
+    }
+
+    const store = new Store({
+      name,
+      category,
+      information,
+      phone,
+      address,
+      email,
+      directMe,
+      location: geoLocation,
+      createdBy: req.user._id,
+      updatedBy: req.user._id,
+    });
+
+    const savedStore = await store.save();
+
+    // Create Shiprocket Pickup (optional)
+    try {
       const pickupPayload = {
-        pickup_location: savedStore.name.replace(/\s+/g, "_").toLowerCase(),
+        pickup_location: `${savedStore.name.replace(/\s+/g, "_")}_${Date.now()}`,
         name: savedStore.name,
         email: savedStore.email || "noreply@orsolum.com",
         phone: savedStore.phone,
         address: savedStore.address,
-        city: "Delhi", // You can replace with dynamic location data if available
+        city: "Delhi",
         state: "Delhi",
         country: "India",
-        pin_code: "110001", // Replace dynamically if you have pincode in `req.body`
+        pin_code: "110001",
       };
-  
-      const response = await ShiprocketService.createPickupAddress(pickupPayload);
-  
-      if (response && response.data?.pickup_location) {
+
+      const shipResponse = await ShiprocketService.createPickupAddress(pickupPayload);
+
+      if (shipResponse?.pickup_location || shipResponse?.data?.pickup_location) {
         savedStore.shiprocket = {
-          pickup_address_id: response.data.pickup_location,
+          pickup_address_id: shipResponse?.pickup_location || shipResponse?.data?.pickup_location,
           pickup_location: pickupPayload,
         };
         await savedStore.save();
       }
+    } catch (err) {
+      console.warn("⚠️ Shiprocket Pickup Address Creation Failed:", err.message);
+    }
+
+    res.status(status.Create).json({
+      status: jsonStatus.Create,
+      success: true,
+      message: "Store created successfully",
+      data: savedStore,
+    });
+  } catch (error) {
+    console.error("❌ Error creating store:", error);
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("createStore", error, req, res);
+  }
+};
+
+  export const editStore = async (req, res) => {
+    try {
+      const { name, category, information, phone, address, email, location, directMe } = req.body;
+      const { id } = req.params;
   
-      return res.status(200).json({
+      if (!name || !category || !information || !phone || !address || !email) {
+        return res.status(400).json({
+          success: false,
+          message: "Please enter all store details",
+        });
+      }
+  
+      const isStore = await Store.findOne({ createdBy: req.user._id, _id: id });
+      if (!isStore) {
+        return res.status(404).json({ success: false, message: "Store not found" });
+      }
+  
+      let geoLocation = location;
+  
+      // ✅ Convert directMe link to location if provided
+      if (directMe && typeof directMe === "string") {
+        const coordinate = await processGoogleMapsLink(directMe);
+        if (coordinate.lat && coordinate.lng) {
+          geoLocation = {
+            type: "Point",
+            coordinates: [coordinate.lng, coordinate.lat],
+          };
+        } else {
+          return res.status(400).json({
+            success: false,
+            message: "Please enter a valid Google Maps link",
+          });
+        }
+      }
+  
+      const updatedStore = await Store.findByIdAndUpdate(
+        id,
+        {
+          name,
+          category,
+          information,
+          phone,
+          address,
+          email,
+          location: geoLocation,
+          updatedBy: req.user._id,
+        },
+        { new: true, runValidators: true }
+      );
+  
+      // ✅ Optional: populate category name
+      const storeDetails = await Store.aggregate([
+        { $match: { _id: new ObjectId(id) } },
+        {
+          $lookup: {
+            from: "store_categories",
+            localField: "category",
+            foreignField: "_id",
+            as: "category_name",
+          },
+        },
+        {
+          $addFields: {
+            category_name: {
+              $ifNull: [{ $arrayElemAt: ["$category_name.name", 0] }, null],
+            },
+          },
+        },
+      ]);
+  
+      res.status(200).json({
         success: true,
-        message: "Store created and pickup address added to Shiprocket",
-        data: savedStore,
+        message: "Store updated successfully",
+        data: storeDetails[0],
       });
-  
     } catch (error) {
-      console.error("Error creating store:", error);
+      console.error("Error editing store:", error);
       res.status(500).json({ success: false, message: error.message });
     }
   };
-
-export const editStore = async (req, res) => {
-    try {
-        const { name, category, information, phone, address, email, directMe } = req.body;
-        const { id } = req.params;
-
-        if (!name || !category || !information || !phone || !address || !email || !directMe) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter store details` });
-        }
-
-        const isStore = await Store.findOne({ createdBy: req.user._id, _id: id });
-        if (!isStore) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store not found" });
-        }
-
-        let images = isStore.images || [];
-        if (req.files && req.files.length > 0) {
-            req.files.map(elem => images.push(elem.key));
-        }
-
-        const coordinate = await processGoogleMapsLink(directMe);
-        if (!coordinate.lat && !coordinate.lng) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Please enter proper google map link" });
-        }
-
-        const updateStore = await Store.findByIdAndUpdate(id, { ...req.body, location: { type: "Point", coordinates: [coordinate.lng, coordinate.lat] }, updatedBy: req.user._id, images }, { new: true, runValidators: true });
-
-        let storeDetails = await Store.aggregate([
-            {
-                $match: {
-                    _id: new ObjectId(id)
-                }
-            },
-            {
-                $lookup: {
-                    from: "store_categories",
-                    localField: "category",
-                    foreignField: "_id",
-                    as: "category_name"
-                }
-            },
-            {
-                $addFields: {
-                    category_name: {
-                        $ifNull: [
-                            { $arrayElemAt: ["$category_name.name", 0] },
-                            null
-                        ]
-                    }
-                }
-            }
-        ]);
-
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: storeDetails });
-    } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('editStore', error, req, res);
-    }
-};
-
+  
 export const storeDetails = async (req, res) => {
     try {
-
-        const store = await Store.findOne({ createdBy: req.user._id });
-        if (!store) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "You have not created any store with this account" });
-        }
-
-        let storeDetails = await Store.aggregate([
-            {
-                $match: {
-                    createdBy: new ObjectId(req.user._id)
-                }
+      if (!req.user || !req.user._id) {
+        return res
+          .status(status.Unauthorized)
+          .json({ success: false, message: "Unauthorized access" });
+      }
+  
+      const store = await Store.findOne({ createdBy: req.user._id });
+      if (!store) {
+        return res
+          .status(status.NotFound)
+          .json({
+            success: false,
+            message: "You have not created any store with this account",
+          });
+      }
+  
+      const storeDetails = await Store.aggregate([
+        { $match: { createdBy: new ObjectId(req.user._id) } },
+        {
+          $lookup: {
+            from: "store_categories",
+            localField: "category",
+            foreignField: "_id",
+            as: "category_name",
+          },
+        },
+        {
+          $addFields: {
+            category_name: {
+              $ifNull: [{ $arrayElemAt: ["$category_name.name", 0] }, null],
             },
-            {
+          },
+        },
+        {
+          $lookup: {
+            from: "store_offers",
+            localField: "_id",
+            foreignField: "storeId",
+            as: "storeOffers",
+            pipeline: [{ $match: { deleted: false } }],
+          },
+        },
+        {
+          $lookup: {
+            from: "store_popular_products",
+            localField: "_id",
+            foreignField: "storeId",
+            as: "popularProducts",
+            pipeline: [
+              {
                 $lookup: {
-                    from: "store_categories",
-                    localField: "category",
-                    foreignField: "_id",
-                    as: "category_name"
-                }
-            },
-            {
+                  from: "products",
+                  localField: "productId",
+                  foreignField: "_id",
+                  as: "productDetails",
+                },
+              },
+              {
                 $addFields: {
-                    category_name: {
-                        $ifNull: [
-                            { $arrayElemAt: ["$category_name.name", 0] },
-                            null
-                        ]
-                    }
-                }
-            },
-            {
-                $lookup: {
-                    from: "store_offers",
-                    localField: "_id",
-                    foreignField: "storeId",
-                    as: "storeOffers",
-                    pipeline: [
-                        {
-                            $match: {
-                                deleted: false
-                            }
-                        }
-                    ]
-                }
-            },
-            {
-                $lookup: {
-                    from: "store_popular_products",
-                    localField: "_id",
-                    foreignField: "storeId",
-                    as: "popularProducts",
-                    pipeline: [
-                        {
-                            $lookup: {
-                                from: "products",
-                                localField: "productId",
-                                foreignField: "_id",
-                                as: "productDetails"
-                            }
-                        },
-                        {
-                            $addFields: {
-                                productDetails: {
-                                    $ifNull: [
-                                        { $arrayElemAt: ["$productDetails", 0] },
-                                        null
-                                    ]
-                                }
-                            }
-                        }
-                    ]
-                }
-            }
-        ]);
-
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: storeDetails });
+                  productDetails: {
+                    $ifNull: [{ $arrayElemAt: ["$productDetails", 0] }, null],
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ]);
+  
+      return res.status(status.OK).json({
+        success: true,
+        message: "Store details fetched successfully",
+        data: storeDetails,
+      });
     } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('storeDetails', error, req, res);
+      console.error("Error in storeDetails:", error);
+      return res.status(status.InternalServerError).json({
+        success: false,
+        message: error.message,
+      });
     }
-};
-
+  };
+  
 export const deleteStoreImage = async (req, res) => {
     try {
 
@@ -410,6 +481,7 @@ export const saveAllPopularProducts = async (req, res) => {
     try {
         const { productIds, storeId } = req.body;
 
+        // 🧩 1️⃣ Validate Input
         if (!Array.isArray(productIds) || !storeId) {
             return res.status(400).json({
                 status: jsonStatus.BadRequest,
@@ -418,37 +490,59 @@ export const saveAllPopularProducts = async (req, res) => {
             });
         }
 
+        // 🧩 2️⃣ Validate Store Ownership
         const store = await Store.findOne({ _id: storeId, createdBy: req.user._id });
         if (!store) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store not found" });
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Store not found or does not belong to you."
+            });
         }
 
+        // 🧩 3️⃣ Check if all products belong to this store
         const products = await Product.find({
             _id: { $in: productIds },
-            createdBy: req.user._id
+            storeId: storeId, // ✅ Matching by store instead of createdBy
         });
 
         if (products.length !== productIds.length) {
             return res.status(404).json({
                 status: jsonStatus.NotFound,
                 success: false,
-                message: "Some products were not found or do not belong to you."
+                message: "Some products were not found in this store."
             });
         }
 
+        // 🧩 4️⃣ Remove old popular products for this store
+        await StorePopularProduct.deleteMany({ storeId, createdBy: req.user._id });
+
+        // 🧩 5️⃣ Create new popular product documents
         const popularProductDocs = productIds.map(productId => ({
             productId,
             storeId,
             createdBy: req.user._id
         }));
 
-        await StorePopularProduct.deleteMany({ storeId, createdBy: req.user._id });
-
+        // 🧩 6️⃣ Insert new ones
         const insertedPopularProducts = await StorePopularProduct.insertMany(popularProductDocs);
 
-        res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: insertedPopularProducts });
+        // 🧩 7️⃣ Respond with success
+        res.status(status.Create).json({
+            status: jsonStatus.Create,
+            success: true,
+            message: "Popular products saved successfully.",
+            data: insertedPopularProducts
+        });
+
     } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        // 🧩 8️⃣ Catch and log errors
+        console.error("Error in saveAllPopularProducts:", error);
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
         return catchError('saveAllPopularProducts', error, req, res);
     }
 };

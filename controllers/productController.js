@@ -31,39 +31,106 @@ export const uploadProductImage = async (req, res) => {
     }
 }
 
+/**
+ * @route   POST /api/retailer/create/product/v1
+ * @desc    Create a product under a retailer's store
+ * @access  Private (Retailer)
+ */
 export const createProduct = async (req, res) => {
     try {
-
-        const { productName, companyName, mrp, sellingPrice, information, storeId } = req.body;
-
-        let productImages = [];
-        if (req.files && req.files.length > 0) {
-            productImages = req.files.map(elem => elem.key);
-        }
-
-        if (!productName || !companyName || !mrp || !sellingPrice || !information || !storeId) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter product details` });
-        }
-
-        const isStore = await Store.findOne({ createdBy: req.user._id, _id: storeId });
-        if (!isStore) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Store not found with this account" });
-        }
-
-        const offPer = calculateDiscount(Number(mrp), Number(sellingPrice));
-        if (offPer === "Invalid prices") {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Something wrong with MRP or Selling price" });
-        }
-
-        let newProduct = new Product({ ...req.body, createdBy: req.user._id, offPer, updatedBy: req.user._id, productImages });
-        newProduct = await newProduct.save();
-
-        res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: newProduct, message: "Product created successfully" });
+      const { productName, companyName, mrp, sellingPrice, information, storeId } = req.body;
+  
+      // ✅ Validate mandatory fields
+      if (!productName || !companyName || !mrp || !sellingPrice || !information || !storeId) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message:
+            "Please provide all product details (productName, companyName, mrp, sellingPrice, information, storeId)",
+        });
+      }
+  
+      // ✅ Convert numeric fields to Number
+      const parsedMrp = Number(mrp);
+      const parsedSellingPrice = Number(sellingPrice);
+  
+      if (isNaN(parsedMrp) || isNaN(parsedSellingPrice)) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "MRP and Selling Price must be valid numbers",
+        });
+      }
+  
+      // ✅ Image Handling
+      let productImages = [];
+      if (req.files && req.files.length > 0) {
+        productImages = req.files.map((file) => file.key || file.path || file.location);
+      }
+  
+      // ✅ Verify Store Ownership (fixed ObjectId mismatch issue)
+      const store = await Store.findById(storeId);
+      if (!store) {
+        return res.status(status.NotFound).json({
+          status: jsonStatus.NotFound,
+          success: false,
+          message: "Store not found",
+        });
+      }
+  
+      // Convert both IDs to string for comparison
+      if (store.createdBy.toString() !== req.user._id.toString()) {
+        return res.status(status.Forbidden).json({
+          status: jsonStatus.Forbidden,
+          success: false,
+          message: "You are not the owner of this store",
+        });
+      }
+  
+      // ✅ Calculate discount percentage
+      const offPer = calculateDiscount(parsedMrp, parsedSellingPrice);
+      if (offPer === "Invalid prices") {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Invalid MRP or Selling Price. MRP must be greater than Selling Price",
+        });
+      }
+  
+      // ✅ Create new product
+      const newProduct = new Product({
+        productName,
+        companyName,
+        mrp: parsedMrp,
+        sellingPrice: parsedSellingPrice,
+        information,
+        offPer,
+        storeId,
+        createdBy: req.user._id,
+        updatedBy: req.user._id,
+        productImages,
+      });
+  
+      const savedProduct = await newProduct.save();
+  
+      // ✅ Success response
+      res.status(status.Create).json({
+        status: jsonStatus.Create,
+        success: true,
+        message: "Product created successfully",
+        data: savedProduct,
+      });
     } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('createProduct', error, req, res);
+      console.error("❌ Error creating product:", error);
+      res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: error.message,
+      });
+      return catchError("createProduct", error, req, res);
     }
-};
+  };
+  
 
 export const editProduct = async (req, res) => {
     try {

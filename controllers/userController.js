@@ -193,22 +193,59 @@ export const getMyProfile = async (req, res) => {
 
 export const updateMyProfile = async (req, res) => {
     try {
-
         let { name, state, city, image } = req.body;
 
+        // Handle file upload if image is provided
         if (req.file) {
             image = req.file.key;
         }
 
-        if (!name || !city || !state) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Something went wrong" });
+        // Build update object - only include fields that are provided
+        const updateData = {};
+        if (name) updateData.name = name;
+        if (state) updateData.state = state;
+        if (city) updateData.city = city;
+        if (image) updateData.image = image;
+
+        // Check if at least one field is being updated
+        if (Object.keys(updateData).length === 0) {
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: "Please provide at least one field to update" 
+            });
         }
 
-        const updateUser = await User.findByIdAndUpdate(req.user._id, { name, state, city, image }, { new: true, runValidators: true });
+        const updateUser = await User.findByIdAndUpdate(
+            req.user._id, 
+            updateData, 
+            { new: true, runValidators: true }
+        );
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: updateUser });
+        if (!updateUser) {
+            return res.status(status.NotFound).json({ 
+                status: jsonStatus.NotFound, 
+                success: false, 
+                message: "User not found" 
+            });
+        }
+
+        // Remove sensitive data from response
+        const userData = updateUser.toObject();
+        delete userData.password;
+
+        res.status(status.OK).json({ 
+            status: jsonStatus.OK, 
+            success: true, 
+            message: "Profile updated successfully",
+            data: userData 
+        });
     } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        res.status(status.InternalServerError).json({ 
+            status: jsonStatus.InternalServerError, 
+            success: false, 
+            message: error.message 
+        });
         return catchError('updateMyProfile', error, req, res);
     }
 };
@@ -288,5 +325,44 @@ export const purchasePremium = async (req, res) => {
         console.error("error", error);
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('purchasePremium', error, req, res);
+    }
+};
+
+// Logout user
+export const logoutUser = async (req, res) => {
+    try {
+        // Verify user exists and is authenticated
+        if (!req.user || !req.user._id) {
+            return res.status(status.Unauthorized).json({
+                status: jsonStatus.Unauthorized,
+                success: false,
+                message: "User not authenticated"
+            });
+        }
+
+        // In a token-based system, logout is typically handled client-side by removing the token
+        // However, we can add server-side logic here if needed (e.g., token blacklisting)
+        // For now, we just confirm the logout was successful
+        
+        // Optional: You can add token blacklisting logic here if needed
+        // For example, store the token in a blacklist cache/database
+        
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Logged out successfully",
+            data: {
+                userId: req.user._id,
+                loggedOutAt: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('Logout error:', error);
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message || "Failed to logout"
+        });
+        return catchError('logoutUser', error, req, res);
     }
 };
