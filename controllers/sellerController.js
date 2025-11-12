@@ -273,71 +273,70 @@ export const loginSeller = async (req, res) => {
 
 // ---------------- Set Seller Password ----------------
 export const setSellerPassword = async (req, res) => {
-  try {
-    const { phone, password, confirmPassword } = req.body;
-
-    if (!phone || !password || !confirmPassword) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Please enter phone, password, and confirm password",
+    try {
+      const { phone, password, confirmPassword } = req.body;
+  
+      if (!phone || !password || !confirmPassword) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Please enter phone, password, and confirm password",
+        });
+      }
+  
+      if (password !== confirmPassword) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Passwords do not match",
+        });
+      }
+  
+      // ✅ Password strength validation
+      if (
+        password.length < 8 ||
+        !/[A-Z]/.test(password) ||
+        !/[0-9]/.test(password) ||
+        !/[!@#$%^&*]/.test(password)
+      ) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Password must be at least 8 characters long and include an uppercase letter, a number, and a special character"
+        });
+      }
+  
+      const seller = await User.findOne({ phone, role: "seller" });
+      if (!seller) {
+        return res.status(status.NotFound).json({
+          status: jsonStatus.NotFound,
+          success: false,
+          message: "Seller not found with this phone number",
+        });
+      }
+  
+      // ❌ Don't hash manually here!
+      seller.password = password;  // model will hash automatically
+      await seller.save();
+  
+      const token = generateToken(seller._id);
+  
+      res.status(status.OK).json({
+        status: jsonStatus.OK,
+        success: true,
+        message: "Password set successfully",
+        data: seller,
+        token,
       });
-    }
-
-    if (password !== confirmPassword) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
+    } catch (error) {
+      res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
         success: false,
-        message: "Passwords do not match",
+        message: error.message,
       });
+      return catchError("setSellerPassword", error, req, res);
     }
-
-    // ✅ Password strength validation
-    if (
-      password.length < 8 ||
-      !/[A-Z]/.test(password) ||
-      !/[0-9]/.test(password) ||
-      !/[!@#$%^&*]/.test(password)
-    ) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Password must be at least 8 characters long and include an uppercase letter, a number, and a special character"
-      });
-    }
-
-    const seller = await User.findOne({ phone, role: "seller" });
-    if (!seller) {
-      return res.status(status.NotFound).json({
-        status: jsonStatus.NotFound,
-        success: false,
-        message: "Seller not found with this phone number",
-      });
-    }
-
-    // ❌ Don't hash manually here!
-    seller.password = password;  // model will hash automatically
-    await seller.save();
-
-    const token = generateToken(seller._id);
-
-    res.status(status.OK).json({
-      status: jsonStatus.OK,
-      success: true,
-      message: "Password set successfully",
-      data: seller,
-      token,
-    });
-  } catch (error) {
-    res.status(status.InternalServerError).json({
-      status: jsonStatus.InternalServerError,
-      success: false,
-      message: error.message,
-    });
-    return catchError("setSellerPassword", error, req, res);
-  }
-};
-
+  };
   
 
 // ---------------- Verify Seller Password ----------------
@@ -349,7 +348,7 @@ export const verifySellerPassword = async (req, res) => {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
-        message: "Please provide phone and password",
+        message: "Please provide phone and password"
       });
     }
 
@@ -358,7 +357,7 @@ export const verifySellerPassword = async (req, res) => {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
         success: false,
-        message: "Seller not found with this phone number",
+        message: "Seller not found with this phone number"
       });
     }
 
@@ -366,31 +365,31 @@ export const verifySellerPassword = async (req, res) => {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
-        message: "Password not set. Please complete your profile setup.",
+        message: "Password not set. Please complete your profile setup."
       });
     }
 
-    // ✅ Compare using bcrypt or helper
-    const isMatch = await seller.matchPassword(password);
+    const isMatch = await bcrypt.compare(password, seller.password);
     if (!isMatch) {
       return res.status(status.Unauthorized).json({
         status: jsonStatus.Unauthorized,
         success: false,
-        message: "Invalid password",
+        message: "Invalid password"
       });
     }
 
-    res.status(status.OK).json({
+    return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
-      message: "Password verified successfully",
+      message: "Password verified successfully"
     });
   } catch (error) {
     console.error("verifySellerPassword Error:", error);
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
-      message: error.message,
+      message: error.message
     });
+    return catchError("verifySellerPassword", error, req, res);
   }
 };
