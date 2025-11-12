@@ -7,7 +7,8 @@ import {
   sendRegisterOtp, 
   verifyRegisterOtp, 
   updateSellerProfile, 
-  loginSeller 
+  loginSeller ,
+  setSellerPassword
 } from "../controllers/sellerController.js";
 
 const sellerRouter = express.Router();
@@ -15,15 +16,10 @@ const sellerRouter = express.Router();
 // 🔐 Seller Authentication Routes
 sellerRouter.post("/seller/send/register/otp/v1", sendRegisterOtp);
 sellerRouter.post("/seller/verify/register/otp/v1", verifyRegisterOtp);
+sellerRouter.put("/seller/update/profile/v1", sellerAuthentication, updateSellerProfile);
 sellerRouter.post("/seller/login/v1", loginSeller);
+sellerRouter.post("/seller/set/password/v1", setSellerPassword); 
 
-// 🧑‍💼 Update Seller Profile (multipart form)
-sellerRouter.put(
-  "/seller/update/profile/v1",
-  sellerAuthentication,
-  uploadStoreImagesMulter.single("image"),   // ✅ handles file upload
-  updateSellerProfile
-);
 
 // 🏪 Seller store creation
 sellerRouter.post(
