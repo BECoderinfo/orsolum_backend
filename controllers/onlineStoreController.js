@@ -1665,53 +1665,136 @@ export const createOnlineOrder = async (req, res) => {
   };
 
 export const cancelOnlineOrder = async (req, res) => {
-    try {
-        const { id } = req.params;
+  try {
+    const { id } = req.params;
 
-        const order = await OnlineOrder.findOne({ _id: id, createdBy: req.user._id });
-        if (!order) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Order not found with this ID" });
-        }
-
-        const paymentResponse = await Payment.findOne({ onlineOrderId: order._id });
-
-        // refund
-        const refundId = `REFUND_${Date.now()}`;
-        const refund = await axios.post(`${process.env.CF_CREATE_PRODUCT_URL}/${paymentResponse.paymentResonse.order.order_id}/refunds`, {
-            refund_amount: order.summary.grandTotal,
-            refund_id: refundId
-        }, {
-            headers: {
-                'x-api-version': '2023-08-01',
-                'x-client-id': process.env.CF_CLIENT_ID,
-                'x-client-secret': process.env.CF_CLIENT_SECRET,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        let newRefund = new Refund({ type: "LocalStore", cfOrderId: order.cf_order_id, cfOrderResponseId: paymentResponse.paymentResonse.order.order_id, refundResponse: refund.data, userId: req.user._id, onlineOrderId: order._id, amount: order.summary.grandTotal, refundId, cancelled: true });
-        newRefund = await newRefund.save();
-
-        await Payment.findByIdAndUpdate(paymentResponse._id, { refund: true, refundId });
-
-        await OnlineOrder.findOneAndUpdate({ createdBy: req.user._id, _id: id }, { status: "Cancelled", refund: true, refundId }, { new: true, runValidators: true });
-
-        await User.findByIdAndUpdate(req.user._id, { coins: req.user.coins - order.summary.grandTotal });
-
-        let newCoinHistory = new CoinHistory({ createdBy: req.user._id, coins: order.summary.grandTotal, orderId: order._id, type: "Deducted" });
-        newCoinHistory = await newCoinHistory.save();
-
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: "Order cancelled" });
-    } catch (error) {
-        console.error("error", error);
-        res.status(status.InternalServerError).json({
-            status: jsonStatus.InternalServerError,
-            success: false,
-            message: error.message
-        });
-        return catchError('cancelOnlineOrder', error, req, res);
+    if (!id) {
+      return res.status(400).json({
+        status: 400,
+        success: false,
+        message: "Order ID is missing in URL",
+      });
     }
-};
+
+    const orderIdentifier = id.trim();
+
+    // 1️⃣ Check order exists for this user (allow either Mongo _id or human readable orderId)
+    const orderQuery = { createdBy: req.user._id };
+    if (ObjectId.isValid(orderIdentifier)) {
+      orderQuery._id = orderIdentifier;
+    } else {
+      orderQuery.orderId = orderIdentifier;
+    }
+
+    const order = await OnlineOrder.findOne(orderQuery);
+
+    if (!order) {
+      return res.status(404).json({
+        status: 404,
+        success: false,
+        message: "Order not found with this ID",
+      });
+    }
+  
+    // 2️⃣ Get payment details (handle legacy field paymentResonse + new paymentResponse)
+    const payment = await Payment.findOne({ onlineOrderId: order._id });
+
+    const cfOrderId =
+      payment?.paymentResponse?.order?.order_id ||
+      payment?.paymentResonse?.order?.order_id ||
+      payment?.cfoOrder_id ||
+      order?.cf_order_id;
+
+    if (!payment || !cfOrderId) {
+      // No payment captured yet -> cancel order without refund flow
+      await OnlineOrder.findByIdAndUpdate(order._id, {
+        status: "Cancelled",
+        refund: false,
+      });
+
+      return res.status(200).json({
+        status: 200,
+        success: true,
+        message: "Order cancelled. Payment was not captured, so no refund required.",
+      });
+    }
+
+    // 3️⃣ Create refund
+    const refundId = `REFUND_${Date.now()}`;
+
+    const refund = await axios.post(
+      `${process.env.CF_CREATE_PRODUCT_URL}/${cfOrderId}/refunds`,
+      {
+        refund_amount: order.summary.grandTotal,
+        refund_id: refundId,
+      },
+      {
+        headers: {
+          "x-api-version": "2023-08-01",
+          "x-client-id": process.env.CF_CLIENT_ID,
+          "x-client-secret": process.env.CF_CLIENT_SECRET,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    // 4️⃣ Save refund
+    await Refund.create({
+      type: "LocalStore",
+      cfOrderId: cfOrderId,
+      cfOrderResponseId: cfOrderId,
+      refundResponse: refund.data,
+      userId: req.user._id,
+      onlineOrderId: order._id,
+      amount: order.summary.grandTotal,
+      refundId,
+      cancelled: true,
+    });
+
+    // 5️⃣ Mark refund in payment
+    await Payment.findByIdAndUpdate(payment._id, {
+      refund: true,
+      refundId,
+    });
+
+    // 6️⃣ Update order
+    await OnlineOrder.findByIdAndUpdate(order._id, {
+      status: "Cancelled",
+      refund: true,
+      refundId,
+    });
+
+    // 7️⃣ Deduct coins
+    await User.findByIdAndUpdate(req.user._id, {
+      coins: req.user.coins - order.summary.grandTotal,
+    });
+
+    // 8️⃣ Save coin history
+    await CoinHistory.create({
+      createdBy: req.user._id,
+      coins: order.summary.grandTotal,
+      orderId: order._id,
+      type: "Deducted",
+    });
+
+    res.status(200).json({
+      status: 200,
+      success: true,
+      message: "Order cancelled and refund processed",
+    });
+  
+    } catch (error) {
+      console.log("❌ Cancel Order Error:", error);
+  
+      res.status(500).json({
+        status: 500,
+        success: false,
+        message: error.message || "Internal Server Error",
+      });
+    }
+  };
+  
+  
 
 export const onlineOrderList = async (req, res) => {
     try {

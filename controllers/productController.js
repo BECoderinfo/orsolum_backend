@@ -38,7 +38,7 @@ export const uploadProductImage = async (req, res) => {
  */
 export const createProduct = async (req, res) => {
     try {
-      const { productName, companyName, mrp, sellingPrice, information, storeId } = req.body;
+      const { productName, companyName, mrp, sellingPrice, information, storeId, qty } = req.body;
   
       // ✅ Validate mandatory fields
       if (!productName || !companyName || !mrp || !sellingPrice || !information || !storeId) {
@@ -104,6 +104,7 @@ export const createProduct = async (req, res) => {
         mrp: parsedMrp,
         sellingPrice: parsedSellingPrice,
         information,
+        qty,
         offPer,
         storeId,
         createdBy: req.user._id,
