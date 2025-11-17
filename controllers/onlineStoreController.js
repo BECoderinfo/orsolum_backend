@@ -1505,12 +1505,7 @@ export const createOnlineOrder = async (req, res) => {
       const { coupon, donate = 0, addressId, coinUsed = 0 } = req.body;
       const userId = req.user._id;
   
-      // 🚨 Validate addressId
-      if (!mongoose.isValidObjectId(addressId)) {
-        return res.status(400).json({ success: false, message: "Invalid addressId" });
-      }
-  
-      // 1️⃣ Fetch cart items
+      // 1️⃣ Fetch cart items for the user
       const carts = await OnlineStoreCart.find({ createdBy: userId, deleted: false })
         .populate("productId")
         .populate("unitId");
@@ -1536,29 +1531,22 @@ export const createOnlineOrder = async (req, res) => {
   
         if (!product || !unit) continue;
   
-        // 🚨 Validate productId BEFORE using it
-        if (!mongoose.isValidObjectId(product._id)) {
-          console.log("❌ Invalid productId found in cart:", product._id);
-          continue;
-        }
-  
         const subCategory = await ProductSubCategory.findById(product.subCategoryId);
         const percentageOff = subCategory?.percentageOff || 0;
   
         let finalSellingPrice = unit.sellingPrice || 0;
         let finalMrp = unit.mrp || finalSellingPrice;
   
-        // Premium discount apply
+        // Apply premium discount if applicable
         if (req.user.isPremium && percentageOff > 0) {
           finalSellingPrice = Math.round(unit.sellingPrice * (1 - percentageOff / 100));
-          finalMrp = unit.sellingPrice;
+          finalMrp = unit.sellingPrice; // Original price as MRP
         }
   
         totalAmount += finalSellingPrice * quantity;
   
-        // 🚀 SAFE PUSH (no ObjectId constructor)
         productDetails.push({
-          productId: product._id,
+          productId: product._id instanceof mongoose.Types.ObjectId ? product._id : new mongoose.Types.ObjectId(product._id),
           productPrice: finalSellingPrice,
           mrp: finalMrp,
           qty: unit.qty,
@@ -1572,15 +1560,8 @@ export const createOnlineOrder = async (req, res) => {
   
       // 4️⃣ Coupon logic
       let couponCodeDiscount = 0;
-  
       if (coupon) {
-        // Validate coupon id
-        if (!mongoose.isValidObjectId(coupon)) {
-          return res.status(400).json({ success: false, message: "Invalid coupon ID" });
-        }
-  
         const couponCode = await CouponCode.findById(coupon);
-  
         if (!couponCode || couponCode.deleted) {
           return res.status(404).json({ success: false, message: "Coupon not found or deleted" });
         }
@@ -1593,10 +1574,7 @@ export const createOnlineOrder = async (req, res) => {
         }
   
         if (couponCode.minPrice && totalAmount < couponCode.minPrice) {
-          return res.status(400).json({
-            success: false,
-            message: `Minimum purchase of ${couponCode.minPrice} required for this coupon`
-          });
+          return res.status(400).json({ success: false, message: `Minimum purchase of ${couponCode.minPrice} required for this coupon` });
         }
   
         const rawDiscount = (totalAmount * couponCode.discount) / 100;
@@ -1605,22 +1583,14 @@ export const createOnlineOrder = async (req, res) => {
   
       // 5️⃣ Shipping fee
       const shippingFee = totalAmount > 500 ? 0 : 50;
+      const grandTotal = totalAmount - couponCodeDiscount + shippingFee + Number(donate) - Number(coinUsed);
   
-      const grandTotal =
-        totalAmount -
-        couponCodeDiscount +
-        shippingFee +
-        Number(donate) -
-        Number(coinUsed);
-  
+      // ✅ Validate grandTotal
       if (!grandTotal || grandTotal <= 0) {
-        return res.status(400).json({
-          success: false,
-          message: "Order amount must be greater than zero"
-        });
+        return res.status(400).json({ success: false, message: "Order amount must be greater than zero" });
       }
   
-      // 6️⃣ Cashfree Payment
+      // 6️⃣ Cashfree payment session
       const paymentData = {
         order_currency: "INR",
         order_amount: grandTotal,
@@ -1645,13 +1615,9 @@ export const createOnlineOrder = async (req, res) => {
         "Content-Type": "application/json"
       };
   
-      const cashFreeSession = await axios.post(
-        process.env.CF_CREATE_PRODUCT_URL,
-        paymentData,
-        { headers }
-      );
+      const cashFreeSession = await axios.post(process.env.CF_CREATE_PRODUCT_URL, paymentData, { headers });
   
-      // 7️⃣ Save Order
+      // 7️⃣ Save the order in MongoDB
       const newOrder = new OnlineOrder({
         createdBy: userId,
         address: address.toObject ? address.toObject() : address,
@@ -1670,6 +1636,14 @@ export const createOnlineOrder = async (req, res) => {
       });
   
       const savedOrder = await newOrder.save();
+      console.log("Saved Order:", savedOrder);
+  
+      if (!savedOrder || !savedOrder._id) {
+        return res.status(500).json({
+          success: false,
+          message: "Order created but ID could not be retrieved. Check server logs."
+        });
+      }
   
       return res.status(200).json({
         success: true,
@@ -1680,18 +1654,16 @@ export const createOnlineOrder = async (req, res) => {
           cf_order_id: cashFreeSession.data.order_id
         }
       });
-  
     } catch (error) {
       console.error("Error in createOnlineOrder:", error);
-  
+      // ✅ Avoid duplicate response
       if (!res.headersSent) {
         res.status(500).json({ success: false, message: error.message || "Internal server error" });
       }
-  
       return catchError("createOnlineOrder", error, req, res);
     }
   };
-  
+
 export const cancelOnlineOrder = async (req, res) => {
     try {
         const { id } = req.params;
