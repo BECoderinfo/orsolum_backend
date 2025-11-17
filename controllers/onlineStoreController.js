@@ -1521,15 +1521,15 @@ export const createOnlineOrder = async (req, res) => {
       for (const cart of carts) {
         const product = cart.productId;
         const unit = cart.unitId;
-        const quantity = cart.quantity;
+        const quantity = cart.quantity || 1;
   
         if (!product || !unit) continue;
   
         const subCategory = await ProductSubCategory.findById(product.subCategoryId);
         const percentageOff = subCategory?.percentageOff || 0;
   
-        let finalSellingPrice = unit.sellingPrice;
-        let finalMrp = unit.mrp || unit.sellingPrice;
+        let finalSellingPrice = unit.sellingPrice || 0;
+        let finalMrp = unit.mrp || finalSellingPrice;
   
         // Apply premium discount if applicable
         if (req.user.isPremium && percentageOff > 0) {
@@ -1579,6 +1579,11 @@ export const createOnlineOrder = async (req, res) => {
       const shippingFee = totalAmount > 500 ? 0 : 50;
       const grandTotal = totalAmount - couponCodeDiscount + shippingFee + Number(donate) - Number(coinUsed);
   
+      // ✅ Validate grandTotal
+      if (!grandTotal || grandTotal <= 0) {
+        return res.status(400).json({ success: false, message: "Order amount must be greater than zero" });
+      }
+  
       // 6️⃣ Cashfree payment session
       const paymentData = {
         order_currency: "INR",
@@ -1625,7 +1630,7 @@ export const createOnlineOrder = async (req, res) => {
       });
   
       const savedOrder = await newOrder.save();
-      console.log("Saved Order:", savedOrder); // 🔹 Debug log
+      console.log("Saved Order:", savedOrder);
   
       if (!savedOrder || !savedOrder._id) {
         return res.status(500).json({
@@ -1645,14 +1650,14 @@ export const createOnlineOrder = async (req, res) => {
       });
     } catch (error) {
       console.error("Error in createOnlineOrder:", error);
-      res.status(status.InternalServerError).json({
-        status: jsonStatus.InternalServerError,
-        success: false,
-        message: error.message || "Internal server error"
-      });
+      // ✅ Avoid duplicate response
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, message: error.message || "Internal server error" });
+      }
       return catchError("createOnlineOrder", error, req, res);
     }
   };
+  
 
 
 export const cancelOnlineOrder = async (req, res) => {
