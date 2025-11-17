@@ -127,28 +127,35 @@ export const createStore = async (req, res) => {
   }
 };
 
-  export const editStore = async (req, res) => {
-    try {
-      const { name, category, information, phone, address, email, location, directMe } = req.body;
-      const { id } = req.params;
-  
-      if (!name || !category || !information || !phone || !address || !email) {
-        return res.status(400).json({
-          success: false,
-          message: "Please enter all store details",
-        });
+export const editStore = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const payload = { ...req.body };
+
+    const isStore = await Store.findOne({ createdBy: req.user._id, _id: id });
+    if (!isStore) {
+      return res.status(404).json({ success: false, message: "Store not found" });
+    }
+
+    const updateData = { updatedBy: req.user._id };
+    const allowedFields = ["name", "category", "information", "phone", "address", "email"];
+
+    allowedFields.forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(payload, field)) {
+        updateData[field] = payload[field];
       }
-  
-      const isStore = await Store.findOne({ createdBy: req.user._id, _id: id });
-      if (!isStore) {
-        return res.status(404).json({ success: false, message: "Store not found" });
-      }
-  
-      let geoLocation = location;
-  
-      // ✅ Convert directMe link to location if provided
-      if (directMe && typeof directMe === "string") {
-        const coordinate = await processGoogleMapsLink(directMe);
+    });
+
+    let geoLocation = null;
+
+    if (Object.prototype.hasOwnProperty.call(payload, "location") && payload.location) {
+      geoLocation = payload.location;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, "directMe")) {
+      updateData.directMe = payload.directMe;
+      if (payload.directMe && typeof payload.directMe === "string") {
+        const coordinate = await processGoogleMapsLink(payload.directMe);
         if (coordinate.lat && coordinate.lng) {
           geoLocation = {
             type: "Point",
@@ -161,52 +168,54 @@ export const createStore = async (req, res) => {
           });
         }
       }
-  
-      const updatedStore = await Store.findByIdAndUpdate(
-        id,
-        {
-          name,
-          category,
-          information,
-          phone,
-          address,
-          email,
-          location: geoLocation,
-          updatedBy: req.user._id,
-        },
-        { new: true, runValidators: true }
-      );
-  
-      // ✅ Optional: populate category name
-      const storeDetails = await Store.aggregate([
-        { $match: { _id: new ObjectId(id) } },
-        {
-          $lookup: {
-            from: "store_categories",
-            localField: "category",
-            foreignField: "_id",
-            as: "category_name",
-          },
-        },
-        {
-          $addFields: {
-            category_name: {
-              $ifNull: [{ $arrayElemAt: ["$category_name.name", 0] }, null],
-            },
-          },
-        },
-      ]);
-  
-      res.status(200).json({
-        success: true,
-        message: "Store updated successfully",
-        data: storeDetails[0],
-      });
-    } catch (error) {
-      console.error("Error editing store:", error);
-      res.status(500).json({ success: false, message: error.message });
     }
-  };
+
+    if (geoLocation) {
+      updateData.location = geoLocation;
+    }
+
+    if (Object.keys(updateData).length === 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide at least one field to update",
+      });
+    }
+
+    await Store.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    const storeDetails = await Store.aggregate([
+      { $match: { _id: new ObjectId(id) } },
+      {
+        $lookup: {
+          from: "store_categories",
+          localField: "category",
+          foreignField: "_id",
+          as: "category_name",
+        },
+      },
+      {
+        $addFields: {
+          category_name: {
+            $ifNull: [{ $arrayElemAt: ["$category_name.name", 0] }, null],
+          },
+        },
+      },
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: "Store updated successfully",
+      data: storeDetails[0],
+    });
+  } catch (error) {
+    console.error("Error editing store:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
   
 export const storeDetails = async (req, res) => {
     try {

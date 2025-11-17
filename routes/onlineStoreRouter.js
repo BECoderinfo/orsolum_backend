@@ -1,8 +1,56 @@
 import express from "express";
-import { uploadBrandImage, createBrand, updateBrand, deleteBrand, listBrands, uploadCategoryImage, createCategory, updateCategory, deleteCategory, listCategory, uploadSubCategoryImage, createSubCategory, updateSubCategory, deleteSubCategory, listSubCategory, uploadOnlineProductImage, createProduct, updateProduct, deleteProduct, listProducts, createProductUnit, updateProductUnit, deleteProductUnit, onlineStoreHomePage, allTrendingProducts, allCategories, allSubCategories, allBrands, onlineProductsList, onlineProductsDetails, incrementOnlineProductQuantityInCart, addOnlineProductToCart, decrementOnlineProductQuantityInCart, deleteOnlineProductFromCart, onlineStoreCartDetails, createOnlineOrder, cancelOnlineOrder, onlineOrderList, onlineOrderDetails, adminProductDetails, listSubCategoryByCategory, returnChangeStatus , onlineOrderChangeStatus} from "../controllers/onlineStoreController.js";
-import { adminAuthentication, userAuthentication } from "../middlewares/middleware.js";
+import {
+  uploadBrandImage,
+  createBrand,
+  updateBrand,
+  deleteBrand,
+  listBrands,
+  uploadCategoryImage,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+  listCategory,
+  uploadSubCategoryImage,
+  createSubCategory,
+  updateSubCategory,
+  deleteSubCategory,
+  listSubCategory,
+  uploadOnlineProductImage,
+  createProduct,
+  updateProduct,
+  deleteProduct,
+  listProducts,
+  createProductUnit,
+  updateProductUnit,
+  deleteProductUnit,
+  onlineStoreHomePage,
+  allTrendingProducts,
+  allCategories,
+  allSubCategories,
+  allBrands,
+  onlineProductsList,
+  onlineProductsDetails,
+  incrementOnlineProductQuantityInCart,
+  addOnlineProductToCart,
+  decrementOnlineProductQuantityInCart,
+  deleteOnlineProductFromCart,
+  onlineStoreCartDetails,
+  createOnlineOrder,
+  cancelOnlineOrder,
+  onlineOrderList,
+  onlineOrderDetails,
+  adminProductDetails,
+  listSubCategoryByCategory,
+  returnChangeStatus,
+  onlineOrderChangeStatus,
+} from "../controllers/onlineStoreController.js";
+import {
+  adminAuthentication,
+  userAuthentication,
+  sellerAuthentication,
+} from "../middlewares/middleware.js";
 import { body } from "express-validator";
-import { uploadReturnImage } from "../helper/uploadImage.js"
+import { uploadReturnImage } from "../helper/uploadImage.js";
 const onlineStoreRouter = express.Router();
 
 // admin routes
@@ -26,6 +74,13 @@ onlineStoreRouter.put('/admin/update/category/:id/v1', adminAuthentication, upda
 onlineStoreRouter.delete('/admin/delete/category/:id/v1', adminAuthentication, deleteCategory);
 onlineStoreRouter.get('/admin/list/categories/v1', adminAuthentication, listCategory);
 
+// ✅ Seller – readonly category list (used in seller panel Add Product)
+onlineStoreRouter.get(
+  "/online/seller/list/categories/v1",
+  sellerAuthentication,
+  listCategory
+);
+
 // sub category
 onlineStoreRouter.post('/admin/upload/sub/category/image/v1', [
     body('sFileName').not().isEmpty(),
@@ -34,19 +89,81 @@ onlineStoreRouter.post('/admin/upload/sub/category/image/v1', [
 onlineStoreRouter.post('/admin/create/sub/category/v1', adminAuthentication, createSubCategory);
 onlineStoreRouter.put('/admin/update/sub/category/:id/v1', adminAuthentication, updateSubCategory);
 onlineStoreRouter.delete('/admin/delete/sub/category/:id/v1', adminAuthentication, deleteSubCategory);
-onlineStoreRouter.get('/admin/list/sub/categories/v1', adminAuthentication, listSubCategory);
-onlineStoreRouter.get('/admin/list/sub/categories/:id/v1', adminAuthentication, listSubCategoryByCategory);
+onlineStoreRouter.get(
+  "/admin/list/sub/categories/v1",
+  adminAuthentication,
+  listSubCategory
+);
+onlineStoreRouter.get(
+  "/admin/list/sub/categories/:id/v1",
+  adminAuthentication,
+  listSubCategoryByCategory
+);
+
+// ✅ Seller – readonly sub‑categories (filtered by category)
+onlineStoreRouter.get(
+  "/online/seller/list/sub/categories/:id/v1",
+  sellerAuthentication,
+  listSubCategoryByCategory
+);
 
 // product
 onlineStoreRouter.post('/admin/upload/online/product/image/v1', [
     body('sFileName').not().isEmpty(),
     body('sContentType').not().isEmpty()
 ], adminAuthentication, uploadOnlineProductImage);
-onlineStoreRouter.post('/admin/create/product/v1', adminAuthentication, createProduct);
-onlineStoreRouter.put('/admin/update/product/:id/v1', adminAuthentication, updateProduct);
-onlineStoreRouter.delete('/admin/delete/product/:id/v1', adminAuthentication, deleteProduct);
-onlineStoreRouter.get('/admin/list/online/product/v1', adminAuthentication, listProducts);
-onlineStoreRouter.get('/admin/details/online/product/:id/v1', adminAuthentication, adminProductDetails);
+onlineStoreRouter.post(
+  "/admin/create/product/v1",
+  adminAuthentication,
+  createProduct
+);
+onlineStoreRouter.put(
+  "/admin/update/product/:id/v1",
+  adminAuthentication,
+  updateProduct
+);
+onlineStoreRouter.delete(
+  "/admin/delete/product/:id/v1",
+  adminAuthentication,
+  deleteProduct
+);
+onlineStoreRouter.get(
+  "/admin/list/online/product/v1",
+  adminAuthentication,
+  listProducts
+);
+onlineStoreRouter.get(
+  "/admin/details/online/product/:id/v1",
+  adminAuthentication,
+  adminProductDetails
+);
+
+// ✅ Seller – basic product CRUD used in seller panel
+onlineStoreRouter.post(
+  "/online/seller/product/add/v1",
+  sellerAuthentication,
+  createProduct
+);
+onlineStoreRouter.put(
+  "/online/seller/product/update/:id/v1",
+  sellerAuthentication,
+  updateProduct
+);
+onlineStoreRouter.delete(
+  "/online/seller/product/delete/:id/v1",
+  sellerAuthentication,
+  deleteProduct
+);
+onlineStoreRouter.get(
+  "/online/seller/product/list/v1",
+  sellerAuthentication,
+  listProducts
+);
+onlineStoreRouter.get(
+  "/online/seller/product/details/:id/v1",
+  sellerAuthentication,
+  adminProductDetails
+);
 // units
 onlineStoreRouter.post('/admin/create/product/unit/v1', adminAuthentication, createProductUnit);
 onlineStoreRouter.put('/admin/update/product/unit/:id/v1', adminAuthentication, updateProductUnit);

@@ -3,13 +3,14 @@ import { sellerAuthentication } from "../middlewares/middleware.js";
 import { uploadStoreImagesMulter } from "../helper/uploadImage.js";
 import { createSellerStore } from "../controllers/sellerStoreController.js";
 import { listOfCategories } from "../controllers/storeController.js";
-import { 
-  sendRegisterOtp, 
-  verifyRegisterOtp, 
-  updateSellerProfile, 
-  loginSeller ,
+import {
+  sendRegisterOtp,
+  verifyRegisterOtp,
+  updateSellerProfile,
+  loginSeller,
   setSellerPassword,
-  verifySellerPassword
+  verifySellerPassword,
+  getSellerProfile,
 } from "../controllers/sellerController.js";
 
 const sellerRouter = express.Router();
@@ -21,6 +22,7 @@ sellerRouter.put("/seller/update/profile/v1", sellerAuthentication, updateSeller
 sellerRouter.post("/seller/login/v1", loginSeller);
 sellerRouter.post("/seller/set/password/v1", setSellerPassword); 
 sellerRouter.post("/seller/verify/password/v1", verifySellerPassword);
+sellerRouter.get("/seller/profile/details/v1", sellerAuthentication, getSellerProfile);
 
 
 

@@ -29,13 +29,12 @@ export const getRetailerProfile = async (req, res) => {
 
 export const updateRetailerProfile = async (req, res) => {
     try {
-        let { name, state, city, entity, address, gst, image, phone } = req.body;
+        const payload = { ...req.body };
 
         if (req.file) {
-            image = req.file.key;
+            payload.image = req.file.key;
         }
 
-        // Fetch the current user
         const user = await User.findById(req.user._id);
         if (!user) {
             return res.status(status.NotFound).json({
@@ -45,10 +44,9 @@ export const updateRetailerProfile = async (req, res) => {
             });
         }
 
-        // ✅ Check if phone number changed
-        if (phone && phone !== user.phone) {
-            // 1️⃣ Check if new phone is already in use
-            const existWithPhone = await User.findOne({ phone });
+        const incomingPhone = payload.phone;
+        if (incomingPhone && incomingPhone !== user.phone) {
+            const existWithPhone = await User.findOne({ phone: incomingPhone });
             if (existWithPhone) {
                 return res.status(status.ResourceExist).json({
                     status: jsonStatus.ResourceExist,
@@ -57,10 +55,8 @@ export const updateRetailerProfile = async (req, res) => {
                 });
             }
 
-            // 2️⃣ Delete previous OTPs for that number
-            await OtpModel.deleteMany({ phone });
+            await OtpModel.deleteMany({ phone: incomingPhone });
 
-            // 3️⃣ Generate and send OTP
             const otp = OTP_GENERATOR.generate(6, {
                 upperCaseAlphabets: false,
                 specialChars: false,
@@ -68,31 +64,33 @@ export const updateRetailerProfile = async (req, res) => {
                 digits: true
             });
 
-            await sendSms(phone.replace('+', ''), { var1: user.name || 'User', var2: otp });
+            await sendSms(incomingPhone.replace('+', ''), { var1: user.name || 'User', var2: otp });
 
-            // 4️⃣ Store OTP in DB
             const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
-            const otpRecord = new OtpModel({ phone, otp, expiresAt: otpExpires });
+            const otpRecord = new OtpModel({ phone: incomingPhone, otp, expiresAt: otpExpires });
             await otpRecord.save();
 
-            // 5️⃣ Return OTP step response
             return res.status(status.OK).json({
                 status: jsonStatus.OK,
                 success: true,
                 step: "verify_otp",
-                message: `OTP sent to ${phone}. Please verify to update phone number.`,
+                message: `OTP sent to ${incomingPhone}. Please verify to update phone number.`,
             });
         }
 
-        // ✅ If phone is not changed → directly update other fields
+        const allowedFields = ["name", "state", "city", "entity", "address", "gst", "image", "email"];
         const updateData = {};
-        if (name) updateData.name = name;
-        if (state) updateData.state = state;
-        if (city) updateData.city = city;
-        if (entity) updateData.entity = entity;
-        if (address) updateData.address = address;
-        if (gst) updateData.gst = gst;
-        if (image) updateData.image = image;
+
+        allowedFields.forEach((field) => {
+            if (Object.prototype.hasOwnProperty.call(payload, field)) {
+                const value = payload[field];
+                if (field === "email" && value) {
+                    updateData.email = value.toLowerCase();
+                } else {
+                    updateData[field] = value;
+                }
+            }
+        });
 
         if (Object.keys(updateData).length === 0) {
             return res.status(status.BadRequest).json({

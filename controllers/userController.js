@@ -193,58 +193,80 @@ export const getMyProfile = async (req, res) => {
 
 export const updateMyProfile = async (req, res) => {
     try {
-        let { name, state, city, image } = req.body;
-
-        // Handle file upload if image is provided
+        // Normalise file based uploads
         if (req.file) {
-            image = req.file.key;
+            req.body.image = req.file.key;
         }
 
-        // Build update object - only include fields that are provided
-        const updateData = {};
-        if (name) updateData.name = name;
-        if (state) updateData.state = state;
-        if (city) updateData.city = city;
-        if (image) updateData.image = image;
+        const allowedFields = [
+            "name",
+            "state",
+            "city",
+            "image",
+            "phone",
+            "email",
+            "address",
+            "entity",
+            "gst",
+            "lat",
+            "long"
+        ];
 
-        // Check if at least one field is being updated
+        const updateData = {};
+
+        allowedFields.forEach((field) => {
+            if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+                const value = req.body[field];
+
+                // Allow empty string to clear the field
+                if (value !== undefined) {
+                    if (field === "phone" && value) {
+                        updateData.phone = value.startsWith("+91") ? value : `+91${value}`;
+                    } else if (field === "email" && value) {
+                        updateData.email = value.toLowerCase();
+                    } else {
+                        updateData[field] = value;
+                    }
+                }
+            }
+        });
+
         if (Object.keys(updateData).length === 0) {
-            return res.status(status.BadRequest).json({ 
-                status: jsonStatus.BadRequest, 
-                success: false, 
-                message: "Please provide at least one field to update" 
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Please provide at least one field to update"
             });
         }
 
         const updateUser = await User.findByIdAndUpdate(
-            req.user._id, 
-            updateData, 
+            req.user._id,
+            updateData,
             { new: true, runValidators: true }
         );
 
         if (!updateUser) {
-            return res.status(status.NotFound).json({ 
-                status: jsonStatus.NotFound, 
-                success: false, 
-                message: "User not found" 
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "User not found"
             });
         }
 
-        // Remove sensitive data from response
         const userData = updateUser.toObject();
         delete userData.password;
 
-        res.status(status.OK).json({ 
-            status: jsonStatus.OK, 
-            success: true, 
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
             message: "Profile updated successfully",
-            data: userData 
+            data: userData
         });
     } catch (error) {
-        res.status(status.InternalServerError).json({ 
-            status: jsonStatus.InternalServerError, 
-            success: false, 
-            message: error.message 
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
         });
         return catchError('updateMyProfile', error, req, res);
     }

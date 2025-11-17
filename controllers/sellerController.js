@@ -135,14 +135,6 @@ export const updateSellerProfile = async (req, res) => {
   try {
     const { name, mobile, email, password } = req.body;
 
-    if (!name || !mobile || !email) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: `Please enter all required details`
-      });
-    }
-
     const seller = await User.findById(req.user._id);
     if (!seller || seller.role !== 'seller') {
       return res.status(status.Unauthorized).json({
@@ -152,12 +144,38 @@ export const updateSellerProfile = async (req, res) => {
       });
     }
 
-    seller.name = name;
-    seller.phone = mobile.startsWith('+91') ? mobile : `+91${mobile}`;
-    seller.email = email;
+    const updateData = {};
 
-    // ✅ Password update with strength validation
-    if (password) {
+    if (Object.prototype.hasOwnProperty.call(req.body, "name")) {
+      updateData.name = name;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, "mobile")) {
+      const formattedPhone = mobile
+        ? (mobile.startsWith('+91') ? mobile : `+91${mobile}`)
+        : "";
+
+      if (formattedPhone && formattedPhone !== seller.phone) {
+        const exists = await User.findOne({ phone: formattedPhone });
+        if (exists && exists._id.toString() !== seller._id.toString()) {
+          return res.status(status.ResourceExist).json({
+            status: jsonStatus.ResourceExist,
+            success: false,
+            message: "Phone number already in use"
+          });
+        }
+      }
+
+      updateData.phone = formattedPhone;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, "email")) {
+      updateData.email = email ? email.toLowerCase() : "";
+    }
+
+    let passwordChanged = false;
+
+    if (Object.prototype.hasOwnProperty.call(req.body, "password") && password) {
       if (
         password.length < 8 ||
         !/[A-Z]/.test(password) ||
@@ -170,11 +188,19 @@ export const updateSellerProfile = async (req, res) => {
           message: "Password must be at least 8 characters long and include an uppercase letter, a number, and a special character"
         });
       }
-
-      // Don't hash manually - User model pre-save hook will hash it automatically
       seller.password = password;
+      passwordChanged = true;
     }
 
+    if (Object.keys(updateData).length === 0 && !passwordChanged) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Please provide at least one field to update"
+      });
+    }
+
+    Object.assign(seller, updateData);
     await seller.save();
 
     const sellerData = seller.toObject();
@@ -192,6 +218,37 @@ export const updateSellerProfile = async (req, res) => {
       message: error.message
     });
     return catchError('updateSellerProfile', error, req, res);
+  }
+};
+
+// ---------------- Get Logged-in Seller Profile ----------------
+export const getSellerProfile = async (req, res) => {
+  try {
+    const seller = await User.findById(req.user._id);
+
+    if (!seller || seller.role !== "seller") {
+      return res.status(status.Unauthorized).json({
+        status: jsonStatus.Unauthorized,
+        success: false,
+        message: "Seller not found",
+      });
+    }
+
+    const sellerData = seller.toObject();
+    delete sellerData.password;
+
+    return res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      data: sellerData,
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("getSellerProfile", error, req, res);
   }
 };
 

@@ -134,47 +134,83 @@ export const createProduct = async (req, res) => {
 
 export const editProduct = async (req, res) => {
     try {
-        const { productName, companyName, mrp, sellingPrice, information, storeId, details } = req.body;
         const { id } = req.params;
+        const payload = { ...req.body };
 
         const product = await Product.findOne({ _id: id, createdBy: req.user._id });
         if (!product) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: `Product not found` });
         }
 
-        let productDetails;
-        if (details) {
-            if (typeof details === 'string') {
+        const updateData = { updatedBy: req.user._id };
+
+        if (Object.prototype.hasOwnProperty.call(payload, "details")) {
+            let productDetails = payload.details;
+            if (typeof productDetails === "string" && productDetails.trim().length > 0) {
                 try {
-                    productDetails = JSON.parse(details);
+                    productDetails = JSON.parse(productDetails);
                 } catch (err) {
-                    return res.status(400).json({ error: 'Invalid JSON format for details.' });
+                    return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: 'Invalid JSON format for details.' });
                 }
             }
-        } else {
-            productDetails = product.details;
+            if (!productDetails) {
+                productDetails = [];
+            }
+            updateData.details = productDetails;
         }
 
         let productImages = product.productImages || [];
         if (req.files && req.files.length > 0) {
-            req.files.map(elem => productImages.push(elem.key));
+            req.files.forEach((file) => productImages.push(file.key));
+            updateData.productImages = productImages;
         }
 
-        if (!productName || !companyName || !mrp || !sellingPrice || !information || !storeId) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter product details` });
+        const simpleFields = ["productName", "companyName", "information", "qty", "status", "manufacturer"];
+        simpleFields.forEach((field) => {
+            if (Object.prototype.hasOwnProperty.call(payload, field)) {
+                updateData[field] = payload[field];
+            }
+        });
+
+        if (Object.prototype.hasOwnProperty.call(payload, "storeId")) {
+            const newStoreId = payload.storeId;
+            const isStore = await Store.findOne({ createdBy: req.user._id, _id: newStoreId });
+            if (!isStore) {
+                return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Store not found with this account" });
+            }
+            updateData.storeId = newStoreId;
         }
 
-        const isStore = await Store.findOne({ createdBy: req.user._id, _id: storeId });
-        if (!isStore) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Store not found with this account" });
+        const hasMrp = Object.prototype.hasOwnProperty.call(payload, "mrp");
+        const hasSellingPrice = Object.prototype.hasOwnProperty.call(payload, "sellingPrice");
+
+        if (hasMrp || hasSellingPrice) {
+            const finalMrp = hasMrp ? Number(payload.mrp) : Number(product.mrp);
+            const finalSellingPrice = hasSellingPrice ? Number(payload.sellingPrice) : Number(product.sellingPrice);
+
+            if (isNaN(finalMrp) || isNaN(finalSellingPrice)) {
+                return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "MRP and Selling price must be valid numbers" });
+            }
+
+            const offPer = calculateDiscount(finalMrp, finalSellingPrice);
+            if (offPer === "Invalid prices") {
+                return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Something wrong with MRP or Selling price" });
+            }
+
+            updateData.mrp = finalMrp;
+            updateData.sellingPrice = finalSellingPrice;
+            updateData.offPer = offPer;
         }
 
-        const offPer = calculateDiscount(Number(mrp), Number(sellingPrice));
-        if (offPer === "Invalid prices") {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Something wrong with MRP or Selling price" });
+        if (Object.keys(updateData).length === 1) { // only updatedBy present
+            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Please provide at least one field to update" });
         }
 
-        let editProduct = await Product.findByIdAndUpdate(id, { ...req.body, offPer, details: productDetails, updatedBy: req.user._id, productImages }, { new: true, runValidators: true });
+        const editProduct = await Product.findByIdAndUpdate(
+            id,
+            updateData,
+            { new: true, runValidators: true }
+        );
 
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: editProduct });
     } catch (error) {

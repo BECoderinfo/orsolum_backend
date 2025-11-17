@@ -354,13 +354,19 @@ export const deleteProduct = async (req, res) => {
 export const listProducts = async (req, res) => {
     try {
 
-        const { search } = req.query;
+        const { search = "" } = req.query;
         const regex = new RegExp(search, "i");
+
+        // If the caller is a seller, only return products created by that seller
+        const sellerFilter = (req?.user && req.user.role === "seller")
+            ? { createdBy: req.user._id }
+            : {};
 
         const list = await OnlineProduct.aggregate([
             {
                 $match: {
                     deleted: false,
+                    ...sellerFilter,
                     $or: [
                         { name: { $regex: regex } },
                         { manufacturer: { $regex: regex } }

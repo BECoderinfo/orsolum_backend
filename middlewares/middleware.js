@@ -92,17 +92,23 @@ export const retailerAuthentication = async (req, res, next) => {
     }
 
     const user = await User.findById(decoded._id);
-    if (!user || user.role !== "retailer" || user.deleted || !user.active) {
+    // ✅ Allow both "retailer" and "seller" roles to use retailer APIs
+    if (
+      !user ||
+      (user.role !== "retailer" && user.role !== "seller") ||
+      user.deleted ||
+      !user.active
+    ) {
       return res.status(status.Unauthorized).json({
         status: jsonStatus.Unauthorized,
         success: false,
         message: !user
           ? "Authorization Denied"
           : user.deleted
-            ? "Your account was deleted!"
-            : !user.active
-              ? "Your account is inactive! Please contact admin"
-              : "Authorization Denied",
+          ? "Your account was deleted!"
+          : !user.active
+          ? "Your account is inactive! Please contact admin"
+          : "Authorization Denied",
       });
     }
 
