@@ -266,6 +266,56 @@ export const deleteStorePickupAddress = async (req, res) => {
   }
 };
 
+// ✅ Bulk delete pickup addresses from Shiprocket
+export const bulkDeletePickupAddresses = async (req, res) => {
+  try {
+    const { pickupIds } = req.body;
+    console.log("Deleting pickup ID:", pickupIds);
+
+
+    if (!pickupIds || !Array.isArray(pickupIds) || pickupIds.length === 0) {
+      return res.status(400).json({ success: false, message: "pickupIds must be a non-empty array" });
+    }
+
+    const Store = (await import('../models/Store.js')).default;
+
+    const results = [];
+
+    for (const id of pickupIds) {
+      try {
+        const store = await Store.findOne({ shiprocketPickupId: id });
+        const response = await ShiprocketService.deletePickupAddress(id);
+
+        if (store) {
+          store.shiprocketPickupId = null;
+          await store.save();
+        }
+
+        results.push({
+          id,
+          status: "deleted",
+          response,
+          storeUpdated: !!store
+        });
+      } catch (err) {
+        results.push({ id, status: "failed", error: err.message });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Bulk delete completed",
+      results
+    });
+
+  } catch (err) {
+    console.error("Bulk delete error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
+
 // ✅ Get pickup address status
 export const getPickupAddressStatus = async (req, res) => {
   try {
@@ -339,7 +389,6 @@ export const shiprocketHealth = async (req, res) => {
   }
 };
 
-// Add these functions to orsolum_backend/controllers/shiprocketController.js
 
 // Auto-sync orders with Shiprocket
 export const syncOrdersWithShiprocket = async (req, res) => {

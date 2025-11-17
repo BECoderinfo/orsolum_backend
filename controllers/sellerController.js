@@ -171,8 +171,8 @@ export const updateSellerProfile = async (req, res) => {
         });
       }
 
-      const hashedPassword = await bcrypt.hash(password, 10);
-      seller.password = hashedPassword;
+      // Don't hash manually - User model pre-save hook will hash it automatically
+      seller.password = password;
     }
 
     await seller.save();

@@ -6,20 +6,24 @@ const TEMPLATE_ID = process.env.TEMPLATE_ID;
 
 export const sendSms = async (mobileNumber, templateParams) => {
     try {
-        console.log('mobileNumber, templateParams', mobileNumber, templateParams)
+        console.log("Mobile Number:", mobileNumber);
+        console.log("Template Params:", templateParams);
+
+        const payload = {
+            flow_id: TEMPLATE_ID,   // MSG91 Flow ID
+            sender: SENDER_ID,      // 6-character approved sender ID
+            recipients: [
+                {
+                    mobiles: mobileNumber,   // +91xxxxxxxxxx or xxxxxxxxxx
+                    var1: templateParams.var1,  // user name
+                    var2: templateParams.var2,  // OTP
+                },
+            ],
+        };
+
         const response = await axios.post(
             "https://api.msg91.com/api/v5/flow/",
-            {
-                flow_id: TEMPLATE_ID, // Airtel Template ID (Flow ID)
-                sender: SENDER_ID, // Ex: 'TXTLCL' (MSG91 approved sender ID)
-                recipients: [
-                    {
-                        mobiles: mobileNumber,
-                        var1: templateParams.var1,
-                        var2: templateParams.var2,
-                    },
-                ],
-            },
+            payload,
             {
                 headers: {
                     authkey: SMS_API_KEY,
@@ -27,8 +31,10 @@ export const sendSms = async (mobileNumber, templateParams) => {
                 },
             }
         );
+
         console.log("SMS sent successfully:", response.data);
         return true;
+
     } catch (error) {
         console.error(
             "Error sending SMS:",

@@ -24,7 +24,8 @@ import {
   getPickupAddressStatus,
   syncOrdersWithShiprocket,
   getOrdersWithShiprocketStatus,
-  bulkSyncOrders
+  bulkSyncOrders,
+  bulkDeletePickupAddresses,
 } from '../controllers/shiprocketController.js';
 
 const router = express.Router();
@@ -81,6 +82,11 @@ router.put('/store/pickup-address/update', updateStorePickupAddress);
 
 // ✅ Delete a store’s pickup address
 router.delete('/store/pickup-address/:storeId', deleteStorePickupAddress);
+
+// /routes/shiprocketRouter.js
+
+router.post('/store/pickup-addresses/bulk-delete', bulkDeletePickupAddresses);
+
 
 // ✅ Get pickup address status
 router.get('/pickup-address/status', getPickupAddressStatus);

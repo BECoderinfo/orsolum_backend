@@ -28,6 +28,170 @@ const { ObjectId } = mongoose.Types;
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
 
+export const createOrder = async (req, res) => {
+  try {
+    const { coupon } = req.body;
+
+    const carts = await Cart.find({ createdBy: req.user._id, deleted: false });
+    if (carts.length < 1) {
+      return res.status(400).json({ success: false, message: "Cart is empty" });
+    }
+
+    const address = await Address.findOne({ createdBy: req.user._id });
+    if (!address) {
+      return res.status(400).json({ success: false, message: "Address not found" });
+    }
+
+    const orderId = `ORDER_${Date.now()}`;
+    let overallTotalAmount = 0;
+
+    // 🧮 Calculate totals
+    const cartDetails = await Promise.all(
+      carts.map(async (cart) => {
+        const product = await Product.findById(cart.productId).populate("storeId");
+        const totalAmount = product.sellingPrice * cart.quantity;
+        overallTotalAmount += totalAmount;
+
+        return {
+          product,
+          productId: cart.productId,
+          storeId: product.storeId?._id,
+          quantity: cart.quantity,
+          sellingPrice: product.sellingPrice,
+          totalAmount,
+        };
+      })
+    );
+
+    // 🎟️ Coupon logic (unchanged)
+    let couponCodeDiscount = 0;
+    if (coupon) {
+      const couponCode = await CouponCode.findById(coupon);
+      if (!couponCode || couponCode.deleted) {
+        return res.status(404).json({ success: false, message: "Coupon not found" });
+      }
+
+      if (couponCode.use === "one") {
+        const alreadyUsed = await CouponHistory.findOne({
+          couponId: couponCode._id,
+          userId: req.user._id,
+        });
+        if (alreadyUsed) {
+          return res.status(400).json({ success: false, message: "Coupon already used" });
+        }
+      }
+
+      if (couponCode.minPrice && overallTotalAmount < couponCode.minPrice) {
+        return res.status(400).json({
+          success: false,
+          message: `Minimum purchase of ${couponCode.minPrice} required`,
+        });
+      }
+
+      const rawDiscount = (overallTotalAmount * couponCode.discount) / 100;
+      couponCodeDiscount = couponCode.upto
+        ? Math.min(rawDiscount, couponCode.upto)
+        : rawDiscount;
+    }
+
+    const totalCartItems = cartDetails.length;
+    const discountPerItem = couponCodeDiscount / totalCartItems;
+
+    // 🧾 Create orders
+    await Promise.all(
+      cartDetails.map(async (item) => {
+        const itemDiscount = discountPerItem;
+        const grandTotal = item.totalAmount - itemDiscount;
+
+        const summary = {
+          totalAmount: item.totalAmount,
+          shippingFee: 0,
+          coupon: itemDiscount,
+          grandTotal,
+        };
+
+        const newOrder = new Order({
+          address,
+          createdBy: req.user._id,
+          productId: item.productId,
+          quantity: item.quantity,
+          productPrice: item.sellingPrice,
+          summary,
+          orderId,
+        });
+
+        await newOrder.save();
+
+        // 🚀 Create Shiprocket order automatically
+        try {
+          const store = await Store.findById(item.storeId);
+          if (store && store.shiprocket?.pickup_address_id) {
+            const shipOrderPayload = {
+              order_id: newOrder._id.toString(),
+              order_date: new Date().toISOString(),
+              pickup_location: store.shiprocket.pickup_address_id,
+              billing_customer_name: req.user.name,
+              billing_address: address.address_1,
+              billing_city: address.city,
+              billing_pincode: address.pincode,
+              billing_state: address.state,
+              billing_country: "India",
+              billing_email: req.user.email,
+              billing_phone: req.user.phone,
+              order_items: [
+                {
+                  name: item.product.name,
+                  sku: item.product._id.toString(),
+                  units: item.quantity,
+                  selling_price: item.product.sellingPrice,
+                },
+              ],
+              payment_method: "Prepaid",
+              sub_total: item.product.sellingPrice * item.quantity,
+              length: 10,
+              breadth: 10,
+              height: 10,
+              weight: 1,
+            };
+
+            const shiprocketOrder = await ShiprocketService.createOrder(shipOrderPayload);
+
+            if (shiprocketOrder && shiprocketOrder.data?.shipment_id) {
+              newOrder.shiprocket = {
+                shipment_id: shiprocketOrder.data.shipment_id,
+                order_id: shiprocketOrder.data.order_id,
+                awb_code: shiprocketOrder.data.awb_code || null,
+              };
+              await newOrder.save();
+              console.log("✅ Shiprocket order created:", shiprocketOrder.data.shipment_id);
+            } else {
+              console.warn("⚠️ Shiprocket order creation failed:", shiprocketOrder);
+            }
+          } else {
+            console.warn("⚠️ No Shiprocket pickup address found for store:", item.storeId);
+          }
+        } catch (shipErr) {
+          console.error("🚨 Error creating Shiprocket order:", shipErr.message);
+        }
+      })
+    );
+
+    if (coupon) {
+      await new CouponHistory({ couponId: coupon, userId: req.user._id }).save();
+    }
+
+    await Cart.updateMany({ createdBy: req.user._id }, { $set: { deleted: true } });
+
+    res.status(200).json({
+      success: true,
+      message: "Order created successfully & synced with Shiprocket",
+    });
+  } catch (error) {
+    console.error("Error in createOrder:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 export const addProductToCart = async (req, res) => {
   try {
     const { productId, storeId, quantity } = req.body;
@@ -1083,169 +1247,7 @@ export const getAllAddress = async (req, res) => {
   }
 };
 
-export const createOrder = async (req, res) => {
-  try {
-    const { coupon } = req.body;
 
-    const carts = await Cart.find({ createdBy: req.user._id, deleted: false });
-    if (carts.length < 1) {
-      return res.status(400).json({ success: false, message: "Cart is empty" });
-    }
-
-    const address = await Address.findOne({ createdBy: req.user._id });
-    if (!address) {
-      return res.status(400).json({ success: false, message: "Address not found" });
-    }
-
-    const orderId = `ORDER_${Date.now()}`;
-    let overallTotalAmount = 0;
-
-    // 🧮 Calculate totals
-    const cartDetails = await Promise.all(
-      carts.map(async (cart) => {
-        const product = await Product.findById(cart.productId).populate("storeId");
-        const totalAmount = product.sellingPrice * cart.quantity;
-        overallTotalAmount += totalAmount;
-
-        return {
-          product,
-          productId: cart.productId,
-          storeId: product.storeId?._id,
-          quantity: cart.quantity,
-          sellingPrice: product.sellingPrice,
-          totalAmount,
-        };
-      })
-    );
-
-    // 🎟️ Coupon logic (unchanged)
-    let couponCodeDiscount = 0;
-    if (coupon) {
-      const couponCode = await CouponCode.findById(coupon);
-      if (!couponCode || couponCode.deleted) {
-        return res.status(404).json({ success: false, message: "Coupon not found" });
-      }
-
-      if (couponCode.use === "one") {
-        const alreadyUsed = await CouponHistory.findOne({
-          couponId: couponCode._id,
-          userId: req.user._id,
-        });
-        if (alreadyUsed) {
-          return res.status(400).json({ success: false, message: "Coupon already used" });
-        }
-      }
-
-      if (couponCode.minPrice && overallTotalAmount < couponCode.minPrice) {
-        return res.status(400).json({
-          success: false,
-          message: `Minimum purchase of ${couponCode.minPrice} required`,
-        });
-      }
-
-      const rawDiscount = (overallTotalAmount * couponCode.discount) / 100;
-      couponCodeDiscount = couponCode.upto
-        ? Math.min(rawDiscount, couponCode.upto)
-        : rawDiscount;
-    }
-
-    const totalCartItems = cartDetails.length;
-    const discountPerItem = couponCodeDiscount / totalCartItems;
-
-    // 🧾 Create orders
-    await Promise.all(
-      cartDetails.map(async (item) => {
-        const itemDiscount = discountPerItem;
-        const grandTotal = item.totalAmount - itemDiscount;
-
-        const summary = {
-          totalAmount: item.totalAmount,
-          shippingFee: 0,
-          coupon: itemDiscount,
-          grandTotal,
-        };
-
-        const newOrder = new Order({
-          address,
-          createdBy: req.user._id,
-          productId: item.productId,
-          quantity: item.quantity,
-          productPrice: item.sellingPrice,
-          summary,
-          orderId,
-        });
-
-        await newOrder.save();
-
-        // 🚀 Create Shiprocket order automatically
-        try {
-          const store = await Store.findById(item.storeId);
-          if (store && store.shiprocket?.pickup_address_id) {
-            const shipOrderPayload = {
-              order_id: newOrder._id.toString(),
-              order_date: new Date().toISOString(),
-              pickup_location: store.shiprocket.pickup_address_id,
-              billing_customer_name: req.user.name,
-              billing_address: address.address_1,
-              billing_city: address.city,
-              billing_pincode: address.pincode,
-              billing_state: address.state,
-              billing_country: "India",
-              billing_email: req.user.email,
-              billing_phone: req.user.phone,
-              order_items: [
-                {
-                  name: item.product.name,
-                  sku: item.product._id.toString(),
-                  units: item.quantity,
-                  selling_price: item.product.sellingPrice,
-                },
-              ],
-              payment_method: "Prepaid",
-              sub_total: item.product.sellingPrice * item.quantity,
-              length: 10,
-              breadth: 10,
-              height: 10,
-              weight: 1,
-            };
-
-            const shiprocketOrder = await ShiprocketService.createOrder(shipOrderPayload);
-
-            if (shiprocketOrder && shiprocketOrder.data?.shipment_id) {
-              newOrder.shiprocket = {
-                shipment_id: shiprocketOrder.data.shipment_id,
-                order_id: shiprocketOrder.data.order_id,
-                awb_code: shiprocketOrder.data.awb_code || null,
-              };
-              await newOrder.save();
-              console.log("✅ Shiprocket order created:", shiprocketOrder.data.shipment_id);
-            } else {
-              console.warn("⚠️ Shiprocket order creation failed:", shiprocketOrder);
-            }
-          } else {
-            console.warn("⚠️ No Shiprocket pickup address found for store:", item.storeId);
-          }
-        } catch (shipErr) {
-          console.error("🚨 Error creating Shiprocket order:", shipErr.message);
-        }
-      })
-    );
-
-    if (coupon) {
-      await new CouponHistory({ couponId: coupon, userId: req.user._id }).save();
-    }
-
-    await Cart.updateMany({ createdBy: req.user._id }, { $set: { deleted: true } });
-
-    res.status(200).json({
-      success: true,
-      message: "Order created successfully & synced with Shiprocket",
-    });
-  } catch (error) {
-    console.error("Error in createOrder:", error.message);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
 
 export const createOrderV2 = async (req, res) => {
   try {

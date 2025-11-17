@@ -1496,137 +1496,164 @@ export const onlineStoreCartDetails = async (req, res) => {
 
 export const createOnlineOrder = async (req, res) => {
     try {
-        const { coupon, donate, addressId, coinUsed } = req.body;
-
-        // Fetch user cart items
-        const carts = await OnlineStoreCart.find({ createdBy: req.user._id, deleted: false })
-            .populate('productId')
-            .populate('unitId');
-
-        if (carts.length < 1) {
-            return res.status(400).json({ success: false, message: "Cart is empty" });
+      const { coupon, donate = 0, addressId, coinUsed = 0 } = req.body;
+      const userId = req.user._id;
+  
+      // 1️⃣ Fetch cart items for the user
+      const carts = await OnlineStoreCart.find({ createdBy: userId, deleted: false })
+        .populate("productId")
+        .populate("unitId");
+  
+      if (carts.length < 1) {
+        return res.status(400).json({ success: false, message: "Cart is empty" });
+      }
+  
+      // 2️⃣ Fetch the address
+      const address = await Address.findOne({ createdBy: userId, _id: addressId });
+      if (!address) {
+        return res.status(400).json({ success: false, message: "Invalid address" });
+      }
+  
+      // 3️⃣ Process cart items
+      let totalAmount = 0;
+      const productDetails = [];
+  
+      for (const cart of carts) {
+        const product = cart.productId;
+        const unit = cart.unitId;
+        const quantity = cart.quantity;
+  
+        if (!product || !unit) continue;
+  
+        const subCategory = await ProductSubCategory.findById(product.subCategoryId);
+        const percentageOff = subCategory?.percentageOff || 0;
+  
+        let finalSellingPrice = unit.sellingPrice;
+        let finalMrp = unit.mrp || unit.sellingPrice;
+  
+        // Apply premium discount if applicable
+        if (req.user.isPremium && percentageOff > 0) {
+          finalSellingPrice = Math.round(unit.sellingPrice * (1 - percentageOff / 100));
+          finalMrp = unit.sellingPrice; // Original price as MRP
         }
-
-        const address = await Address.findOne({ createdBy: req.user._id, _id: addressId });
-        if (!address) {
-            return res.status(400).json({ success: false, message: "Invalid address" });
-        }
-
-        let totalAmount = 0;
-        let productDetails = [];
-
-        // Process cart items
-        for (const cart of carts) {
-            const product = cart.productId;
-            let unit = cart.unitId;
-            const quantity = cart.quantity;
-
-            if (!product || !unit) continue;
-
-            // Fetch subcategory details for discount
-            const subCategory = await ProductSubCategory.findById(product.subCategoryId);
-            const percentageOff = subCategory?.percentageOff || 0;
-
-            // Modify unit details if user is premium and percentageOff > 0
-            if (req.user.isPremium && percentageOff > 0) {
-                const discountPrice = Math.round(unit.sellingPrice * (1 - percentageOff / 100));
-
-                unit = {
-                    ...unit.toObject(),
-                    mrp: unit.sellingPrice, // Show previous selling price as MRP
-                    sellingPrice: discountPrice, // Apply discounted price
-                    offPer: `${percentageOff}% OFF`
-                };
-            }
-
-            const productTotal = unit.sellingPrice * quantity;
-            totalAmount += productTotal;
-
-            productDetails.push({
-                productId: product._id,
-                productPrice: unit.sellingPrice,
-                mrp: unit.mrp,
-                qty: unit.qty,
-                quantity
-            });
-        }
-
-        // Apply coupon discount (if provided)
-        let couponCodeDiscount = 0;
-        if (coupon) {
-            const couponCode = await CouponCode.findById(coupon);
-
-            if (!couponCode || couponCode.deleted) {
-                return res.status(404).json({ success: false, message: "Coupon not found or deleted" });
-            }
-
-            if (couponCode.use === "one") {
-                const alreadyUsed = await CouponHistory.findOne({ couponId: couponCode._id, userId: req.user._id });
-                if (alreadyUsed) {
-                    return res.status(400).json({ success: false, message: "Coupon already used" });
-                }
-            }
-
-            if (couponCode.minPrice && totalAmount < couponCode.minPrice) {
-                return res.status(400).json({ success: false, message: `Minimum purchase of ${couponCode.minPrice} required for this coupon` });
-            }
-
-            const rawDiscount = (totalAmount * couponCode.discount) / 100;
-            couponCodeDiscount = couponCode.upto ? Math.min(rawDiscount, couponCode.upto) : rawDiscount;
-        }
-
-        // Shipping Fee Logic
-        const shippingFee = totalAmount > 500 ? 0 : 50;
-
-        // Calculate grand total
-        const grandTotal = totalAmount - couponCodeDiscount + shippingFee + donate - coinUsed;
-
-        // Generate payment session ID
-        const paymentData = {
-            order_currency: 'INR',
-            order_amount: grandTotal,
-            order_tags: {
-                forPayment: "OnlineStore",
-                coupon: coupon || "",
-                donate: donate ? donate.toString() : "0",
-                addressId,
-                userId: req.user._id,
-                coinUsed: coinUsed ? coinUsed.toString : "0"
-            },
-            customer_details: {
-                customer_id: req.user._id,
-                customer_phone: req.user.phone.replace('+91', '')
-            }
-        };
-
-        const headers = {
-            'x-api-version': process.env.CF_API_VERSION,
-            'x-client-id': process.env.CF_CLIENT_ID,
-            'x-client-secret': process.env.CF_CLIENT_SECRET,
-            'Content-Type': 'application/json'
-        };
-
-        const cashFreeSession = await axios.post(process.env.CF_CREATE_PRODUCT_URL, paymentData, { headers });
-
-        res.status(200).json({
-            success: true,
-            message: "Order created successfully",
-            data: {
-                _id: "",
-                paymentSessionId: cashFreeSession.data.payment_session_id,
-                cf_order_id: cashFreeSession.data.order_id
-            }
+  
+        totalAmount += finalSellingPrice * quantity;
+  
+        productDetails.push({
+          productId: product._id instanceof mongoose.Types.ObjectId ? product._id : new mongoose.Types.ObjectId(product._id),
+          productPrice: finalSellingPrice,
+          mrp: finalMrp,
+          qty: unit.qty,
+          quantity
         });
+      }
+  
+      if (productDetails.length === 0) {
+        return res.status(400).json({ success: false, message: "No valid products found in cart." });
+      }
+  
+      // 4️⃣ Coupon logic
+      let couponCodeDiscount = 0;
+      if (coupon) {
+        const couponCode = await CouponCode.findById(coupon);
+        if (!couponCode || couponCode.deleted) {
+          return res.status(404).json({ success: false, message: "Coupon not found or deleted" });
+        }
+  
+        if (couponCode.use === "one") {
+          const alreadyUsed = await CouponHistory.findOne({ couponId: couponCode._id, userId });
+          if (alreadyUsed) {
+            return res.status(400).json({ success: false, message: "Coupon already used" });
+          }
+        }
+  
+        if (couponCode.minPrice && totalAmount < couponCode.minPrice) {
+          return res.status(400).json({ success: false, message: `Minimum purchase of ${couponCode.minPrice} required for this coupon` });
+        }
+  
+        const rawDiscount = (totalAmount * couponCode.discount) / 100;
+        couponCodeDiscount = couponCode.upto ? Math.min(rawDiscount, couponCode.upto) : rawDiscount;
+      }
+  
+      // 5️⃣ Shipping fee
+      const shippingFee = totalAmount > 500 ? 0 : 50;
+      const grandTotal = totalAmount - couponCodeDiscount + shippingFee + Number(donate) - Number(coinUsed);
+  
+      // 6️⃣ Cashfree payment session
+      const paymentData = {
+        order_currency: "INR",
+        order_amount: grandTotal,
+        order_tags: {
+          forPayment: "OnlineStore",
+          coupon: coupon || "",
+          donate: donate.toString(),
+          addressId,
+          userId: userId.toString(),
+          coinUsed: coinUsed.toString()
+        },
+        customer_details: {
+          customer_id: userId,
+          customer_phone: req.user.phone.replace("+91", "").trim()
+        }
+      };
+  
+      const headers = {
+        "x-api-version": process.env.CF_API_VERSION,
+        "x-client-id": process.env.CF_CLIENT_ID,
+        "x-client-secret": process.env.CF_CLIENT_SECRET,
+        "Content-Type": "application/json"
+      };
+  
+      const cashFreeSession = await axios.post(process.env.CF_CREATE_PRODUCT_URL, paymentData, { headers });
+  
+      // 7️⃣ Save the order in MongoDB
+      const newOrder = new OnlineOrder({
+        createdBy: userId,
+        address: address.toObject ? address.toObject() : address,
+        productDetails,
+        orderId: `ONLINE_ORDER_${Date.now()}`,
+        cf_order_id: cashFreeSession.data.order_id,
+        status: "Pending",
+        summary: {
+          totalAmount,
+          discountAmount: couponCodeDiscount,
+          shippingFee,
+          donate: Number(donate),
+          grandTotal,
+          coinUsed: Number(coinUsed)
+        }
+      });
+  
+      const savedOrder = await newOrder.save();
+      console.log("Saved Order:", savedOrder); // 🔹 Debug log
+  
+      if (!savedOrder || !savedOrder._id) {
+        return res.status(500).json({
+          success: false,
+          message: "Order created but ID could not be retrieved. Check server logs."
+        });
+      }
+  
+      return res.status(200).json({
+        success: true,
+        message: "Order created successfully",
+        data: {
+          _id: savedOrder._id.toString(),
+          paymentSessionId: cashFreeSession.data.payment_session_id,
+          cf_order_id: cashFreeSession.data.order_id
+        }
+      });
     } catch (error) {
-        console.error("error", error);
-        res.status(status.InternalServerError).json({
-            status: jsonStatus.InternalServerError,
-            success: false,
-            message: error.message
-        });
-        return catchError('createOnlineOrder', error, req, res);
+      console.error("Error in createOnlineOrder:", error);
+      res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: error.message || "Internal server error"
+      });
+      return catchError("createOnlineOrder", error, req, res);
     }
-};
+  };
+
 
 export const cancelOnlineOrder = async (req, res) => {
     try {
