@@ -8,23 +8,11 @@ import {
     setPrimaryPickupAddress,
     bulkUpdatePickupAddresses
 } from '../controllers/pickupAddressController.js';
-import { sellerAuthentication } from '../middlewares/middleware.js';
+import { retailerAuthentication } from '../middlewares/middleware.js';
 
 const router = express.Router();
-// Custom middleware for multiple roles
-const sellerOrRetailerAuth = (req, res, next) => {
-    // Try seller authentication first
-    sellerAuthentication(req, res, (err) => {
-        if (err) {
-            // If seller auth fails, try retailer auth
-            retailerAuthentication(req, res, next);
-        } else {
-            next();
-        }
-    });
-};
-// Apply seller authentication to all routes
-router.use(sellerAuthentication);
+// Apply seller/retailer authentication (retailer auth accepts both roles)
+router.use(retailerAuthentication);
 
 // ✅ Add new pickup address
 router.post('/add', addPickupAddress);

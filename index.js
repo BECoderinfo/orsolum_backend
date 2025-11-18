@@ -21,6 +21,8 @@ import cropRouter from "./routes/cropRouter.js";
 import chatRouter from "./routes/chatRouter.js";
 import deliveryRouter from "./routes/deliveryRouter.js";
 import shiprocketRouter from "./routes/shiprocketRouter.js";
+import adminAgriAdviceRouter from "./routes/adminAgriAdvice.js";
+import agriAdviceUserRouter from "./routes/agriAdviceUser.js";
 import { checkPremiumExpiry } from "./services.js";
 import { isSocketAuthenticated } from "./middlewares/middleware.js";
 import { createChat, getMessages, sendMessage } from "./controllers/chatController.js";
@@ -85,7 +87,9 @@ app.use('/api', [
   reelRouter,
   cropRouter,
   chatRouter,
-  deliveryRouter
+  deliveryRouter,
+  adminAgriAdviceRouter,
+  agriAdviceUserRouter
 ]);
 
 app.use('/api/payment', paymentRouter);

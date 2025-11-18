@@ -395,7 +395,13 @@ export const loginRetailer = async (req, res) => {
 
 export const retailerHomePageData = async (req, res) => {
     try {
-        // Fetch total orders and total earnings
+
+        const userId = new ObjectId(req.user._id);
+
+        // -------------------------------
+        // TOTAL ORDERS + TOTAL EARNINGS
+        // -------------------------------
+
         const ordersData = await Order.aggregate([
             {
                 $lookup: {
@@ -405,36 +411,23 @@ export const retailerHomePageData = async (req, res) => {
                     as: "productDetails"
                 }
             },
-            {
-                $addFields: {
-                    productDetails: {
-                        $ifNull: [
-                            { $arrayElemAt: ["$productDetails", 0] },
-                            null
-                        ]
-                    }
-                }
-            },
+            { $unwind: "$productDetails" }, // important fix
             {
                 $match: {
-                    "productDetails.createdBy": new ObjectId(req.user._id)
+                    "productDetails.createdBy": userId
                 }
             },
             {
                 $facet: {
                     totalOrders: [
-                        {
-                            $count: "count" // Count total orders
-                        }
+                        { $count: "count" }
                     ],
                     totalEarnings: [
-                        {
-                            $match: { status: "Delivered" } // Filter delivered orders
-                        },
+                        { $match: { status: "Delivered" } },
                         {
                             $group: {
                                 _id: null,
-                                totalAmount: { $sum: "$summary.totalAmount" } // Sum delivered earnings
+                                totalAmount: { $sum: "$summary.totalAmount" }
                             }
                         }
                     ]
@@ -445,12 +438,18 @@ export const retailerHomePageData = async (req, res) => {
         const totalOrders = ordersData[0].totalOrders[0]?.count || 0;
         const totalEarnings = ordersData[0].totalEarnings[0]?.totalAmount || 0;
 
-        // Fetch total products
+        // -------------------------------
+        // TOTAL PRODUCTS
+        // -------------------------------
+
         const totalProducts = await Product.countDocuments({
-            createdBy: new ObjectId(req.user._id)
+            createdBy: userId
         });
 
-        // Fetch last 5 pending orders
+        // -------------------------------
+        // LAST 5 PENDING ORDERS
+        // -------------------------------
+
         const last5PendingOrders = await Order.aggregate([
             {
                 $lookup: {
@@ -460,19 +459,10 @@ export const retailerHomePageData = async (req, res) => {
                     as: "productDetails"
                 }
             },
-            {
-                $addFields: {
-                    productDetails: {
-                        $ifNull: [
-                            { $arrayElemAt: ["$productDetails", 0] },
-                            null
-                        ]
-                    }
-                }
-            },
+            { $unwind: "$productDetails" },
             {
                 $match: {
-                    "productDetails.createdBy": new ObjectId(req.user._id),
+                    "productDetails.createdBy": userId,
                     status: "Pending"
                 }
             },
@@ -485,32 +475,25 @@ export const retailerHomePageData = async (req, res) => {
                     status: 1
                 }
             },
-            {
-                $sort: { createdAt: -1 } // Sort by newest first
-            },
-            {
-                $limit: 5 // Limit to 5 orders
-            }
+            { $sort: { createdAt: -1 } },
+            { $limit: 5 }
         ]);
 
-        // Respond with data
         res.status(200).json({
             success: true,
             data: {
                 totalOrders,
                 totalProducts,
                 totalEarnings,
-                last5PendingOrders
+                last5PendingOrders,
             }
         });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
-        return catchError('retailerHomePageData', error, req, res);
+
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
     }
 };
+
 
 export const retailerHomePageDataV2 = async (req, res) => {
     try {

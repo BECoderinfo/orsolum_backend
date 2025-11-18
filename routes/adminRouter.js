@@ -1,6 +1,6 @@
 import express from "express";
 import { body } from 'express-validator';
-import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, listProducts, productDetails, acceptProduct, rejectProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus } from "../controllers/adminController.js";
+import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, productDetails, acceptProduct, rejectProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus } from "../controllers/adminController.js";
 import { adminAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { createWorkHours, getAllWorkHours, updateWorkHours, deleteWorkHours } from "../controllers/workHoursController.js";
 import ShiprocketService from '../helper/shiprocketService.js';
@@ -28,6 +28,7 @@ adminRouter.get('/admin/store/details/:id/v1', adminAuthentication, storeDetails
 adminRouter.post('/admin/accept/store/v1', adminAuthentication, acceptStore);
 adminRouter.post('/admin/reject/store/v1', adminAuthentication, rejectStore);
 adminRouter.post('/admin/create/store/v1', adminAuthentication, createStore);
+adminRouter.delete('/admin/delete/store/:id/v1', adminAuthentication, deleteStore);
 
 // product
 adminRouter.get('/admin/list/product/v1', adminAuthentication, listProducts);

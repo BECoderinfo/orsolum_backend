@@ -9,7 +9,7 @@ import StoreCategory from '../models/StoreCategory.js';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
 import { processGoogleMapsLink } from '../helper/latAndLong.js';
-import ShiprocketService from '../helper/shiprocketService.js';
+import PickupAddress from '../models/PickupAddress.js';
 
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
@@ -82,33 +82,6 @@ export const createStore = async (req, res) => {
     });
 
     const savedStore = await store.save();
-
-    // Create Shiprocket Pickup (optional)
-    try {
-      const pickupPayload = {
-        pickup_location: `${savedStore.name.replace(/\s+/g, "_")}_${Date.now()}`,
-        name: savedStore.name,
-        email: savedStore.email || "noreply@orsolum.com",
-        phone: savedStore.phone,
-        address: savedStore.address,
-        city: "Delhi",
-        state: "Delhi",
-        country: "India",
-        pin_code: "110001",
-      };
-
-      const shipResponse = await ShiprocketService.createPickupAddress(pickupPayload);
-
-      if (shipResponse?.pickup_location || shipResponse?.data?.pickup_location) {
-        savedStore.shiprocket = {
-          pickup_address_id: shipResponse?.pickup_location || shipResponse?.data?.pickup_location,
-          pickup_location: pickupPayload,
-        };
-        await savedStore.save();
-      }
-    } catch (err) {
-      console.warn("⚠️ Shiprocket Pickup Address Creation Failed:", err.message);
-    }
 
     res.status(status.Create).json({
       status: jsonStatus.Create,
@@ -288,10 +261,40 @@ export const storeDetails = async (req, res) => {
         },
       ]);
   
+      const enrichedStores = await Promise.all(
+        storeDetails.map(async (storeDoc) => {
+          const shiprocketInfo = storeDoc.shiprocket || {};
+          const pickupIds = shiprocketInfo.pickup_addresses || [];
+
+          let pickupAddresses = [];
+          if (pickupIds.length) {
+            pickupAddresses = await PickupAddress.find({ _id: { $in: pickupIds } })
+              .select("-__v")
+              .lean();
+          }
+
+          const defaultPickupId = shiprocketInfo.default_pickup_address?.toString() || null;
+          const defaultPickup = defaultPickupId
+            ? pickupAddresses.find((addr) => addr._id.toString() === defaultPickupId)
+            : null;
+
+          return {
+            ...storeDoc,
+            shiprocket: {
+              ...shiprocketInfo,
+              pickup_addresses_ids: pickupIds,
+              pickup_addresses_data: pickupAddresses,
+              default_pickup_address_id: defaultPickupId,
+              default_pickup_address_data: defaultPickup || null,
+            },
+          };
+        })
+      );
+
       return res.status(status.OK).json({
         success: true,
         message: "Store details fetched successfully",
-        data: storeDetails,
+        data: enrichedStores,
       });
     } catch (error) {
       console.error("Error in storeDetails:", error);

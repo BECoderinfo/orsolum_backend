@@ -275,7 +275,7 @@ export const sellerAuthentication = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     console.log('Decoded token:', decoded);
 
-    // Only allow seller users
+    // Allow seller or retailer users (for shared pickup APIs)
     const user = await User.findById(decoded._id);
     if (!user) {
       console.error('User not found with ID:', decoded._id);
@@ -292,11 +292,11 @@ export const sellerAuthentication = async (req, res, next) => {
       deleted: user.deleted
     });
 
-    if (user.role !== "seller") {
-      console.error('User role is not seller:', user.role);
+    if (user.role !== "seller" && user.role !== "retailer") {
+      console.error('User role is not seller/retailer:', user.role);
       return res.status(403).json({ 
         success: false, 
-        message: `Access denied. User role is '${user.role}', but 'seller' is required.` 
+        message: `Access denied. User role is '${user.role}', but 'seller' or 'retailer' is required.` 
       });
     }
 

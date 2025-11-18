@@ -13,6 +13,10 @@ import Payment from '../models/Payment.js';
 import OnlineOrder from '../models/OnlineStore/OnlineOrder.js';
 import Return from '../models/Return.js';
 import Refund from '../models/Refund.js';
+import StoreOffer from '../models/StoreOffer.js';
+import StorePopularProduct from '../models/StorePopularProduct.js';
+import Cart from '../models/Cart.js';
+import PickupAddress from '../models/PickupAddress.js';
 import bcrypt from 'bcrypt';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
@@ -283,7 +287,35 @@ export const storeDetails = async (req, res) => {
             }
         ]);
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: details[0] });
+        if (!details.length) {
+            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store details not found" });
+        }
+
+        const storeDetails = details[0];
+        const shiprocketInfo = storeDetails.shiprocket || {};
+        const pickupIds = shiprocketInfo.pickup_addresses || [];
+
+        let pickupAddresses = [];
+        if (pickupIds.length) {
+            pickupAddresses = await PickupAddress.find({ _id: { $in: pickupIds } })
+                .select("-__v")
+                .lean();
+        }
+
+        const defaultPickupId = shiprocketInfo.default_pickup_address?.toString() || null;
+        const defaultPickup = defaultPickupId
+            ? pickupAddresses.find((addr) => addr._id.toString() === defaultPickupId)
+            : null;
+
+        storeDetails.shiprocket = {
+            ...shiprocketInfo,
+            pickup_addresses_ids: pickupIds,
+            pickup_addresses_data: pickupAddresses,
+            default_pickup_address_id: defaultPickupId,
+            default_pickup_address_data: defaultPickup || null
+        };
+
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: storeDetails });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('storeDetails', error, req, res);
@@ -328,7 +360,7 @@ export const rejectStore = async (req, res) => {
 
 export const createStore = async (req, res) => {
     try {
-        const { name, category, information, phone, address, email, directMe, city, state, pincode } = req.body;
+        const { name, category, information, phone, address, email, directMe } = req.body;
 
         if (!name || !category || !information || !phone || !address || !email) {
             return res.status(400).json({ success: false, message: "All store details are required" });
@@ -356,32 +388,6 @@ export const createStore = async (req, res) => {
             status: "A" // Auto-approve admin-created stores
         });
 
-        // Shiprocket Pickup Creation
-        const pickupPayload = {
-            pickup_location: name.replace(/\s+/g, "_").toLowerCase(),
-            name,
-            email,
-            phone,
-            address,
-            city: city || "Delhi",
-            state: state || "Delhi",
-            country: "India",
-            pin_code: pincode || "110001",
-        };
-
-        try {
-            const shipResponse = await ShiprocketService.createPickupAddress(pickupPayload);
-            if (shipResponse?.pickup_location || shipResponse?.id) {
-                newStore.shiprocket = {
-                    pickup_address_id: shipResponse.pickup_location || shipResponse.id,
-                    pickup_location: pickupPayload,
-                };
-                await newStore.save();
-            }
-        } catch (err) {
-            console.warn("⚠️ Shiprocket pickup creation failed:", err.message);
-        }
-
         return res.status(201).json({
             success: true,
             message: "Store created successfully with Shiprocket pickup",
@@ -390,6 +396,83 @@ export const createStore = async (req, res) => {
     } catch (error) {
         console.error("❌ Error creating store:", error.message);
         return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const deleteStore = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Please provide a valid store id",
+            });
+        }
+
+        const store = await Store.findById(id);
+        if (!store) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Store not found",
+            });
+        }
+
+        const pickupAddresses = await PickupAddress.find({ storeId: id }).lean();
+
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        try {
+            await Promise.all([
+                Product.deleteMany({ storeId: id }).session(session),
+                StoreOffer.deleteMany({ storeId: id }).session(session),
+                StorePopularProduct.deleteMany({ storeId: id }).session(session),
+                Cart.deleteMany({ storeId: id }).session(session),
+                PickupAddress.deleteMany({ storeId: id }).session(session),
+                Store.deleteOne({ _id: id }).session(session),
+            ]);
+
+            await session.commitTransaction();
+        } catch (err) {
+            await session.abortTransaction();
+            throw err;
+        } finally {
+            session.endSession();
+        }
+
+        const pickupIdsToDelete = new Set();
+        if (store.shiprocket?.pickup_address_id) {
+            pickupIdsToDelete.add(store.shiprocket.pickup_address_id);
+        }
+
+        pickupAddresses.forEach((address) => {
+            if (address?.shiprocket?.pickup_address_id) {
+                pickupIdsToDelete.add(address.shiprocket.pickup_address_id);
+            }
+        });
+
+        for (const pickupId of pickupIdsToDelete) {
+            try {
+                await ShiprocketService.deletePickupAddress(pickupId);
+            } catch (shipError) {
+                console.warn(`⚠️ Failed to delete Shiprocket pickup ${pickupId}:`, shipError.message);
+            }
+        }
+
+        return res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Store deleted successfully",
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message,
+        });
+        return catchError("deleteStore", error, req, res);
     }
 };
 
