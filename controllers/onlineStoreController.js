@@ -1695,15 +1695,39 @@ export const cancelOnlineOrder = async (req, res) => {
         message: "Order not found with this ID",
       });
     }
+
+    // Check if order is already cancelled
+    if (order.status === "Cancelled") {
+      return res.status(400).json({
+        status: 400,
+        success: false,
+        message: "Order is already cancelled",
+      });
+    }
+
+    // Check if order is already delivered (may need refund processing)
+    if (order.status === "Delivered") {
+      // Allow cancellation of delivered orders but may need special handling
+      // For now, we'll proceed with cancellation
+    }
   
     // 2️⃣ Get payment details (handle legacy field paymentResonse + new paymentResponse)
     const payment = await Payment.findOne({ onlineOrderId: order._id });
 
-    const cfOrderId =
-      payment?.paymentResponse?.order?.order_id ||
-      payment?.paymentResonse?.order?.order_id ||
-      payment?.cfoOrder_id ||
-      order?.cf_order_id;
+    // Safely extract cfOrderId with proper null checks
+    let cfOrderId = null;
+    if (payment) {
+      cfOrderId = 
+        payment.paymentResponse?.order?.order_id ||
+        payment.paymentResonse?.order?.order_id ||
+        payment.cfoOrder_id ||
+        null;
+    }
+    
+    // Fallback to order's cf_order_id if payment doesn't have it
+    if (!cfOrderId) {
+      cfOrderId = order?.cf_order_id || null;
+    }
 
     if (!payment || !cfOrderId) {
       // No payment captured yet -> cancel order without refund flow
@@ -1764,18 +1788,24 @@ export const cancelOnlineOrder = async (req, res) => {
       refundId,
     });
 
-    // 7️⃣ Deduct coins
-    await User.findByIdAndUpdate(req.user._id, {
-      coins: req.user.coins - order.summary.grandTotal,
-    });
+    // 7️⃣ Refund coins if they were used in the order
+    const coinUsed = order.summary?.coinUsed || 0;
+    if (coinUsed > 0) {
+      const user = await User.findById(req.user._id);
+      if (user) {
+        await User.findByIdAndUpdate(req.user._id, {
+          $inc: { coins: coinUsed }, // Add coins back to user
+        });
 
-    // 8️⃣ Save coin history
-    await CoinHistory.create({
-      createdBy: req.user._id,
-      coins: order.summary.grandTotal,
-      orderId: order._id,
-      type: "Deducted",
-    });
+        // Save coin history for refund
+        await CoinHistory.create({
+          createdBy: req.user._id,
+          coins: coinUsed,
+          orderId: order._id,
+          type: "Refunded", // Changed from "Deducted" to "Refunded"
+        });
+      }
+    }
 
     res.status(200).json({
       status: 200,
