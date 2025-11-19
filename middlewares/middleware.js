@@ -30,6 +30,21 @@ export const userAuthentication = async (req, res, next) => {
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (jwtError) {
+      // Provide specific error messages for token issues
+      if (jwtError.name === 'TokenExpiredError') {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Token expired",
+        });
+      }
+      if (jwtError.name === 'JsonWebTokenError') {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Invalid token",
+        });
+      }
       return res.status(status.Unauthorized).json({
         status: jsonStatus.Unauthorized,
         success: false,
@@ -84,6 +99,21 @@ export const retailerAuthentication = async (req, res, next) => {
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (jwtError) {
+      // Provide specific error messages for token issues
+      if (jwtError.name === 'TokenExpiredError') {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Token expired",
+        });
+      }
+      if (jwtError.name === 'JsonWebTokenError') {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Invalid token",
+        });
+      }
       return res.status(status.Unauthorized).json({
         status: jsonStatus.Unauthorized,
         success: false,
@@ -144,6 +174,21 @@ export const adminAuthentication = async (req, res, next) => {
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (jwtError) {
+      // Provide specific error messages for token issues
+      if (jwtError.name === 'TokenExpiredError') {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Token expired",
+        });
+      }
+      if (jwtError.name === 'JsonWebTokenError') {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Invalid token",
+        });
+      }
       return res.status(status.Unauthorized).json({
         status: jsonStatus.Unauthorized,
         success: false,
@@ -192,6 +237,21 @@ export const deliveryBoyAuthentication = async (req, res, next) => {
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (err) {
+      // Provide specific error messages for token issues
+      if (err.name === 'TokenExpiredError') {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Token expired",
+        });
+      }
+      if (err.name === 'JsonWebTokenError') {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Invalid token",
+        });
+      }
       return res.status(status.Unauthorized).json({
         status: jsonStatus.Unauthorized,
         success: false,

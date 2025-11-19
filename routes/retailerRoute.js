@@ -8,8 +8,13 @@ const retailerRouter = express.Router();
 retailerRouter.post('/is/exist/v1', isExist);
 retailerRouter.post('/retailer/register/otp/v1', sendRegisterOtp);
 retailerRouter.post('/retailer/login/otp/v1', sendLoginOtp);
-retailerRouter.post('/register/retailer/v1', registerRetailer);
-retailerRouter.post('/login/retailer/v1', loginRetailer);
+retailerRouter.post('/retailer/register/v1', registerRetailer);
+retailerRouter.post('/retailer/login/v1', loginRetailer);
+
+// Debug route to test if router is working
+retailerRouter.get('/retailer/test/v1', (req, res) => {
+  res.json({ success: true, message: 'Retailer router is working!' });
+});
 
 // profile
 retailerRouter.get('/retailer/my/profile/v1', retailerAuthentication, getRetailerProfile);

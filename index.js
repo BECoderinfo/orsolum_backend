@@ -76,21 +76,20 @@ cron.schedule("1 0 * * *", () => {
 });
 
 // ✅ Register Routes
-app.use('/api', [
-  userRouter,
-  retailerRoute,
-  storeRouter,
-  adminRouter,
-  productRouter,
-  orderRouter,
-  onlineStoreRouter,
-  reelRouter,
-  cropRouter,
-  chatRouter,
-  deliveryRouter,
-  adminAgriAdviceRouter,
-  agriAdviceUserRouter
-]);
+app.use('/api', userRouter);
+app.use('/api', retailerRoute);
+console.log('✅ Retailer routes mounted at /api');
+app.use('/api', storeRouter);
+app.use('/api', adminRouter);
+app.use('/api', productRouter);
+app.use('/api', orderRouter);
+app.use('/api', onlineStoreRouter);
+app.use('/api', reelRouter);
+app.use('/api', cropRouter);
+app.use('/api', chatRouter);
+app.use('/api', deliveryRouter);
+app.use('/api', adminAgriAdviceRouter);
+app.use('/api', agriAdviceUserRouter);
 
 app.use('/api/payment', paymentRouter);
 app.use('/api/shiprocket', shiprocketRouter);

@@ -55,7 +55,7 @@ retailerRouter.get(
     storeDetails
 );
 retailerRouter.put(
-    "/delete/store/image/v1",
+    "/retailer/delete/store/image/v1",
     retailerAuthentication,
     deleteStoreImage
 );

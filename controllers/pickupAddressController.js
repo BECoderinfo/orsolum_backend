@@ -4,6 +4,7 @@ import Store from '../models/Store.js';
 import { apiResponse } from '../helper/api.responses.js';
 import ShiprocketService from "../helper/shiprocketService.js";
 import ShiprocketClient from "../helper/shiprocketClient.js";
+import mongoose from 'mongoose';
 
 // ✅ Add new pickup address
 export const addPickupAddress = async (req, res) => {
@@ -254,16 +255,29 @@ export const updatePickupAddress = async (req, res) => {
 export const deletePickupAddress = async (req, res) => {
     try {
         const { pickupAddressId } = req.params;
+        const normalizedId = pickupAddressId?.toString().trim();
+        let pickupAddress = null;
 
-        const pickupAddress = await PickupAddress.findById(pickupAddressId);
+        if (normalizedId && mongoose.Types.ObjectId.isValid(normalizedId)) {
+            pickupAddress = await PickupAddress.findById(normalizedId);
+        }
+
+        if (!pickupAddress && normalizedId) {
+            pickupAddress = await PickupAddress.findOne({
+                'shiprocket.pickup_address_id': normalizedId
+            });
+        }
+
         if (!pickupAddress) {
             return res.status(404).json(apiResponse(false, 'Pickup address not found'));
         }
 
+        const mongoPickupId = pickupAddress._id;
+
         // Remove from store
         await Store.findByIdAndUpdate(
             pickupAddress.storeId,
-            { $pull: { 'shiprocket.pickup_addresses': pickupAddressId } }
+            { $pull: { 'shiprocket.pickup_addresses': mongoPickupId } }
         );
 
         // If this was default, set another as default
@@ -271,7 +285,7 @@ export const deletePickupAddress = async (req, res) => {
             const store = await Store.findById(pickupAddress.storeId);
             const remainingAddresses = await PickupAddress.find({ 
                 storeId: pickupAddress.storeId, 
-                _id: { $ne: pickupAddressId } 
+                _id: { $ne: mongoPickupId } 
             });
             
             if (remainingAddresses.length > 0) {
@@ -284,7 +298,7 @@ export const deletePickupAddress = async (req, res) => {
             }
         }
 
-        await PickupAddress.findByIdAndDelete(pickupAddressId);
+        await PickupAddress.findByIdAndDelete(mongoPickupId);
 
         return res.json(apiResponse(true, 'Pickup address deleted successfully'));
 

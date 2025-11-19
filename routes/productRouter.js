@@ -17,7 +17,7 @@ productRouter.put('/retailer/edit/product/:id/v1', retailerAuthentication, uploa
 productRouter.delete('/retailer/delete/product/:id/v1', retailerAuthentication, deleteProduct);
 productRouter.get('/retailer/product/list/v1', retailerAuthentication, productList);
 productRouter.get('/retailer/product/details/:id/v1', retailerAuthentication, productDetails);
-productRouter.put('/delete/product/image/:id/v1', retailerAuthentication, deleteProductImage);
+productRouter.put('/retailer/delete/product/image/:id/v1', retailerAuthentication, deleteProductImage);
 
 // user
 productRouter.get('/user/local/store/home/page/v1', userAuthentication, getLocalStoreHomePageData); // not in used
