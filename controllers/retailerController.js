@@ -128,26 +128,26 @@ export const updateRetailerProfile = async (req, res) => {
 // Change phone - OTP flow
 export const sendChangePhoneOtp = async (req, res) => {
     try {
-        const { newPhone } = req.body;
-        if (!newPhone) {
+        const { phone } = req.body;
+        if (!phone) {
             return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Please enter phone number" });
         }
 
-        const existWithPhone = await User.findOne({ phone: newPhone });
+        const existWithPhone = await User.findOne({ phone: phone });
         if (existWithPhone) {
             return res.status(status.ResourceExist).json({ status: jsonStatus.ResourceExist, success: false, message: "Phone number already in use" });
         }
 
-        await OtpModel.deleteMany({ phone: newPhone });
+        await OtpModel.deleteMany({ phone: phone });
 
         const otp = OTP_GENERATOR.generate(6, { upperCaseAlphabets: false, specialChars: false, lowerCaseAlphabets: false, digits: true });
-        await sendSms(newPhone.replace('+', ''), { var1: req.user.name || 'User', var2: otp });
+        await sendSms(phone.replace('+', ''), { var1: req.user.name || 'User', var2: otp });
         const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
 
-        const otpRecord = new OtpModel({ phone: newPhone, otp, expiresAt: otpExpires });
+        const otpRecord = new OtpModel({ phone: phone, otp, expiresAt: otpExpires });
         await otpRecord.save();
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: `OTP has been sent to ${newPhone}` });
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: `OTP has been sent to ${phone}` });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('sendChangePhoneOtp', error, req, res);
@@ -156,9 +156,9 @@ export const sendChangePhoneOtp = async (req, res) => {
 
 export const verifyChangePhoneOtp = async (req, res) => {
     try {
-        const { newPhone, otp } = req.body;
+        const { phone, otp } = req.body;
 
-        if (!newPhone || !otp) {
+        if (!phone || !otp) {
             return res.status(status.BadRequest).json({
                 status: jsonStatus.BadRequest,
                 success: false,
@@ -167,7 +167,7 @@ export const verifyChangePhoneOtp = async (req, res) => {
         }
 
         const otpRecord = await OtpModel.findOne({
-            phone: newPhone,
+            phone: phone,
             otp,
             expiresAt: { $gt: Date.now() }
         });
@@ -181,7 +181,7 @@ export const verifyChangePhoneOtp = async (req, res) => {
         }
 
         // Check if someone else already uses that phone
-        const existingUser = await User.findOne({ phone: newPhone });
+        const existingUser = await User.findOne({ phone: phone });
         if (existingUser) {
             return res.status(status.ResourceExist).json({
                 status: jsonStatus.ResourceExist,
@@ -193,7 +193,7 @@ export const verifyChangePhoneOtp = async (req, res) => {
         // ✅ Update user’s phone
         const updatedUser = await User.findByIdAndUpdate(
             req.user._id,
-            { phone: newPhone },
+            { phone: phone },
             { new: true }
         ).select('-password');
 

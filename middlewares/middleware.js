@@ -5,19 +5,38 @@ import User from "../models/User.js";
 import Admin from "../models/Admin.js";
 import DeliveryBoy from "../models/DeliveryBoy.js";
 
+/**
+ * Safely extract token from multiple possible locations.
+ * Primary preference is Authorization header (Bearer token),
+ * but some clients (older mobile apps) can't set headers, so we
+ * gracefully fallback to body, query or `x-access-token`.
+ */
+const extractToken = (req) => {
+  let token = req.header("Authorization") || req.header("authorization") || "";
+
+  if (token && token.startsWith("Bearer ")) {
+    token = token.split(" ")[1];
+  }
+
+  if (!token) {
+    token =
+      req.body?.token ||
+      req.query?.token ||
+      req.headers["x-access-token"] ||
+      "";
+  }
+
+  if (token && token.startsWith("Bearer ")) {
+    token = token.split(" ")[1];
+  }
+
+  return token?.trim();
+};
+
 /* -------------------------- USER AUTHENTICATION -------------------------- */
 export const userAuthentication = async (req, res, next) => {
   try {
-    const authHeader = req.header("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(status.Unauthorized).json({
-        status: jsonStatus.Unauthorized,
-        success: false,
-        message: "No Token. Authorization Denied",
-      });
-    }
-
-    const token = authHeader.split(" ")[1];
+    const token = extractToken(req);
     if (!token) {
       return res.status(status.Unauthorized).json({
         status: jsonStatus.Unauthorized,
@@ -77,16 +96,7 @@ export const userAuthentication = async (req, res, next) => {
 /* ------------------------- RETAILER AUTHENTICATION ------------------------ */
 export const retailerAuthentication = async (req, res, next) => {
   try {
-    const authHeader = req.header("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(status.Unauthorized).json({
-        status: jsonStatus.Unauthorized,
-        success: false,
-        message: "No Token. Authorization Denied",
-      });
-    }
-
-    const token = authHeader.split(" ")[1];
+    const token = extractToken(req);
     if (!token) {
       return res.status(status.Unauthorized).json({
         status: jsonStatus.Unauthorized,
@@ -152,16 +162,7 @@ export const retailerAuthentication = async (req, res, next) => {
 /* --------------------------- ADMIN AUTHENTICATION ------------------------- */
 export const adminAuthentication = async (req, res, next) => {
   try {
-    const authHeader = req.header("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(status.Unauthorized).json({
-        status: jsonStatus.Unauthorized,
-        success: false,
-        message: "No Token. Authorization Denied",
-      });
-    }
-
-    const token = authHeader.split(" ")[1];
+    const token = extractToken(req);
     if (!token) {
       return res.status(status.Unauthorized).json({
         status: jsonStatus.Unauthorized,
@@ -215,16 +216,7 @@ export const adminAuthentication = async (req, res, next) => {
 /* ------------------------- DELIVERY BOY AUTHENTICATION -------------------- */
 export const deliveryBoyAuthentication = async (req, res, next) => {
   try {
-    const authHeader = req.header("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(status.Unauthorized).json({
-        status: jsonStatus.Unauthorized,
-        success: false,
-        message: "Authorization header missing or invalid format",
-      });
-    }
-
-    const token = authHeader.split(" ")[1];
+    const token = extractToken(req);
     if (!token) {
       return res.status(status.Unauthorized).json({
         status: jsonStatus.Unauthorized,
@@ -314,23 +306,15 @@ export const isSocketAuthenticated = async (socket, next) => {
 
 export const sellerAuthentication = async (req, res, next) => {
   try {
-    let token = req.headers.authorization;
-    
-    // Debug logging
-    console.log('Authorization header:', token);
-    
-    // Handle both "Bearer <token>" and direct token formats
-    if (token && token.startsWith("Bearer ")) {
-      token = token.split(" ")[1];
-    } else if (!token) {
-      console.error('No authorization token provided');
-      return res.status(401).json({ 
-        success: false, 
-        message: "Unauthorized: No token provided" 
+    let token = extractToken(req);
+    if (!token) {
+      console.error("No authorization token provided");
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: No token provided",
       });
     }
 
-    console.log('Extracted token:', token.substring(0, 20) + '...');
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     console.log('Decoded token:', decoded);
