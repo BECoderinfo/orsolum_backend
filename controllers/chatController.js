@@ -547,7 +547,14 @@ const isImageUrl = (message) => {
 
 // Helper function to build smart auto-reply message based on content
 const buildAutoReplyMessage = (userMessage = "", messageType = "text") => {
-    const message = (userMessage || "").trim().toLowerCase();
+    const rawMessage = (userMessage || "").trim();
+    const message = rawMessage.toLowerCase();
+
+    // Quick acknowledgement for short confirmations
+    const acknowledgementKeywords = ['ok', 'okay', 'thanks', 'thank you', 'noted', 'done', 'wait', 'update', 'please update', 'sure'];
+    if (acknowledgementKeywords.some((keyword) => message.includes(keyword))) {
+        return "Thank you for the update! Our agri doctor is working on your case. We will notify you as soon as the analysis and recommendations are ready. Meanwhile, feel free to share more details or images if available.";
+    }
     
     // If message type is image or message is an image URL
     if (messageType === "image" || isImageUrl(userMessage)) {
@@ -583,7 +590,7 @@ const buildAutoReplyMessage = (userMessage = "", messageType = "text") => {
         },
         // Harvest related
         harvest: {
-            keywords: ['harvest', 'harvesting', 'ripe', 'mature', 'ready', 'कटाई', 'फसल'],
+            keywords: ['harvest', 'harvesting', 'ripe', 'mature', 'कटाई', 'फसल'],
             reply: "For harvesting:\n1. **Timing**: Harvest at right maturity stage - too early or late affects quality\n2. **Morning Harvest**: Best time is early morning when temperature is cool\n3. **Signs of Readiness**: Check color, size, and firmness based on crop type\n4. **Tools**: Use clean, sharp tools to avoid damage\n5. **Storage**: Store in cool, dry place immediately after harvest\n\nWhich crop are you harvesting? Share crop name for specific harvesting guidelines."
         },
         // Soil related
@@ -607,7 +614,7 @@ const buildAutoReplyMessage = (userMessage = "", messageType = "text") => {
     }
     
     // Default reply for general questions
-    return `Thank you for your question! Our agri expert is analyzing your query: "${userMessage.trim()}". 
+    return `Thank you for your question! Our agri expert is analyzing your query: "${rawMessage}".
 
 For better assistance, please:
 1. Share clear images of your crop/soil
