@@ -552,30 +552,52 @@ export const sendAgricultureAdviceMessage = async (req, res) => {
         const { message, chatId, messageType, autoReply = true } = req.body;
         const userId = req.user._id;
 
-        if (!message || !chatId) {
+        if (!message) {
             return res.status(status.BadRequest).json({
                 status: jsonStatus.BadRequest,
                 success: false,
-                message: "Message and chatId are required"
+                message: "Message is required"
             });
         }
 
-        // Verify chat exists, belongs to user, and is agriculture_advice type
-        const chat = await Chat.findOne({ 
-            _id: chatId, 
-            user: userId, 
-            chatType: 'agriculture_advice' 
-        });
-        
+        let chat = null;
+
+        // If chatId is provided, try to find it (only if it belongs to this user and is agriculture_advice type)
+        if (chatId) {
+            chat = await Chat.findOne({ 
+                _id: chatId, 
+                user: userId, 
+                chatType: 'agriculture_advice' 
+            });
+
+            // If provided chatId doesn't match, ignore it and find/create user's own chat
+            // (Don't return error - just use the correct chat)
+            if (!chat) {
+                console.log(`ChatId ${chatId} not found or doesn't belong to user. Finding or creating user's agriculture_advice chat.`);
+            }
+        }
+
+        // If chat not found, try to find existing agriculture_advice chat for this user
         if (!chat) {
-            return res.status(status.NotFound).json({
-                status: jsonStatus.NotFound,
-                success: false,
-                message: "Agriculture advice chat not found"
+            chat = await Chat.findOne({ 
+                user: userId, 
+                chatType: 'agriculture_advice' 
             });
         }
 
-        const adminId = "672358eb4ef46ad834446c8e";
+        // If still no chat found, create a new one
+        if (!chat) {
+            const adminId = "672358eb4ef46ad834446c8e";
+            chat = new Chat({
+                user: userId,
+                admin: adminId,
+                chatType: 'agriculture_advice'
+            });
+            await chat.save();
+        }
+
+        const chatIdToUse = chat._id;
+        const adminId = chat.admin || "672358eb4ef46ad834446c8e";
 
         // Create user message
         const newMessage = new Message({
@@ -583,7 +605,7 @@ export const sendAgricultureAdviceMessage = async (req, res) => {
             senderAdmin: adminId,
             senderType: "user",
             message,
-            chat: chatId,
+            chat: chatIdToUse,
             messageType: messageType || "text"
         });
 
@@ -596,7 +618,7 @@ export const sendAgricultureAdviceMessage = async (req, res) => {
             try {
                 const autoReplyText = buildAutoReplyMessage(message);
                 const adminReplyResult = await sendAdminChatReply({
-                    chatId,
+                    chatId: chatIdToUse,
                     message: autoReplyText,
                     type: "text"
                 });
@@ -611,6 +633,7 @@ export const sendAgricultureAdviceMessage = async (req, res) => {
             status: jsonStatus.Create,
             success: true,
             data: newMessage,
+            chatId: chatIdToUse,
             adminReply: adminReplyMessage
         });
     } catch (error) {
