@@ -6,6 +6,7 @@ import Message from '../models/Message.js';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
 import { sendAdminChatReply } from './agriAdviceAdminReply.js';
+import { generateAgriAdviceAiReply } from '../helper/agriAdviceAi.js';
 
 const { ObjectId } = mongoose.Types;
 
@@ -725,15 +726,32 @@ export const sendAgricultureAdviceMessage = async (req, res) => {
         await newMessage.save();
         await newMessage.populate("chat");
 
-        // Auto-reply from admin
+        // Auto-reply from admin (AI + fallback)
         let adminReplyMessage = null;
         if (autoReply) {
             try {
-                const autoReplyText = buildAutoReplyMessage(message, messageType || "text");
+                let aiReplyText = null;
+                if (process.env.OPENAI_API_KEY) {
+                    const recentMessages = await Message.find({ chat: chatIdToUse })
+                        .sort({ createdAt: -1 })
+                        .limit(8)
+                        .select("message messageType senderType")
+                        .lean();
+
+                    aiReplyText = await generateAgriAdviceAiReply({
+                        userMessage: message,
+                        messageType: messageType || "text",
+                        history: recentMessages,
+                    });
+                }
+
+                const autoReplyText =
+                    aiReplyText || buildAutoReplyMessage(message, messageType || "text");
+
                 const adminReplyResult = await sendAdminChatReply({
                     chatId: chatIdToUse,
                     message: autoReplyText,
-                    type: "text"
+                    type: "text",
                 });
                 adminReplyMessage = adminReplyResult.data?.data || null;
             } catch (adminErr) {
