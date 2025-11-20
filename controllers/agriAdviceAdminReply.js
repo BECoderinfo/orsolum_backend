@@ -1,32 +1,58 @@
-import axios from "axios";
+import Chat from "../models/Chat.js";
+import Message from "../models/Message.js";
+import { jsonStatus, status } from "../helper/api.responses.js";
 
-const BASE_URL = process.env.ORSOLUM_BASE_URL || "http://localhost:5000/api";
-const ADMIN_TOKEN = process.env.ORSOLUM_ADMIN_JWT; // admin JWT यहाँ रखें
+const DEFAULT_ADMIN_ID = process.env.ORSOLUM_AGRI_ADVICE_ADMIN_ID;
+
+const buildAdminSuccessResponse = (messageDoc) => ({
+  status: status.Create,
+  data: {
+    status: jsonStatus.Create,
+    success: true,
+    data: messageDoc,
+  },
+});
 
 export const sendAdminChatReply = async ({
   chatId,
   message,
   type = "text",
+  adminIdOverride,
 }) => {
-  if (!ADMIN_TOKEN) {
-    throw new Error("Admin token not configured (ORSOLUM_ADMIN_JWT missing)");
+  if (!chatId || !message) {
+    throw new Error("chatId and message are required");
   }
-  const response = await axios.post(
-    `${BASE_URL}/agriculture-advice/send/message/v1`,
-    {
-      chatId,
-      message,
-      messageType: type, // text | image
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${ADMIN_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-    }
-  );
 
-  return { status: response.status, data: response.data };
+  const chat = await Chat.findById(chatId);
+  if (!chat) {
+    const error = new Error("Chat not found");
+    error.statusCode = status.NotFound;
+    throw error;
+  }
+
+  if (chat.chatType !== "agriculture_advice") {
+    const error = new Error("Chat is not an agriculture advice conversation");
+    error.statusCode = status.BadRequest;
+    throw error;
+  }
+
+  const senderAdminId = adminIdOverride || chat.admin || DEFAULT_ADMIN_ID;
+  if (!senderAdminId) {
+    const error = new Error("Unable to resolve admin for agriculture advice chat");
+    error.statusCode = status.InternalServerError;
+    throw error;
+  }
+
+  const replyMessage = await Message.create({
+    senderUser: chat.user,
+    senderAdmin: senderAdminId,
+    senderType: "admin",
+    message,
+    chat: chatId,
+    messageType: type,
+  });
+
+  return buildAdminSuccessResponse(replyMessage);
 };
 
 export const replyToUser = async (req, res) => {
@@ -34,17 +60,24 @@ export const replyToUser = async (req, res) => {
     const { chatId, message, type = "text" } = req.body;
     if (!chatId || !message) {
       return res
-        .status(400)
+        .status(status.BadRequest)
         .json({ error: "chatId and message are required" });
     }
 
-    const { status, data } = await sendAdminChatReply({ chatId, message, type });
+    const { status: statusCode, data } = await sendAdminChatReply({
+      chatId,
+      message,
+      type,
+      adminIdOverride: req.user?._id,
+    });
 
-    return res.status(status).json(data);
+    return res.status(statusCode).json(data);
   } catch (err) {
-    console.error("Admin reply failed:", err.response?.data || err.message);
-    return res
-      .status(err.response?.status || 500)
-      .json(err.response?.data || { error: "Failed to send admin reply" });
+    console.error("Admin reply failed:", err.message || err);
+    const errorStatus =
+      err.statusCode || err.response?.status || status.InternalServerError;
+    const errorPayload =
+      err.response?.data || { error: err.message || "Failed to send admin reply" };
+    return res.status(errorStatus).json(errorPayload);
   }
 };

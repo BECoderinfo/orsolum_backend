@@ -5,6 +5,7 @@ import Chat from '../models/Chat.js';
 import Message from '../models/Message.js';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
+import { sendAdminChatReply } from './agriAdviceAdminReply.js';
 
 const { ObjectId } = mongoose.Types;
 
@@ -536,10 +537,19 @@ export const getUserAgricultureAdviceChat = async (req, res) => {
     }
 };
 
+// Helper function to build auto-reply message
+const buildAutoReplyMessage = (userMessage = "") => {
+    const message = userMessage.trim();
+    if (message.length > 0) {
+        return `Thanks for your message about "${message}". Please upload crop & soil images so our agri doctor can review quickly.`;
+    }
+    return "Thanks for your message. Please upload crop & soil images so our agri doctor can review quickly.";
+};
+
 // REST API: Send message in agriculture advice chat
 export const sendAgricultureAdviceMessage = async (req, res) => {
     try {
-        const { message, chatId, messageType } = req.body;
+        const { message, chatId, messageType, autoReply = true } = req.body;
         const userId = req.user._id;
 
         if (!message || !chatId) {
@@ -567,7 +577,7 @@ export const sendAgricultureAdviceMessage = async (req, res) => {
 
         const adminId = "672358eb4ef46ad834446c8e";
 
-        // Create message
+        // Create user message
         const newMessage = new Message({
             senderUser: userId,
             senderAdmin: adminId,
@@ -580,10 +590,28 @@ export const sendAgricultureAdviceMessage = async (req, res) => {
         await newMessage.save();
         await newMessage.populate("chat");
 
+        // Auto-reply from admin
+        let adminReplyMessage = null;
+        if (autoReply) {
+            try {
+                const autoReplyText = buildAutoReplyMessage(message);
+                const adminReplyResult = await sendAdminChatReply({
+                    chatId,
+                    message: autoReplyText,
+                    type: "text"
+                });
+                adminReplyMessage = adminReplyResult.data?.data || null;
+            } catch (adminErr) {
+                console.error("Auto admin reply failed:", adminErr.message || adminErr);
+                // Don't fail the request if auto-reply fails, just log it
+            }
+        }
+
         res.status(status.Create).json({
             status: jsonStatus.Create,
             success: true,
-            data: newMessage
+            data: newMessage,
+            adminReply: adminReplyMessage
         });
     } catch (error) {
         res.status(status.InternalServerError).json({
