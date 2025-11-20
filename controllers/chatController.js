@@ -537,19 +537,100 @@ export const getUserAgricultureAdviceChat = async (req, res) => {
     }
 };
 
-// Helper function to build auto-reply message
-const buildAutoReplyMessage = (userMessage = "") => {
-    const message = userMessage.trim();
-    if (message.length > 0) {
-        return `Thanks for your message about "${message}". Please upload crop & soil images so our agri doctor can review quickly.`;
+// Helper function to detect if message is an image URL
+const isImageUrl = (message) => {
+    if (!message) return false;
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
+    const urlPattern = /^https?:\/\/.+/i;
+    return urlPattern.test(message) || imageExtensions.some(ext => message.toLowerCase().includes(ext));
+};
+
+// Helper function to build smart auto-reply message based on content
+const buildAutoReplyMessage = (userMessage = "", messageType = "text") => {
+    const message = (userMessage || "").trim().toLowerCase();
+    
+    // If message type is image or message is an image URL
+    if (messageType === "image" || isImageUrl(userMessage)) {
+        return "Thank you for sharing the image! Our agri doctor is reviewing your crop/soil image. We'll provide detailed analysis and recommendations shortly. Please wait for our expert advice.";
     }
-    return "Thanks for your message. Please upload crop & soil images so our agri doctor can review quickly.";
+    
+    // If message is empty or very short
+    if (message.length < 3) {
+        return "Thank you for your message! Please describe your agricultural problem in detail or share images of your crop/soil for better assistance.";
+    }
+    
+    // Keyword-based smart replies
+    const keywordReplies = {
+        // Pest related
+        pest: {
+            keywords: ['pest', 'insect', 'bug', 'कीड़े', 'कीट', 'pests', 'insects'],
+            reply: "For pest control, I recommend:\n1. Use neem oil spray (2-3ml per liter water) - effective and organic\n2. Apply chemical pesticides like Imidacloprid or Chlorpyriphos if infestation is severe\n3. Remove affected leaves/parts immediately\n4. Maintain proper spacing between plants for air circulation\n5. Use yellow sticky traps for monitoring\n\nPlease share images of the affected crop for specific treatment recommendations."
+        },
+        // Disease related
+        disease: {
+            keywords: ['disease', 'sick', 'infected', 'fungus', 'bacterial', 'rot', 'wilt', 'blight', 'रोग', 'बीमारी'],
+            reply: "For crop diseases, here's what you can do:\n1. Identify the disease type (fungal/bacterial/viral) - share images for accurate diagnosis\n2. Remove and destroy infected plant parts\n3. Apply fungicides like Mancozeb or Carbendazim for fungal diseases\n4. Use copper-based fungicides for bacterial issues\n5. Ensure proper drainage and avoid over-watering\n6. Maintain crop rotation to prevent disease buildup\n\nPlease upload clear images of affected areas for precise treatment."
+        },
+        // Fertilizer related
+        fertilizer: {
+            keywords: ['fertilizer', 'fertiliser', 'nutrient', 'npk', 'manure', 'compost', 'खाद', 'उर्वरक'],
+            reply: "For fertilizer recommendations:\n1. **NPK Balance**: Use 19:19:19 for balanced nutrition, or specific ratios based on crop stage\n2. **Organic Options**: Compost, vermicompost, or farmyard manure (FYM)\n3. **Application**: Apply during early morning or evening, avoid direct sunlight\n4. **Frequency**: Every 15-20 days during growing season\n5. **Soil Testing**: Get soil tested to know exact nutrient requirements\n\nWhich crop are you growing? Share crop name and growth stage for specific fertilizer recommendations."
+        },
+        // Watering related
+        water: {
+            keywords: ['water', 'irrigation', 'watering', 'dry', 'wilt', 'moisture', 'पानी', 'सिंचाई'],
+            reply: "For proper irrigation:\n1. **Frequency**: Most crops need water every 2-3 days in summer, 4-5 days in winter\n2. **Timing**: Early morning (6-8 AM) or evening (5-7 PM) is best\n3. **Amount**: Water until soil is moist 6-8 inches deep\n4. **Signs of Over-watering**: Yellow leaves, root rot\n5. **Signs of Under-watering**: Dry soil, drooping leaves\n6. **Drip Irrigation**: Most efficient method - saves 40-60% water\n\nWhat crop are you growing? Share details for crop-specific watering schedule."
+        },
+        // Harvest related
+        harvest: {
+            keywords: ['harvest', 'harvesting', 'ripe', 'mature', 'ready', 'कटाई', 'फसल'],
+            reply: "For harvesting:\n1. **Timing**: Harvest at right maturity stage - too early or late affects quality\n2. **Morning Harvest**: Best time is early morning when temperature is cool\n3. **Signs of Readiness**: Check color, size, and firmness based on crop type\n4. **Tools**: Use clean, sharp tools to avoid damage\n5. **Storage**: Store in cool, dry place immediately after harvest\n\nWhich crop are you harvesting? Share crop name for specific harvesting guidelines."
+        },
+        // Soil related
+        soil: {
+            keywords: ['soil', 'land', 'earth', 'fertility', 'ph', 'मिट्टी', 'भूमि'],
+            reply: "For soil health:\n1. **Soil Testing**: Get pH and nutrient levels tested\n2. **pH Level**: Most crops prefer 6.0-7.5 pH range\n3. **Organic Matter**: Add compost or FYM to improve soil structure\n4. **Drainage**: Ensure proper drainage - waterlogged soil harms roots\n5. **Crop Rotation**: Rotate crops to maintain soil fertility\n6. **Cover Crops**: Plant legumes to fix nitrogen naturally\n\nShare your soil type (clay/sandy/loamy) and crop for specific recommendations."
+        },
+        // General protection
+        protect: {
+            keywords: ['protect', 'save', 'prevent', 'safety', 'care', 'बचाएं', 'सुरक्षा'],
+            reply: "To protect your crops:\n1. **Regular Monitoring**: Check crops daily for early problem detection\n2. **Preventive Measures**: Use organic sprays before problems appear\n3. **Proper Spacing**: Maintain recommended spacing for air circulation\n4. **Weed Control**: Remove weeds regularly - they compete for nutrients\n5. **Mulching**: Use organic mulch to retain moisture and prevent weeds\n6. **Net Protection**: Use nets for bird/insect protection if needed\n\nWhat specific problem are you facing? Share details or images for targeted solutions."
+        }
+    };
+    
+    // Check for keywords and return relevant reply
+    for (const [category, data] of Object.entries(keywordReplies)) {
+        const foundKeyword = data.keywords.some(keyword => message.includes(keyword));
+        if (foundKeyword) {
+            return data.reply;
+        }
+    }
+    
+    // Default reply for general questions
+    return `Thank you for your question! Our agri expert is analyzing your query: "${userMessage.trim()}". 
+
+For better assistance, please:
+1. Share clear images of your crop/soil
+2. Mention your crop name and growth stage
+3. Describe the problem in detail
+
+We'll provide detailed recommendations shortly.`;
 };
 
 // REST API: Send message in agriculture advice chat
 export const sendAgricultureAdviceMessage = async (req, res) => {
     try {
         const { message, chatId, messageType, autoReply = true } = req.body;
+        
+        // Validate user authentication
+        if (!req.user || !req.user._id) {
+            return res.status(status.Unauthorized).json({
+                status: jsonStatus.Unauthorized,
+                success: false,
+                message: "User authentication required"
+            });
+        }
+
         const userId = req.user._id;
 
         if (!message) {
@@ -564,40 +645,65 @@ export const sendAgricultureAdviceMessage = async (req, res) => {
 
         // If chatId is provided, try to find it (only if it belongs to this user and is agriculture_advice type)
         if (chatId) {
-            chat = await Chat.findOne({ 
-                _id: chatId, 
-                user: userId, 
-                chatType: 'agriculture_advice' 
-            });
-
-            // If provided chatId doesn't match, ignore it and find/create user's own chat
-            // (Don't return error - just use the correct chat)
-            if (!chat) {
-                console.log(`ChatId ${chatId} not found or doesn't belong to user. Finding or creating user's agriculture_advice chat.`);
+            try {
+                chat = await Chat.findOne({ 
+                    _id: chatId, 
+                    user: userId, 
+                    chatType: 'agriculture_advice' 
+                });
+            } catch (findError) {
+                // Silently continue - will find/create user's chat below
             }
         }
 
         // If chat not found, try to find existing agriculture_advice chat for this user
         if (!chat) {
-            chat = await Chat.findOne({ 
-                user: userId, 
-                chatType: 'agriculture_advice' 
-            });
+            try {
+                // Convert userId to ObjectId if it's a string
+                const userObjectId = mongoose.Types.ObjectId.isValid(userId) 
+                    ? (typeof userId === 'string' ? new mongoose.Types.ObjectId(userId) : userId)
+                    : userId;
+                
+                chat = await Chat.findOne({ 
+                    user: userObjectId, 
+                    chatType: 'agriculture_advice' 
+                });
+            } catch (findError) {
+                // Silently continue - will create new chat below
+            }
         }
 
         // If still no chat found, create a new one
         if (!chat) {
-            const adminId = "672358eb4ef46ad834446c8e";
-            chat = new Chat({
-                user: userId,
-                admin: adminId,
-                chatType: 'agriculture_advice'
-            });
-            await chat.save();
+            try {
+                const adminId = "672358eb4ef46ad834446c8e";
+                chat = new Chat({
+                    user: userId,
+                    admin: adminId,
+                    chatType: 'agriculture_advice'
+                });
+                await chat.save();
+            } catch (createError) {
+                console.error(`[AgriAdvice] Error creating chat for user ${userId}:`, createError.message);
+                return res.status(status.InternalServerError).json({
+                    status: jsonStatus.InternalServerError,
+                    success: false,
+                    message: `Failed to create chat: ${createError.message}`
+                });
+            }
         }
 
-        const chatIdToUse = chat._id;
-        const adminId = chat.admin || "672358eb4ef46ad834446c8e";
+        // Ensure chat exists and has required fields
+        if (!chat || !chat._id) {
+            return res.status(status.InternalServerError).json({
+                status: jsonStatus.InternalServerError,
+                success: false,
+                message: "Failed to resolve chat. Please try again."
+            });
+        }
+
+        const chatIdToUse = chat._id.toString();
+        const adminId = (chat.admin && chat.admin.toString()) || "672358eb4ef46ad834446c8e";
 
         // Create user message
         const newMessage = new Message({
@@ -616,7 +722,7 @@ export const sendAgricultureAdviceMessage = async (req, res) => {
         let adminReplyMessage = null;
         if (autoReply) {
             try {
-                const autoReplyText = buildAutoReplyMessage(message);
+                const autoReplyText = buildAutoReplyMessage(message, messageType || "text");
                 const adminReplyResult = await sendAdminChatReply({
                     chatId: chatIdToUse,
                     message: autoReplyText,
