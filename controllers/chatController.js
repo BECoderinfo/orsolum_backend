@@ -577,37 +577,37 @@ const buildAutoReplyMessage = (userMessage = "", messageType = "text") => {
         // Pest related
         pest: {
             keywords: ['pest', 'insect', 'bug', 'कीड़े', 'कीट', 'pests', 'insects'],
-            reply: "For pest control, I recommend:\n1. Use neem oil spray (2-3ml per liter water) - effective and organic\n2. Apply chemical pesticides like Imidacloprid or Chlorpyriphos if infestation is severe\n3. Remove affected leaves/parts immediately\n4. Maintain proper spacing between plants for air circulation\n5. Use yellow sticky traps for monitoring\n\nPlease share images of the affected crop for specific treatment recommendations."
+            reply: "For pest control: 1) Spray neem oil 2-3 ml per liter for an organic start. 2) If infestation is heavy, use Imidacloprid or Chlorpyriphos as per label dose. 3) Remove badly affected leaves/pods and destroy them. 4) Keep proper spacing for airflow and avoid waterlogging. 5) Install yellow sticky traps to monitor adults. Share clear images so we can fine-tune the treatment."
         },
         // Disease related
         disease: {
-            keywords: ['disease', 'sick', 'infected', 'fungus', 'bacterial', 'rot', 'wilt', 'blight', 'रोग', 'बीमारी'],
-            reply: "For crop diseases, here's what you can do:\n1. Identify the disease type (fungal/bacterial/viral) - share images for accurate diagnosis\n2. Remove and destroy infected plant parts\n3. Apply fungicides like Mancozeb or Carbendazim for fungal diseases\n4. Use copper-based fungicides for bacterial issues\n5. Ensure proper drainage and avoid over-watering\n6. Maintain crop rotation to prevent disease buildup\n\nPlease upload clear images of affected areas for precise treatment."
+            keywords: ['disease', 'diseases', 'sick', 'ill', 'illness', 'infected', 'fungus', 'bacterial', 'rot', 'wilt', 'blight', 'रोग', 'बीमारी'],
+            reply: "Thanks for sharing the concern. Please: 1) Send close-up images so we can identify the pathogen. 2) Remove and dispose of heavily infected leaves/pods. 3) Spray Mancozeb 2.5–3 g per liter for fungal issues or Copper Oxychloride 3 g per liter for bacterial cases every 7 days. 4) Keep the plot well-drained and avoid overhead irrigation. 5) After control, apply Trichoderma or neem-cake to rebuild soil health. Share crop stage and symptoms for exact doses."
         },
         // Fertilizer related
         fertilizer: {
             keywords: ['fertilizer', 'fertiliser', 'nutrient', 'npk', 'manure', 'compost', 'खाद', 'उर्वरक'],
-            reply: "For fertilizer recommendations:\n1. **NPK Balance**: Use 19:19:19 for balanced nutrition, or specific ratios based on crop stage\n2. **Organic Options**: Compost, vermicompost, or farmyard manure (FYM)\n3. **Application**: Apply during early morning or evening, avoid direct sunlight\n4. **Frequency**: Every 15-20 days during growing season\n5. **Soil Testing**: Get soil tested to know exact nutrient requirements\n\nWhich crop are you growing? Share crop name and growth stage for specific fertilizer recommendations."
+            reply: "For fertilizer planning: 1) Use NPK 19:19:19 foliar spray for balanced feeding unless crop stage demands another ratio. 2) Improve soil with compost, vermicompost or FYM. 3) Apply fertilizers early morning or evening to avoid burn. 4) Repeat every 15–20 days during active growth. 5) Conduct a soil test to fine-tune nutrients. Tell us the crop and stage for exact recommendations."
         },
         // Watering related
         water: {
             keywords: ['water', 'irrigation', 'watering', 'dry', 'wilt', 'moisture', 'पानी', 'सिंचाई'],
-            reply: "For proper irrigation:\n1. **Frequency**: Most crops need water every 2-3 days in summer, 4-5 days in winter\n2. **Timing**: Early morning (6-8 AM) or evening (5-7 PM) is best\n3. **Amount**: Water until soil is moist 6-8 inches deep\n4. **Signs of Over-watering**: Yellow leaves, root rot\n5. **Signs of Under-watering**: Dry soil, drooping leaves\n6. **Drip Irrigation**: Most efficient method - saves 40-60% water\n\nWhat crop are you growing? Share details for crop-specific watering schedule."
+            reply: "For irrigation: 1) In summer water every 2–3 days; in winter every 4–5 days unless rain occurs. 2) Prefer early morning or evening slots. 3) Ensure moisture reaches 6–8 inches depth. 4) Watch for over-watering signs like yellow leaves and root rot. 5) Wilting or dry soil indicates under-watering. 6) If possible, switch to drip irrigation to save 40–60% water. Tell us your crop for a precise schedule."
         },
         // Harvest related
         harvest: {
             keywords: ['harvest', 'harvesting', 'ripe', 'mature', 'कटाई', 'फसल'],
-            reply: "For harvesting:\n1. **Timing**: Harvest at right maturity stage - too early or late affects quality\n2. **Morning Harvest**: Best time is early morning when temperature is cool\n3. **Signs of Readiness**: Check color, size, and firmness based on crop type\n4. **Tools**: Use clean, sharp tools to avoid damage\n5. **Storage**: Store in cool, dry place immediately after harvest\n\nWhich crop are you harvesting? Share crop name for specific harvesting guidelines."
+            reply: "For harvesting: 1) Wait for proper maturity; harvesting too early or late reduces quality. 2) Prefer early morning when produce is cool and crisp. 3) Check crop-specific indicators like pod color, grain hardness or fruit aroma. 4) Use sharp, sanitized tools to avoid bruising. 5) Move produce to a cool, dry place immediately. Share your crop for detailed tips."
         },
         // Soil related
         soil: {
             keywords: ['soil', 'land', 'earth', 'fertility', 'ph', 'मिट्टी', 'भूमि'],
-            reply: "For soil health:\n1. **Soil Testing**: Get pH and nutrient levels tested\n2. **pH Level**: Most crops prefer 6.0-7.5 pH range\n3. **Organic Matter**: Add compost or FYM to improve soil structure\n4. **Drainage**: Ensure proper drainage - waterlogged soil harms roots\n5. **Crop Rotation**: Rotate crops to maintain soil fertility\n6. **Cover Crops**: Plant legumes to fix nitrogen naturally\n\nShare your soil type (clay/sandy/loamy) and crop for specific recommendations."
+            reply: "For soil health: 1) Do a soil test to know pH and nutrients. 2) Most crops thrive at pH 6.0–7.5; amend if needed. 3) Add compost/FYM to build organic matter and structure. 4) Ensure drainage so roots don’t sit in water. 5) Practice crop rotation to avoid nutrient mining and disease buildup. 6) Use legume cover crops for natural nitrogen. Share your soil type for custom advice."
         },
         // General protection
         protect: {
             keywords: ['protect', 'save', 'prevent', 'safety', 'care', 'बचाएं', 'सुरक्षा'],
-            reply: "To protect your crops:\n1. **Regular Monitoring**: Check crops daily for early problem detection\n2. **Preventive Measures**: Use organic sprays before problems appear\n3. **Proper Spacing**: Maintain recommended spacing for air circulation\n4. **Weed Control**: Remove weeds regularly - they compete for nutrients\n5. **Mulching**: Use organic mulch to retain moisture and prevent weeds\n6. **Net Protection**: Use nets for bird/insect protection if needed\n\nWhat specific problem are you facing? Share details or images for targeted solutions."
+            reply: "To protect crops: 1) Inspect fields daily for early pest or disease signs. 2) Apply preventive sprays like neem or bio-controls before outbreaks. 3) Maintain spacing for airflow and sunlight. 4) Keep weeds under control so they don’t steal nutrients. 5) Use mulch to conserve moisture and stop new weeds. 6) Install bird/insect nets if needed. Describe your issue for a targeted plan."
         }
     };
     
