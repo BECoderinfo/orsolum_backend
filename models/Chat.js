@@ -16,6 +16,20 @@ const ChatSchema = new mongoose.Schema({
         type: String,
         enum: ['general', 'farming_tools', 'agriculture_advice'],
         default: 'general'
+    },
+    analysisStatus: {
+        type: String,
+        enum: ['in_progress', 'completed'],
+        default: 'in_progress'
+    },
+    analysisSummary: {
+        type: String,
+        trim: true,
+        default: null
+    },
+    analysisCompletedAt: {
+        type: Date,
+        default: null
     }
 }, { timestamps: true });
 

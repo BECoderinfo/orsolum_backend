@@ -552,9 +552,14 @@ const buildAutoReplyMessage = (userMessage = "", messageType = "text") => {
     const message = rawMessage.toLowerCase();
 
     // Quick acknowledgement for short confirmations
-    const acknowledgementKeywords = ['ok', 'okay', 'thanks', 'thank you', 'noted', 'done', 'wait', 'update', 'please update', 'sure'];
+    const acknowledgementKeywords = ['ok', 'okay', 'thanks', 'thank you', 'noted', 'done', 'wait', 'update', 'please update', 'sure', 'noted', 'waiting'];
     if (acknowledgementKeywords.some((keyword) => message.includes(keyword))) {
         return "Thank you for the update! Our agri doctor is working on your case. We will notify you as soon as the analysis and recommendations are ready. Meanwhile, feel free to share more details or images if available.";
+    }
+
+    const timelineKeywords = ['how long', 'time', 'when', 'status', 'progress', 'analysis', 'update me', 'waiting for', 'ready'];
+    if (timelineKeywords.some((keyword) => message.includes(keyword))) {
+        return "Thanks for checking in! Our agri doctor usually takes 15‑30 minutes to review shared details. We'll notify you as soon as the analysis is ready. Please keep the chat open and feel free to share more images or information while you wait.";
     }
     
     // If message type is image or message is an image URL
@@ -708,6 +713,13 @@ export const sendAgricultureAdviceMessage = async (req, res) => {
                 success: false,
                 message: "Failed to resolve chat. Please try again."
             });
+        }
+
+        if (chat.analysisStatus !== 'in_progress') {
+            chat.analysisStatus = 'in_progress';
+            chat.analysisCompletedAt = null;
+            chat.analysisSummary = null;
+            await chat.save();
         }
 
         const chatIdToUse = chat._id.toString();
