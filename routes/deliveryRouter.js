@@ -2,6 +2,7 @@ import express from "express";
 import { body } from 'express-validator';
 import { deliveryBoyAuthentication } from "../middlewares/middleware.js";
 import { uploadDeliveryBoyImage } from "../helper/uploadImage.js";
+import { getDeliveryNotifications, markDeliveryNotificationRead, clearDeliveryNotifications } from "../controllers/notificationController.js";
 
 import {
     uploadDeliveryBoyProfileImage,
@@ -135,5 +136,12 @@ deliveryRouter.get('/deliveryboy/deductions/:orderId/v1', deliveryBoyAuthenticat
 =========================== */
 deliveryRouter.get('/deliveryboy/payable/qr/v1', deliveryBoyAuthentication, getPayableQR);
 deliveryRouter.post('/deliveryboy/payable/confirm/v1', deliveryBoyAuthentication, confirmPayable);
+
+/* ===========================
+     NOTIFICATIONS
+=========================== */
+deliveryRouter.get('/deliveryboy/notifications/v1', deliveryBoyAuthentication, getDeliveryNotifications);
+deliveryRouter.patch('/deliveryboy/notifications/:id/read/v1', deliveryBoyAuthentication, markDeliveryNotificationRead);
+deliveryRouter.delete('/deliveryboy/notifications/clear/v1', deliveryBoyAuthentication, clearDeliveryNotifications);
 
 export default deliveryRouter;

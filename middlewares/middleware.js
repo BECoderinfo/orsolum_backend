@@ -5,32 +5,50 @@ import User from "../models/User.js";
 import Admin from "../models/Admin.js";
 import DeliveryBoy from "../models/DeliveryBoy.js";
 
-/**
- * Safely extract token from multiple possible locations.
- * Primary preference is Authorization header (Bearer token),
- * but some clients (older mobile apps) can't set headers, so we
- * gracefully fallback to body, query or `x-access-token`.
- */
-const extractToken = (req) => {
-  let token = req.header("Authorization") || req.header("authorization") || "";
+const sanitizeTokenValue = (token) => {
+  if (!token || typeof token !== "string") return "";
+  let cleaned = token.trim();
+  if (!cleaned) return "";
 
-  if (token && token.startsWith("Bearer ")) {
-    token = token.split(" ")[1];
+  if (cleaned.startsWith("Bearer ")) {
+    cleaned = cleaned.slice(7).trim();
   }
 
+  cleaned = cleaned.replace(/^['"]+|['"]+$/g, "").trim();
+
+  if (!cleaned || cleaned.toLowerCase() === "null" || cleaned.toLowerCase() === "undefined") {
+    return "";
+  }
+
+  return cleaned;
+};
+
+/**
+ * Safely extract token from multiple possible locations.
+ * Tries Authorization header first, then custom headers,
+ * then falls back to body/query parameters for older clients.
+ */
+const extractToken = (req) => {
+  const headerToken =
+    req.header("Authorization") ||
+    req.header("authorization") ||
+    req.headers["token"] ||
+    req.headers["Token"] ||
+    req.headers["TOKEN"] ||
+    "";
+
+  let token = sanitizeTokenValue(headerToken);
+
   if (!token) {
-    token =
+    const fallbackToken =
       req.body?.token ||
       req.query?.token ||
       req.headers["x-access-token"] ||
       "";
+    token = sanitizeTokenValue(fallbackToken);
   }
 
-  if (token && token.startsWith("Bearer ")) {
-    token = token.split(" ")[1];
-  }
-
-  return token?.trim();
+  return token;
 };
 
 /* -------------------------- USER AUTHENTICATION -------------------------- */

@@ -5,6 +5,7 @@ import { adminAuthentication, userAuthentication } from "../middlewares/middlewa
 import { createWorkHours, getAllWorkHours, updateWorkHours, deleteWorkHours } from "../controllers/workHoursController.js";
 import ShiprocketService from '../helper/shiprocketService.js';
 import { processGoogleMapsLink } from '../helper/latAndLong.js';
+import { createNotification, listNotifications, deleteNotification } from "../controllers/notificationController.js";
 const adminRouter = express.Router();
 
 // Admin
@@ -74,5 +75,10 @@ adminRouter.post('/admin/create/workhours/v1', adminAuthentication, createWorkHo
 adminRouter.get('/get/all/workhours/v1', getAllWorkHours);
 adminRouter.put('/admin/update/workhours/:id/v1', adminAuthentication, updateWorkHours);
 adminRouter.delete('/admin/delete/workhours/:id/v1', adminAuthentication, deleteWorkHours);
+
+// Notifications
+adminRouter.post('/admin/notifications/v1', adminAuthentication, createNotification);
+adminRouter.get('/admin/notifications/v1', adminAuthentication, listNotifications);
+adminRouter.delete('/admin/notifications/:id/v1', adminAuthentication, deleteNotification);
 
 export default adminRouter;

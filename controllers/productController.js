@@ -14,6 +14,45 @@ limit = limit ? Number(limit) : 10;
 
 const { ObjectId } = mongoose.Types;
 
+const extractProductImageKeys = (files = []) => {
+  if (!Array.isArray(files) || !files.length) return [];
+  return files
+    .map((file) => file?.key || file?.location || file?.path)
+    .filter((key) => typeof key === "string" && key.trim().length)
+    .map((key) => key.trim());
+};
+
+const parseProductImagesField = (incoming) => {
+  if (!incoming) return [];
+  if (Array.isArray(incoming)) {
+    return incoming
+      .filter((img) => typeof img === "string" && img.trim().length)
+      .map((img) => img.trim());
+  }
+  if (typeof incoming === "string") {
+    try {
+      const parsed = JSON.parse(incoming);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((img) => typeof img === "string" && img.trim().length)
+          .map((img) => img.trim());
+      }
+    } catch (err) {
+      // ignore JSON parse errors and fallback to comma separated parsing
+    }
+    return incoming
+      .split(",")
+      .map((img) => img.trim())
+      .filter((img) => img.length);
+  }
+  return [];
+};
+
+const mergeProductImages = (...lists) => {
+  const flat = lists.flat().filter(Boolean);
+  return [...new Set(flat)];
+};
+
 function calculateDiscount(mrp, sellingPrice) {
     if (mrp <= 0 || sellingPrice < 0 || sellingPrice > mrp) {
         return "Invalid prices";
@@ -63,10 +102,10 @@ export const createProduct = async (req, res) => {
       }
   
       // ✅ Image Handling
-      let productImages = [];
-      if (req.files && req.files.length > 0) {
-        productImages = req.files.map((file) => file.key || file.path || file.location);
-      }
+      const productImages = mergeProductImages(
+        parseProductImagesField(req.body?.productImages),
+        extractProductImageKeys(req.files)
+      );
   
       // ✅ Verify Store Ownership (fixed ObjectId mismatch issue)
       const store = await Store.findById(storeId);
@@ -160,10 +199,14 @@ export const editProduct = async (req, res) => {
             updateData.details = productDetails;
         }
 
-        let productImages = product.productImages || [];
-        if (req.files && req.files.length > 0) {
-            req.files.forEach((file) => productImages.push(file.key));
-            updateData.productImages = productImages;
+        const additionalImages = mergeProductImages(
+            parseProductImagesField(payload.productImages),
+            extractProductImageKeys(req.files)
+        );
+
+        if (additionalImages.length) {
+            const existingImages = Array.isArray(product.productImages) ? product.productImages : [];
+            updateData.productImages = mergeProductImages(existingImages, additionalImages);
         }
 
         const simpleFields = ["productName", "companyName", "information", "qty", "status", "manufacturer"];

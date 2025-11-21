@@ -16,6 +16,45 @@ limit = limit ? Number(limit) : 10;
 
 const { ObjectId } = mongoose.Types;
 
+const extractFileKeys = (files = []) => {
+  if (!Array.isArray(files) || !files.length) return [];
+  return files
+    .map((file) => file?.key || file?.location || file?.path)
+    .filter((key) => typeof key === "string" && key.trim().length)
+    .map((key) => key.trim());
+};
+
+const parseIncomingImages = (incoming) => {
+  if (!incoming) return [];
+  if (Array.isArray(incoming)) {
+    return incoming
+      .filter((img) => typeof img === "string" && img.trim().length)
+      .map((img) => img.trim());
+  }
+  if (typeof incoming === "string") {
+    try {
+      const parsed = JSON.parse(incoming);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((img) => typeof img === "string" && img.trim().length)
+          .map((img) => img.trim());
+      }
+    } catch (err) {
+      // not a JSON string, fallback to comma separated parsing
+    }
+    return incoming
+      .split(",")
+      .map((img) => img.trim())
+      .filter((img) => img.length);
+  }
+  return [];
+};
+
+const mergeUniqueImages = (...lists) => {
+  const flat = lists.flat().filter(Boolean);
+  return [...new Set(flat)];
+};
+
 export const uploadStoreImage = async (req, res) => {
     try {
         signedUrl(req, res, 'Store/')
@@ -68,6 +107,11 @@ export const createStore = async (req, res) => {
       geoLocation = { type: "Point", coordinates: [77.209, 28.6139] };
     }
 
+    const incomingImages = mergeUniqueImages(
+      parseIncomingImages(req.body?.images),
+      extractFileKeys(req.files)
+    );
+
     const store = new Store({
       name,
       category,
@@ -76,6 +120,7 @@ export const createStore = async (req, res) => {
       address,
       email,
       directMe,
+      images: incomingImages,
       location: geoLocation,
       createdBy: req.user._id,
       updatedBy: req.user._id,
@@ -145,6 +190,16 @@ export const editStore = async (req, res) => {
 
     if (geoLocation) {
       updateData.location = geoLocation;
+    }
+
+    const newImages = mergeUniqueImages(
+      parseIncomingImages(payload.images),
+      extractFileKeys(req.files)
+    );
+
+    if (newImages.length) {
+      const existing = Array.isArray(isStore.images) ? isStore.images : [];
+      updateData.images = mergeUniqueImages(existing, newImages);
     }
 
     if (Object.keys(updateData).length === 1) {

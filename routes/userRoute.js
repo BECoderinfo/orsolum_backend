@@ -3,6 +3,7 @@ import { body } from 'express-validator';
 import { uploadProfileImage, loginUser, registerUser, sendLoginOtp, sendRegisterOtp, getMyProfile, updateMyProfile, deleteMyAccount, purchasePremium, reActivateMyAccount, logoutUser } from "../controllers/userController.js";
 import { userAuthentication } from "../middlewares/middleware.js";
 import { uploadUserImage } from "../helper/uploadImage.js";
+import { getUserNotifications, markUserNotificationRead, clearUserNotifications } from "../controllers/notificationController.js";
 const userRouter = express.Router();
 
 // image upload
@@ -29,5 +30,10 @@ userRouter.post('/re-activate/my/account/v1', reActivateMyAccount);
 
 // premium purchase
 userRouter.post('/purchase/premium/v1', userAuthentication, purchasePremium);
+
+// notifications
+userRouter.get('/user/notifications/v1', userAuthentication, getUserNotifications);
+userRouter.patch('/user/notifications/:id/read/v1', userAuthentication, markUserNotificationRead);
+userRouter.delete('/user/notifications/clear/v1', userAuthentication, clearUserNotifications);
 
 export default userRouter;
