@@ -27,6 +27,9 @@ const StoreSchema = new mongoose.Schema({
     directMe: {
         type: String
     },
+    coverImage: {
+        type: String
+    },
     images: [
         {
             type: String

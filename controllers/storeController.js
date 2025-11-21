@@ -55,6 +55,14 @@ const mergeUniqueImages = (...lists) => {
   return [...new Set(flat)];
 };
 
+const applyCoverImageFallback = (storeDoc = {}) => {
+  const imagesArray = Array.isArray(storeDoc.images) ? storeDoc.images : [];
+  return {
+    ...storeDoc,
+    coverImage: storeDoc.coverImage || imagesArray[0] || null,
+  };
+};
+
 export const uploadStoreImage = async (req, res) => {
     try {
         signedUrl(req, res, 'Store/')
@@ -121,18 +129,22 @@ export const createStore = async (req, res) => {
       email,
       directMe,
       images: incomingImages,
+      coverImage: incomingImages[0] || "",
       location: geoLocation,
       createdBy: req.user._id,
       updatedBy: req.user._id,
     });
 
     const savedStore = await store.save();
+    const responseStore = applyCoverImageFallback(
+      savedStore.toObject ? savedStore.toObject() : savedStore
+    );
 
     res.status(status.Create).json({
       status: jsonStatus.Create,
       success: true,
       message: "Store created successfully",
-      data: savedStore,
+      data: responseStore,
     });
   } catch (error) {
     console.error("❌ Error creating store:", error);
@@ -192,14 +204,17 @@ export const editStore = async (req, res) => {
       updateData.location = geoLocation;
     }
 
+    const existingImages = Array.isArray(isStore.images) ? isStore.images : [];
+
     const newImages = mergeUniqueImages(
       parseIncomingImages(payload.images),
       extractFileKeys(req.files)
     );
 
     if (newImages.length) {
-      const existing = Array.isArray(isStore.images) ? isStore.images : [];
-      updateData.images = mergeUniqueImages(existing, newImages);
+      const merged = mergeUniqueImages(existingImages, newImages);
+      updateData.images = merged;
+      updateData.coverImage = merged[0] || isStore.coverImage || "";
     }
 
     if (Object.keys(updateData).length === 1) {
@@ -237,7 +252,7 @@ export const editStore = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Store updated successfully",
-      data: storeDetails[0],
+      data: applyCoverImageFallback(storeDetails[0]),
     });
   } catch (error) {
     console.error("Error editing store:", error);
@@ -333,7 +348,7 @@ export const storeDetails = async (req, res) => {
             ? pickupAddresses.find((addr) => addr._id.toString() === defaultPickupId)
             : null;
 
-          return {
+          return applyCoverImageFallback({
             ...storeDoc,
             shiprocket: {
               ...shiprocketInfo,
@@ -342,7 +357,7 @@ export const storeDetails = async (req, res) => {
               default_pickup_address_id: defaultPickupId,
               default_pickup_address_data: defaultPickup || null,
             },
-          };
+          });
         })
       );
 
@@ -378,7 +393,7 @@ export const deleteStoreImage = async (req, res) => {
             return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Index out of bounds." });
         }
 
-        const updatedStore = await Store.findByIdAndUpdate(
+        let updatedStore = await Store.findByIdAndUpdate(
             store._id,
             {
                 $pull: {
@@ -388,7 +403,16 @@ export const deleteStoreImage = async (req, res) => {
             { new: true, runValidators: true }
         );
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: updatedStore });
+        if (updatedStore) {
+            const imagesArray = Array.isArray(updatedStore.images) ? updatedStore.images : [];
+            const nextCover = imagesArray[0] || "";
+            if (updatedStore.coverImage !== nextCover) {
+                updatedStore.coverImage = nextCover;
+                updatedStore = await updatedStore.save();
+            }
+        }
+
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: applyCoverImageFallback(updatedStore?.toObject ? updatedStore.toObject() : updatedStore) });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('deleteStoreImage', error, req, res);

@@ -14,6 +14,16 @@ limit = limit ? Number(limit) : 10;
 
 const { ObjectId } = mongoose.Types;
 
+const applyPrimaryImageFallback = (productDoc = {}) => {
+  const imagesArray = Array.isArray(productDoc.productImages)
+    ? productDoc.productImages
+    : [];
+  return {
+    ...productDoc,
+    primaryImage: productDoc.primaryImage || imagesArray[0] || null,
+  };
+};
+
 const extractProductImageKeys = (files = []) => {
   if (!Array.isArray(files) || !files.length) return [];
   return files
@@ -149,16 +159,20 @@ export const createProduct = async (req, res) => {
         createdBy: req.user._id,
         updatedBy: req.user._id,
         productImages,
+        primaryImage: productImages[0] || "",
       });
   
       const savedProduct = await newProduct.save();
+      const responseProduct = applyPrimaryImageFallback(
+        savedProduct.toObject ? savedProduct.toObject() : savedProduct
+      );
   
       // ✅ Success response
       res.status(status.Create).json({
         status: jsonStatus.Create,
         success: true,
         message: "Product created successfully",
-        data: savedProduct,
+        data: responseProduct,
       });
     } catch (error) {
       console.error("❌ Error creating product:", error);
@@ -206,7 +220,9 @@ export const editProduct = async (req, res) => {
 
         if (additionalImages.length) {
             const existingImages = Array.isArray(product.productImages) ? product.productImages : [];
-            updateData.productImages = mergeProductImages(existingImages, additionalImages);
+            const mergedImages = mergeProductImages(existingImages, additionalImages);
+            updateData.productImages = mergedImages;
+            updateData.primaryImage = mergedImages[0] || product.primaryImage || "";
         }
 
         const simpleFields = ["productName", "companyName", "information", "qty", "status", "manufacturer"];
@@ -256,7 +272,11 @@ export const editProduct = async (req, res) => {
             { new: true, runValidators: true }
         );
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: editProduct });
+        const formattedProduct = applyPrimaryImageFallback(
+            editProduct?.toObject ? editProduct.toObject() : editProduct
+        );
+
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: formattedProduct });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('editProduct', error, req, res);
@@ -320,7 +340,9 @@ export const productDetails = async (req, res) => {
             }
         ]);
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: productDetails[0] });
+        const detailWithImage = applyPrimaryImageFallback(productDetails[0]);
+
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: detailWithImage });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('productDetails', error, req, res);
@@ -345,7 +367,7 @@ export const deleteProductImage = async (req, res) => {
             return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Index out of bounds." });
         }
 
-        const updatedProduct = await Product.findByIdAndUpdate(
+        let updatedProduct = await Product.findByIdAndUpdate(
             id,
             {
                 $pull: {
@@ -355,7 +377,22 @@ export const deleteProductImage = async (req, res) => {
             { new: true, runValidators: true }
         );
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: updatedProduct });
+        if (updatedProduct) {
+            const imagesArray = Array.isArray(updatedProduct.productImages) ? updatedProduct.productImages : [];
+            const nextPrimary = imagesArray[0] || "";
+            if (updatedProduct.primaryImage !== nextPrimary) {
+                updatedProduct.primaryImage = nextPrimary;
+                updatedProduct = await updatedProduct.save();
+            }
+        }
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: applyPrimaryImageFallback(
+                updatedProduct?.toObject ? updatedProduct.toObject() : updatedProduct
+            )
+        });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('deleteProductImage', error, req, res);
@@ -388,7 +425,11 @@ export const productList = async (req, res) => {
             }
         ]);
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: list });
+        const listWithPrimaryImage = list.map((product) =>
+            applyPrimaryImageFallback(product)
+        );
+
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: listWithPrimaryImage });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('productList', error, req, res);

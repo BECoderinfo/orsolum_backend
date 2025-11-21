@@ -2,6 +2,9 @@ import mongoose from "mongoose";
 const { ObjectId } = mongoose.Schema.Types;
 
 const ProductSchema = new mongoose.Schema({
+    primaryImage: {
+        type: String
+    },
     productImages: [
         {
             type: String
