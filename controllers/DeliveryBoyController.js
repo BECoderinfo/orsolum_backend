@@ -1090,7 +1090,7 @@ export const sendDeliveryBoyLoginOtp = async (req, res) => {
 
         console.log("Generated OTP for", phone, "is:", otp);
 
-        await sendSms(phone.replace('+', ''), { name: deliveryBoy.firstName || 'User', otp: otp });
+        await sendSms(phone.replace('+', ''), { var1: deliveryBoy.firstName || 'User', var2: otp });
 
         const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
 

@@ -106,15 +106,11 @@ export const updateRetailerProfile = async (req, res) => {
             { new: true, runValidators: true }
         ).select('-password');
 
-        const formattedUser = updated?.toObject ? updated.toObject() : updated;
-        const refreshedToken = generateToken(updated._id);
-
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
             message: "Profile updated successfully",
-            data: formattedUser,
-            token: refreshedToken
+            data: updated
         });
 
     } catch (error) {
