@@ -4,6 +4,7 @@ import OnlineOrder from '../models/OnlineStore/OnlineOrder.js';
 import Payment from '../models/Payment.js';
 import Cart from '../models/Cart.js';
 import Address from '../models/Address.js';
+import Store from '../models/Store.js';
 import StoreOffer from '../models/StoreOffer.js';
 import CouponCode from '../models/CouponCode.js';
 import PremiumHistory from '../models/PremiumHistory.js';
@@ -139,6 +140,18 @@ export const handleLocalStoreOrderCallback = async (webhookCallRes) => {
 
             // Mark cart items as deleted after order placement
             await Cart.updateMany({ createdBy: userId, storeId, deleted: false }, { $set: { deleted: true } });
+
+            // Send notification to retailer about new order
+            try {
+                const { notifyNewOrder } = await import('./notificationHelper.js');
+                const store = await Store.findById(storeId);
+                if (store && store.createdBy) {
+                    await notifyNewOrder(store.createdBy, newOrder);
+                }
+            } catch (notifError) {
+                console.error('Error sending new order notification:', notifError);
+                // Continue even if notification fails
+            }
 
             if (coupon) {
                 await new CouponHistory({ couponId: coupon, userId }).save();

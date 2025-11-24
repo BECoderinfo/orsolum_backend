@@ -537,6 +537,15 @@ export const acceptProduct = async (req, res) => {
 
         await Product.findByIdAndUpdate(product, { updatedBy: req.user._id, status: "A" }, { new: true, runValidators: true });
 
+        // Send notification to retailer
+        try {
+            const { notifyProductApproved } = await import('../helper/notificationHelper.js');
+            await notifyProductApproved(findProduct.createdBy, findProduct);
+        } catch (notifError) {
+            console.error('Error sending product approval notification:', notifError);
+            // Continue even if notification fails
+        }
+
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: "Product accepted" });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
@@ -546,7 +555,7 @@ export const acceptProduct = async (req, res) => {
 
 export const rejectProduct = async (req, res) => {
     try {
-        const { product } = req.body
+        const { product, reason } = req.body
 
         const findProduct = await Product.findById(product);
         if (!findProduct) {
@@ -554,6 +563,15 @@ export const rejectProduct = async (req, res) => {
         }
 
         await Product.findByIdAndUpdate(product, { updatedBy: req.user._id, status: "R" }, { new: true, runValidators: true });
+
+        // Send notification to retailer
+        try {
+            const { notifyProductRejected } = await import('../helper/notificationHelper.js');
+            await notifyProductRejected(findProduct.createdBy, findProduct, reason || '');
+        } catch (notifError) {
+            console.error('Error sending product rejection notification:', notifError);
+            // Continue even if notification fails
+        }
 
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: "Product rejected" });
     } catch (error) {

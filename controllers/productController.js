@@ -401,16 +401,28 @@ export const deleteProductImage = async (req, res) => {
 
 export const productList = async (req, res) => {
     try {
-
-        let { skip } = req.query;
+        let { skip, search } = req.query;
         skip = skip || 1;
+
+        // Build match query
+        const matchQuery = {
+            deleted: false,
+            createdBy: new ObjectId(req.user._id)
+        };
+
+        // Add search filter if search term is provided
+        if (search && search.trim()) {
+            const searchRegex = new RegExp(search.trim(), 'i');
+            matchQuery.$or = [
+                { productName: { $regex: searchRegex } },
+                { companyName: { $regex: searchRegex } },
+                { information: { $regex: searchRegex } }
+            ];
+        }
 
         const list = await Product.aggregate([
             {
-                $match: {
-                    deleted: false,
-                    createdBy: new ObjectId(req.user._id)
-                }
+                $match: matchQuery
             },
             {
                 $sort: {
@@ -429,9 +441,17 @@ export const productList = async (req, res) => {
             applyPrimaryImageFallback(product)
         );
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: listWithPrimaryImage });
+        res.status(status.OK).json({ 
+            status: jsonStatus.OK, 
+            success: true, 
+            data: listWithPrimaryImage 
+        });
     } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        res.status(status.InternalServerError).json({ 
+            status: jsonStatus.InternalServerError, 
+            success: false, 
+            message: error.message 
+        });
         return catchError('productList', error, req, res);
     }
 };

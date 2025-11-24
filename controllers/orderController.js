@@ -2642,6 +2642,19 @@ export const orderChangeStatus = async (req, res) => {
       );
     }
 
+    // Send notification to retailer about order status change
+    try {
+      const { notifyOrderStatusChange } = await import('../helper/notificationHelper.js');
+      const Store = (await import('../models/Store.js')).default;
+      const store = await Store.findById(changeOrderStatus.storeId);
+      if (store && store.createdBy) {
+        await notifyOrderStatusChange(store.createdBy, changeOrderStatus, orderStatus);
+      }
+    } catch (notifError) {
+      console.error('Error sending order status change notification:', notifError);
+      // Continue even if notification fails
+    }
+
     res
       .status(status.OK)
       .json({ status: jsonStatus.OK, success: true, data: changeOrderStatus });
@@ -2787,6 +2800,17 @@ export const createOrderWithShiprocket = async (req, res) => {
 
       const savedOrder = await order.save();
       createdOrders.push(savedOrder);
+
+      // Send notification to retailer about new order
+      try {
+        const { notifyNewOrder } = await import('../helper/notificationHelper.js');
+        if (storeOrder.store.createdBy) {
+          await notifyNewOrder(storeOrder.store.createdBy, savedOrder);
+        }
+      } catch (notifError) {
+        console.error('Error sending new order notification:', notifError);
+        // Continue even if notification fails
+      }
 
       // Prepare Shiprocket order payload
       const shiprocketPayload = {

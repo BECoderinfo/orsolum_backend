@@ -194,6 +194,18 @@ export const acceptOrder = async (req, res) => {
         deliveryBoy.availabilityStatus = "on_delivery";
         await deliveryBoy.save();
 
+        // Send notification to retailer about order being picked up
+        try {
+            const { notifyDeliveryStatus } = await import('../helper/notificationHelper.js');
+            const store = await Store.findById(order.storeId);
+            if (store && store.createdBy) {
+                await notifyDeliveryStatus(store.createdBy, order, "On the way");
+            }
+        } catch (notifError) {
+            console.error('Error sending order pickup notification:', notifError);
+            // Continue even if notification fails
+        }
+
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
@@ -236,6 +248,18 @@ export const pickupOrder = async (req, res) => {
         order.status = "On the way";
         order.pickedUpAt = new Date();
         await order.save();
+
+        // Send notification to retailer about order pickup
+        try {
+            const { notifyDeliveryStatus } = await import('../helper/notificationHelper.js');
+            const store = await Store.findById(order.storeId);
+            if (store && store.createdBy) {
+                await notifyDeliveryStatus(store.createdBy, order, "On the way");
+            }
+        } catch (notifError) {
+            console.error('Error sending order pickup notification:', notifError);
+            // Continue even if notification fails
+        }
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
@@ -280,6 +304,18 @@ export const startNavigation = async (req, res) => {
         order.navigationStartedAt = new Date();
         await order.save();
 
+        // Send notification to retailer about order out for delivery
+        try {
+            const { notifyDeliveryStatus } = await import('../helper/notificationHelper.js');
+            const store = await Store.findById(order.storeId);
+            if (store && store.createdBy) {
+                await notifyDeliveryStatus(store.createdBy, order, "On the way");
+            }
+        } catch (notifError) {
+            console.error('Error sending navigation start notification:', notifError);
+            // Continue even if notification fails
+        }
+
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
@@ -322,6 +358,18 @@ export const reachedLocation = async (req, res) => {
         order.status = "Your Destination";
         order.reachedAt = new Date();
         await order.save();
+
+        // Send notification to retailer about reaching destination
+        try {
+            const { notifyDeliveryStatus } = await import('../helper/notificationHelper.js');
+            const store = await Store.findById(order.storeId);
+            if (store && store.createdBy) {
+                await notifyDeliveryStatus(store.createdBy, order, "Your Destination");
+            }
+        } catch (notifError) {
+            console.error('Error sending reached location notification:', notifError);
+            // Continue even if notification fails
+        }
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
@@ -397,6 +445,19 @@ export const completeDelivery = async (req, res) => {
         deliveryBoy.totalDeliveries += 1;
         deliveryBoy.availabilityStatus = "available";
         await deliveryBoy.save();
+
+        // Send notification to retailer about delivery completion
+        try {
+            const { notifyDeliveryStatus } = await import('../helper/notificationHelper.js');
+            const Store = (await import('../models/Store.js')).default;
+            const store = await Store.findById(order.storeId);
+            if (store && store.createdBy) {
+                await notifyDeliveryStatus(store.createdBy, order, "Delivered");
+            }
+        } catch (notifError) {
+            console.error('Error sending delivery completion notification:', notifError);
+            // Continue even if notification fails
+        }
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
