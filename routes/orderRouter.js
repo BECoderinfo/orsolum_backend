@@ -1,5 +1,5 @@
 import express from "express";
-import { addProductToCart, incrementProductQuantityInCart, decrementProductQuantityInCart, deleteProductFromCart, cartDetails, allCartDetails, couponCodeList, createAddress, editAddress, getAddress, getAllAddress, createOrder, cancelOrder, orderList, orderDetails, retailerOrderList, retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetails, orderChangeStatus, createOrderV2, orderListV2, orderDetailsV2, retailerOrderDetailsV2, paymentWebhookCall, getUserAllAddress, createOrderWithShiprocket, processPaymentAndUpdateShiprocket } from "../controllers/orderController.js";
+import { addProductToCart, incrementProductQuantityInCart, decrementProductQuantityInCart, deleteProductFromCart, cartDetails, allCartDetails, couponCodeList, createAddress, editAddress, getAddress, getAllAddress, createOrder, cancelOrder, orderList, orderDetails, retailerOrderList, retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetails, orderChangeStatus, createOrderV2, orderListV2, orderDetailsV2, retailerOrderDetailsV2, paymentWebhookCall, getUserAllAddress, createOrderWithShiprocket, processPaymentAndUpdateShiprocket, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy } from "../controllers/orderController.js";
 import { retailerAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { webhookTracking } from '../controllers/shiprocketController.js';
 const orderRouter = express.Router();
@@ -52,6 +52,9 @@ orderRouter.post('/delivery/tracking/webhook', webhookTracking);
 orderRouter.get('/retailer/pending/order/list/v2', retailerAuthentication, retailerPendingOrderList);
 orderRouter.get('/retailer/order/history/list/v2', retailerAuthentication, retailerOrderHistoryList);
 orderRouter.get('/retailer/order/details/:id/v2', retailerAuthentication, retailerOrderDetailsV2);
+orderRouter.get('/retailer/delivery/assigned/list/v1', retailerAuthentication, retailerAssignedDeliveries);
+orderRouter.get('/retailer/delivery/boys/v1', retailerAuthentication, retailerAvailableDeliveryBoys);
+orderRouter.post('/retailer/delivery/assign/v1', retailerAuthentication, retailerAssignOrderToDeliveryBoy);
 orderRouter.put('/retailer/order/change/status/:id/v1', retailerAuthentication, orderChangeStatus);
 
 

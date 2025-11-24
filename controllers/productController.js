@@ -403,6 +403,7 @@ export const productList = async (req, res) => {
     try {
         let { skip, search } = req.query;
         skip = skip || 1;
+        const trimmedSearch = typeof search === 'string' ? search.trim() : '';
 
         // Build match query
         const matchQuery = {
@@ -411,8 +412,8 @@ export const productList = async (req, res) => {
         };
 
         // Add search filter if search term is provided
-        if (search && search.trim()) {
-            const searchRegex = new RegExp(search.trim(), 'i');
+        if (trimmedSearch) {
+            const searchRegex = new RegExp(trimmedSearch, 'i');
             matchQuery.$or = [
                 { productName: { $regex: searchRegex } },
                 { companyName: { $regex: searchRegex } },
@@ -436,6 +437,14 @@ export const productList = async (req, res) => {
                 $limit: limit
             }
         ]);
+
+        if (trimmedSearch && list.length === 0) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Product not found for the provided search term."
+            });
+        }
 
         const listWithPrimaryImage = list.map((product) =>
             applyPrimaryImageFallback(product)

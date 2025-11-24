@@ -14,6 +14,7 @@ import mongoose from "mongoose";
 import crypto from "crypto";
 import axios from "axios";
 import ShiprocketService from "../helper/shiprocketService.js";
+import DeliveryBoy from "../models/DeliveryBoy.js";
 import {
   handleLocalStoreOrderCallback,
   handleOnlineStoreOrderCallback,
@@ -27,6 +28,37 @@ const { ObjectId } = mongoose.Types;
 
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
+
+const IN_PROGRESS_STATUSES = ["Accepted", "Product shipped", "On the way", "Your Destination"];
+
+const toRadians = (value = 0) => (value * Math.PI) / 180;
+
+const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
+  if (
+    typeof lat1 !== "number" ||
+    typeof lon1 !== "number" ||
+    typeof lat2 !== "number" ||
+    typeof lon2 !== "number"
+  ) {
+    return null;
+  }
+
+  const earthRadiusKm = 6371;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const distance = earthRadiusKm * c;
+
+  return Number.isFinite(distance) ? Number(distance.toFixed(2)) : null;
+};
 
 export const createOrder = async (req, res) => {
   try {
@@ -2531,6 +2563,378 @@ export const retailerOrderDetailsV2 = async (req, res) => {
       message: error.message,
     });
     return catchError("retailerOrderDetailsV2", error, req, res);
+  }
+};
+
+export const retailerAssignedDeliveries = async (req, res) => {
+  try {
+    const { page = 1, limit: limitQuery = 10, status: statusQuery, search = "" } = req.query;
+
+    const store = await Store.findOne({ createdBy: req.user._id }).lean();
+    if (!store) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Store not found",
+      });
+    }
+
+    const pageNumber = Number(page) > 0 ? Number(page) : 1;
+    const pageSizeRaw = Number(limitQuery) > 0 ? Number(limitQuery) : 10;
+    const pageSize = pageSizeRaw > 50 ? 50 : pageSizeRaw;
+    const skip = (pageNumber - 1) * pageSize;
+
+    const allowedStatuses = [
+      "Pending",
+      "Accepted",
+      "Product shipped",
+      "On the way",
+      "Your Destination",
+      "Delivered",
+    ];
+
+    const baseMatch = {
+      storeId: store._id,
+      paymentStatus: "SUCCESS",
+    };
+
+    const listMatch = {
+      ...baseMatch,
+      status: { $in: allowedStatuses },
+    };
+
+    if (statusQuery) {
+      const requestedStatuses = statusQuery
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+
+      if (requestedStatuses.length) {
+        listMatch.status = { $in: requestedStatuses };
+      }
+    }
+
+    if (search?.trim()) {
+      const regex = new RegExp(search.trim(), "i");
+      listMatch.$or = [{ orderId: regex }, { "address.name": regex }, { "address.number": regex }];
+    }
+
+    const [totalDeliveries, orders] = await Promise.all([
+      Order.countDocuments(listMatch),
+      Order.find(listMatch)
+        .populate("assignedDeliveryBoy", "firstName lastName phone availabilityStatus currentLocation vehicleType totalDeliveries")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageSize)
+        .lean(),
+    ]);
+
+    const storeCoords = store?.location?.coordinates || [];
+    const storeLat = typeof storeCoords[1] === "number" ? storeCoords[1] : null;
+    const storeLng = typeof storeCoords[0] === "number" ? storeCoords[0] : null;
+
+    const deliveries = orders.map((order) => {
+      const customerLat = order.address?.lat !== undefined ? Number(order.address.lat) : null;
+      const customerLng = order.address?.long !== undefined ? Number(order.address.long) : null;
+      const hasCustomerCoords =
+        typeof customerLat === "number" &&
+        typeof customerLng === "number" &&
+        !Number.isNaN(customerLat) &&
+        !Number.isNaN(customerLng);
+
+      const distanceKm =
+        storeLat !== null && storeLng !== null && hasCustomerCoords
+          ? calculateDistanceKm(storeLat, storeLng, customerLat, customerLng)
+          : null;
+
+      const deliveryBoy = order.assignedDeliveryBoy
+        ? {
+            id: order.assignedDeliveryBoy._id,
+            name: [order.assignedDeliveryBoy.firstName, order.assignedDeliveryBoy.lastName].filter(Boolean).join(" ").trim(),
+            phone: order.assignedDeliveryBoy.phone,
+            availabilityStatus: order.assignedDeliveryBoy.availabilityStatus,
+            vehicleType: order.assignedDeliveryBoy.vehicleType,
+          }
+        : null;
+
+      const formattedAddress = [
+        order.address?.flatHouse,
+        order.address?.address_1,
+        order.address?.city,
+        order.address?.pincode,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      return {
+        orderMongoId: order._id,
+        orderId: order.orderId,
+        amount: order.summary?.grandTotal || order.summary?.totalAmount || 0,
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+        customerName: order.address?.name || "Customer",
+        customerPhone: order.address?.number || null,
+        address: formattedAddress,
+        distanceKm,
+        assignedDeliveryBoy: deliveryBoy,
+        createdAt: order.createdAt,
+        estimatedDate: order.estimatedDate,
+      };
+    });
+
+    const [lifetimeStatsRaw] = await Order.aggregate([
+      { $match: baseMatch },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          completed: {
+            $sum: {
+              $cond: [{ $eq: ["$status", "Delivered"] }, 1, 0],
+            },
+          },
+          inProgress: {
+            $sum: {
+              $cond: [{ $in: ["$status", IN_PROGRESS_STATUSES] }, 1, 0],
+            },
+          },
+        },
+      },
+    ]);
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const [todayStatsRaw] = await Order.aggregate([
+      {
+        $match: {
+          ...baseMatch,
+          createdAt: { $gte: todayStart, $lte: todayEnd },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          assigned: {
+            $sum: {
+              $cond: [{ $ifNull: ["$assignedDeliveryBoy", false] }, 1, 0],
+            },
+          },
+          delivered: {
+            $sum: {
+              $cond: [{ $eq: ["$status", "Delivered"] }, 1, 0],
+            },
+          },
+          onTheWay: {
+            $sum: {
+              $cond: [{ $in: ["$status", ["Product shipped", "On the way", "Your Destination"]] }, 1, 0],
+            },
+          },
+          earnings: {
+            $sum: {
+              $cond: [{ $eq: ["$status", "Delivered"] }, "$summary.grandTotal", 0],
+            },
+          },
+        },
+      },
+    ]);
+
+    res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      data: {
+        summary: {
+          lifetime: {
+            totalDeliveries: lifetimeStatsRaw?.total || 0,
+            completed: lifetimeStatsRaw?.completed || 0,
+            inProgress: lifetimeStatsRaw?.inProgress || 0,
+          },
+          today: {
+            assigned: todayStatsRaw?.assigned || 0,
+            delivered: todayStatsRaw?.delivered || 0,
+            onTheWay: todayStatsRaw?.onTheWay || 0,
+            earnings: todayStatsRaw?.earnings || 0,
+          },
+        },
+        pagination: {
+          page: pageNumber,
+          limit: pageSize,
+          total: totalDeliveries,
+          totalPages: totalDeliveries ? Math.ceil(totalDeliveries / pageSize) : 0,
+        },
+        deliveries,
+      },
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("retailerAssignedDeliveries", error, req, res);
+  }
+};
+
+export const retailerAvailableDeliveryBoys = async (req, res) => {
+  try {
+    const { status: availabilityStatus = "available", search = "", limit: limitQuery = 25 } = req.query;
+
+    const pageSizeRaw = Number(limitQuery) > 0 ? Number(limitQuery) : 25;
+    const pageSize = pageSizeRaw > 100 ? 100 : pageSizeRaw;
+
+    const filters = {
+      isDeleted: false,
+      isActive: true,
+    };
+
+    if (availabilityStatus && availabilityStatus !== "all") {
+      filters.availabilityStatus = availabilityStatus;
+    }
+
+    if (search.trim()) {
+      const regex = new RegExp(search.trim(), "i");
+      filters.$or = [
+        { firstName: regex },
+        { lastName: regex },
+        { phone: regex },
+        { city: regex },
+        { workCity: regex },
+      ];
+    }
+
+    const deliveryBoys = await DeliveryBoy.find(filters)
+      .sort({ availabilityStatus: 1, rating: -1 })
+      .limit(pageSize)
+      .select("firstName lastName phone city workCity availabilityStatus currentLocation totalDeliveries rating vehicleType walletBalance");
+
+    res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      data: deliveryBoys.map((boy) => ({
+        id: boy._id,
+        name: [boy.firstName, boy.lastName].filter(Boolean).join(" ").trim(),
+        phone: boy.phone,
+        city: boy.city || boy.workCity || null,
+        availabilityStatus: boy.availabilityStatus,
+        location: boy.currentLocation,
+        totalDeliveries: boy.totalDeliveries,
+        rating: boy.rating,
+        vehicleType: boy.vehicleType,
+      })),
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("retailerAvailableDeliveryBoys", error, req, res);
+  }
+};
+
+export const retailerAssignOrderToDeliveryBoy = async (req, res) => {
+  try {
+    const { orderId, deliveryBoyId } = req.body;
+
+    if (!orderId || !deliveryBoyId) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "orderId and deliveryBoyId are required",
+      });
+    }
+
+    const store = await Store.findOne({ createdBy: req.user._id });
+    if (!store) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Store not found",
+      });
+    }
+
+    const order = await Order.findOne({ _id: orderId, storeId: store._id });
+    if (!order) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    if (order.paymentStatus !== "SUCCESS") {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Order payment is not completed yet",
+      });
+    }
+
+    const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+    if (!deliveryBoy || deliveryBoy.isDeleted || deliveryBoy.isActive === false) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Delivery boy not found or inactive",
+      });
+    }
+
+    if (
+      order.assignedDeliveryBoy &&
+      order.assignedDeliveryBoy.toString() !== deliveryBoyId.toString()
+    ) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Order already assigned to another delivery boy",
+      });
+    }
+
+    if (
+      order.assignedDeliveryBoy &&
+      order.assignedDeliveryBoy.toString() === deliveryBoyId.toString()
+    ) {
+      return res.status(status.OK).json({
+        status: jsonStatus.OK,
+        success: true,
+        message: "Order is already assigned to this delivery boy",
+        data: order,
+      });
+    }
+
+    order.assignedDeliveryBoy = deliveryBoyId;
+    if (order.status === "Pending") {
+      order.status = "Accepted";
+    }
+    order.acceptedAt = order.acceptedAt || new Date();
+    await order.save();
+
+    deliveryBoy.availabilityStatus = "on_delivery";
+    deliveryBoy.assignedOrders = deliveryBoy.assignedOrders || [];
+    if (!deliveryBoy.assignedOrders.some((assignedOrderId) => assignedOrderId.toString() === order._id.toString())) {
+      deliveryBoy.assignedOrders.push(order._id);
+    }
+    await deliveryBoy.save();
+
+    const populatedOrder = await Order.findById(order._id)
+      .populate("assignedDeliveryBoy", "firstName lastName phone availabilityStatus vehicleType")
+      .lean();
+
+    res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      message: "Order assigned successfully",
+      data: populatedOrder,
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("retailerAssignOrderToDeliveryBoy", error, req, res);
   }
 };
 

@@ -1,6 +1,6 @@
 import express from "express";
 import { body } from 'express-validator';
-import { deliveryBoyAuthentication } from "../middlewares/middleware.js";
+import { adminAuthentication, deliveryBoyAuthentication } from "../middlewares/middleware.js";
 import { uploadDeliveryBoyImage } from "../helper/uploadImage.js";
 import { getDeliveryNotifications, markDeliveryNotificationRead, clearDeliveryNotifications } from "../controllers/notificationController.js";
 
@@ -39,7 +39,8 @@ import {
     getDeductions,
     getDeductionDetail,
     getPayableQR,
-    confirmPayable
+    confirmPayable,
+    assignOrderToDeliveryBoy
 } from "../controllers/DeliveryBoyController.js";
 
 const deliveryRouter = express.Router();
@@ -89,6 +90,7 @@ deliveryRouter.put('/deliveryboy/update/work/details/v1', deliveryBoyAuthenticat
 /* ===========================
      ORDER MANAGEMENT APIs
 =========================== */
+deliveryRouter.post('/deliveryboy/admin/assign/order/v1', adminAuthentication, assignOrderToDeliveryBoy);
 deliveryRouter.get('/deliveryboy/new/orders/v1', deliveryBoyAuthentication, getNewOrders);
 deliveryRouter.post('/deliveryboy/skip/order/v1', deliveryBoyAuthentication, skipOrder);
 deliveryRouter.post('/deliveryboy/accept/order/v1', deliveryBoyAuthentication, acceptOrder);

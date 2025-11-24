@@ -222,6 +222,91 @@ export const acceptOrder = async (req, res) => {
     }
 };
 
+export const assignOrderToDeliveryBoy = async (req, res) => {
+    try {
+        const { orderId, deliveryBoyId } = req.body;
+
+        if (!orderId || !deliveryBoyId) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "orderId and deliveryBoyId are required"
+            });
+        }
+
+        const order = await Order.findById(orderId);
+        if (!order) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Order not found"
+            });
+        }
+
+        const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
+        if (!deliveryBoy) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Delivery boy not found"
+            });
+        }
+
+        if (
+            order.assignedDeliveryBoy &&
+            order.assignedDeliveryBoy.toString() !== deliveryBoyId.toString()
+        ) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Order already assigned to another delivery boy"
+            });
+        }
+
+        if (order.paymentStatus !== "SUCCESS") {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Order payment is not completed"
+            });
+        }
+
+        order.assignedDeliveryBoy = deliveryBoyId;
+        if (["Pending", "Product shipped"].includes(order.status)) {
+            order.status = "On the way";
+        }
+        order.acceptedAt = order.acceptedAt || new Date();
+        await order.save();
+
+        deliveryBoy.availabilityStatus = "on_delivery";
+        await deliveryBoy.save();
+
+        try {
+            const { notifyDeliveryStatus } = await import("../helper/notificationHelper.js");
+            const store = await Store.findById(order.storeId);
+            if (store && store.createdBy) {
+                await notifyDeliveryStatus(store.createdBy, order, "On the way");
+            }
+        } catch (notifError) {
+            console.error("Error sending assignment notification:", notifError);
+        }
+
+        return res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Order assigned successfully",
+            data: order
+        });
+    } catch (error) {
+        console.error("assignOrderToDeliveryBoy error:", error);
+        return res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+    }
+};
+
 // Pickup order from store
 export const pickupOrder = async (req, res) => {
     try {
