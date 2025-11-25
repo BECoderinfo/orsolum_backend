@@ -871,6 +871,44 @@ const buildDiscoverySection = ({ key, title, items, meta, viewAllEndpoint, descr
     items
 });
 
+const parseSectionsParam = (sectionsParam) => {
+    if (!sectionsParam) {
+        return new Set(["explore", "popularCategories", "popularBrands"]);
+    }
+
+    const normalized = sectionsParam
+        .split(",")
+        .map((section) => section.trim().toLowerCase())
+        .filter(Boolean);
+
+    const allowed = new Set(["explore", "popularcategories", "popularbrands"]);
+    const resolved = normalized
+        .map((key) => {
+            if (key === "popularcategories") return "popularCategories";
+            if (key === "popularbrands") return "popularBrands";
+            if (key === "explore") return "explore";
+            return null;
+        })
+        .filter(Boolean);
+
+    if (!resolved.length) {
+        return new Set(["explore", "popularCategories", "popularBrands"]);
+    }
+
+    return new Set(resolved);
+};
+
+const fetchUserCartCount = async (userId) => {
+    let totalCartCount = 0;
+    const carts = await OnlineStoreCart.find({ deleted: false, createdBy: userId });
+    if (carts.length > 0) {
+        carts.forEach(elem => {
+            totalCartCount += elem.quantity;
+        });
+    }
+    return totalCartCount;
+};
+
 export const onlineStoreDiscovery = async (req, res) => {
     try {
         const normalized = (value) => value?.trim() || '';
@@ -899,86 +937,254 @@ export const onlineStoreDiscovery = async (req, res) => {
 
         const skipCalc = (page, pageSize) => (page - 1) * pageSize;
 
-        const [
-            exploreItems,
-            popularCategories,
-            popularBrands,
-            exploreTotal,
-            categoryTotal,
-            brandTotal
-        ] = await Promise.all([
-            SubCategory.aggregate([
-                { $match: exploreMatch },
-                { $sort: { createdAt: -1 } },
-                { $skip: skipCalc(explorePage, exploreLimitVal) },
-                { $limit: exploreLimitVal }
-            ]),
-            Category.aggregate([
-                { $match: categoryMatch },
-                { $sort: { createdAt: -1 } },
-                { $skip: skipCalc(categoryPage, categoryLimitVal) },
-                { $limit: categoryLimitVal }
-            ]),
-            Brand.aggregate([
-                { $match: brandMatch },
-                { $sort: { createdAt: -1 } },
-                { $skip: skipCalc(brandPage, brandLimitVal) },
-                { $limit: brandLimitVal }
-            ]),
-            SubCategory.countDocuments(exploreMatch),
-            Category.countDocuments(categoryMatch),
-            Brand.countDocuments(brandMatch)
+        const requestedSections = parseSectionsParam(req.query.sections);
+
+        const shouldSendExplore = requestedSections.has("explore");
+        const shouldSendCategories = requestedSections.has("popularCategories");
+        const shouldSendBrands = requestedSections.has("popularBrands");
+
+        const fetchExplore = async () => {
+            const [items, total] = await Promise.all([
+                SubCategory.aggregate([
+                    { $match: exploreMatch },
+                    { $sort: { createdAt: -1 } },
+                    { $skip: skipCalc(explorePage, exploreLimitVal) },
+                    { $limit: exploreLimitVal }
+                ]),
+                SubCategory.countDocuments(exploreMatch)
+            ]);
+            return { items, total };
+        };
+
+        const fetchCategories = async () => {
+            const [items, total] = await Promise.all([
+                Category.aggregate([
+                    { $match: categoryMatch },
+                    { $sort: { createdAt: -1 } },
+                    { $skip: skipCalc(categoryPage, categoryLimitVal) },
+                    { $limit: categoryLimitVal }
+                ]),
+                Category.countDocuments(categoryMatch)
+            ]);
+            return { items, total };
+        };
+
+        const fetchBrands = async () => {
+            const [items, total] = await Promise.all([
+                Brand.aggregate([
+                    { $match: brandMatch },
+                    { $sort: { createdAt: -1 } },
+                    { $skip: skipCalc(brandPage, brandLimitVal) },
+                    { $limit: brandLimitVal }
+                ]),
+                Brand.countDocuments(brandMatch)
+            ]);
+            return { items, total };
+        };
+
+        const [exploreData, categoriesData, brandsData] = await Promise.all([
+            shouldSendExplore ? fetchExplore() : Promise.resolve(null),
+            shouldSendCategories ? fetchCategories() : Promise.resolve(null),
+            shouldSendBrands ? fetchBrands() : Promise.resolve(null)
         ]);
 
-        let totalCartCount = 0;
-        const carts = await OnlineStoreCart.find({ deleted: false, createdBy: req.user._id });
-        if (carts.length > 0) {
-            carts.map(elem => {
-                totalCartCount += elem.quantity;
-            })
-        }
+        const totalCartCount = await fetchUserCartCount(req.user._id);
 
-        const sections = {
-            explore: buildDiscoverySection({
+        const sections = {};
+
+        if (shouldSendExplore && exploreData) {
+            sections.explore = buildDiscoverySection({
                 key: "explore",
                 title: "Explore",
                 description: "Discover quick picks handpicked for you",
-                items: exploreItems,
-                meta: buildMeta(exploreTotal, explorePage, exploreLimitVal),
+                items: exploreData.items,
+                meta: buildMeta(exploreData.total, explorePage, exploreLimitVal),
                 viewAllEndpoint: "/api/online/store/all/sub/categories/v1"
-            }),
-            popularCategories: buildDiscoverySection({
+            });
+        }
+
+        if (shouldSendCategories && categoriesData) {
+            sections.popularCategories = buildDiscoverySection({
                 key: "popularCategories",
                 title: "Popular Categories",
                 description: "Top categories users are browsing right now",
-                items: popularCategories,
-                meta: buildMeta(categoryTotal, categoryPage, categoryLimitVal),
+                items: categoriesData.items,
+                meta: buildMeta(categoriesData.total, categoryPage, categoryLimitVal),
                 viewAllEndpoint: "/api/online/store/all/categories/v1"
-            }),
-            popularBrands: buildDiscoverySection({
+            });
+        }
+
+        if (shouldSendBrands && brandsData) {
+            sections.popularBrands = buildDiscoverySection({
                 key: "popularBrands",
                 title: "Popular Brands",
                 description: "Trending brands trusted by our customers",
-                items: popularBrands,
-                meta: buildMeta(brandTotal, brandPage, brandLimitVal),
+                items: brandsData.items,
+                meta: buildMeta(brandsData.total, brandPage, brandLimitVal),
                 viewAllEndpoint: "/api/online/store/all/brands/v1"
-            })
-        };
+            });
+        }
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
             data: {
                 totalCartCount,
+                requestedSections: Array.from(requestedSections),
                 sections,
-                explore: sections.explore,
-                popularCategories: sections.popularCategories,
-                popularBrands: sections.popularBrands
+                ...(sections.explore && { explore: sections.explore }),
+                ...(sections.popularCategories && { popularCategories: sections.popularCategories }),
+                ...(sections.popularBrands && { popularBrands: sections.popularBrands })
             }
         });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('onlineStoreDiscovery', error, req, res);
+    }
+};
+
+const buildSectionResponse = ({ key, title, description, items, total, page, pageSize, viewAllEndpoint }) => ({
+    section: key,
+    title,
+    description,
+    items,
+    meta: buildMeta(total, page, pageSize),
+    viewAllEndpoint
+});
+
+export const onlineStoreExploreCards = async (req, res) => {
+    try {
+        const search = req.query.search?.trim() || req.query.exploreSearch?.trim() || '';
+        const page = parsePositiveInt(req.query.skip || req.query.page, 1);
+        const pageSize = parsePositiveInt(req.query.limit || req.query.exploreLimit, limit || 10);
+
+        const match = buildMatchStage(search);
+        if (req.query.categoryId) {
+            match.categoryId = new ObjectId(req.query.categoryId);
+        }
+
+        const skip = (page - 1) * pageSize;
+
+        const [items, total] = await Promise.all([
+            SubCategory.aggregate([
+                { $match: match },
+                { $sort: { createdAt: -1 } },
+                { $skip: skip },
+                { $limit: pageSize }
+            ]),
+            SubCategory.countDocuments(match)
+        ]);
+
+        const totalCartCount = await fetchUserCartCount(req.user._id);
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: {
+                totalCartCount,
+                ...buildSectionResponse({
+                    key: "explore",
+                    title: "Explore",
+                    description: "Discover quick picks handpicked for you",
+                    items,
+                    total,
+                    page,
+                    pageSize,
+                    viewAllEndpoint: "/api/online/store/all/sub/categories/v1"
+                })
+            }
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        return catchError('onlineStoreExploreCards', error, req, res);
+    }
+};
+
+export const onlineStorePopularCategories = async (req, res) => {
+    try {
+        const search = req.query.search?.trim() || req.query.categorySearch?.trim() || '';
+        const page = parsePositiveInt(req.query.skip || req.query.page, 1);
+        const pageSize = parsePositiveInt(req.query.limit || req.query.categoryLimit, limit || 10);
+
+        const match = buildMatchStage(search);
+        const skip = (page - 1) * pageSize;
+
+        const [items, total] = await Promise.all([
+            Category.aggregate([
+                { $match: match },
+                { $sort: { createdAt: -1 } },
+                { $skip: skip },
+                { $limit: pageSize }
+            ]),
+            Category.countDocuments(match)
+        ]);
+
+        const totalCartCount = await fetchUserCartCount(req.user._id);
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: {
+                totalCartCount,
+                ...buildSectionResponse({
+                    key: "popularCategories",
+                    title: "Popular Categories",
+                    description: "Top categories users are browsing right now",
+                    items,
+                    total,
+                    page,
+                    pageSize,
+                    viewAllEndpoint: "/api/online/store/all/categories/v1"
+                })
+            }
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        return catchError('onlineStorePopularCategories', error, req, res);
+    }
+};
+
+export const onlineStorePopularBrands = async (req, res) => {
+    try {
+        const search = req.query.search?.trim() || req.query.brandSearch?.trim() || '';
+        const page = parsePositiveInt(req.query.skip || req.query.page, 1);
+        const pageSize = parsePositiveInt(req.query.limit || req.query.brandLimit, limit || 10);
+
+        const match = buildMatchStage(search);
+        const skip = (page - 1) * pageSize;
+
+        const [items, total] = await Promise.all([
+            Brand.aggregate([
+                { $match: match },
+                { $sort: { createdAt: -1 } },
+                { $skip: skip },
+                { $limit: pageSize }
+            ]),
+            Brand.countDocuments(match)
+        ]);
+
+        const totalCartCount = await fetchUserCartCount(req.user._id);
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: {
+                totalCartCount,
+                ...buildSectionResponse({
+                    key: "popularBrands",
+                    title: "Popular Brands",
+                    description: "Trending brands trusted by our customers",
+                    items,
+                    total,
+                    page,
+                    pageSize,
+                    viewAllEndpoint: "/api/online/store/all/brands/v1"
+                })
+            }
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        return catchError('onlineStorePopularBrands', error, req, res);
     }
 };
 

@@ -28,6 +28,9 @@ import {
   allCategories,
   allSubCategories,
   allBrands,
+  onlineStoreExploreCards,
+  onlineStorePopularCategories,
+  onlineStorePopularBrands,
   onlineStoreDiscovery,
   onlineProductsList,
   onlineProductsDetails,
@@ -178,6 +181,9 @@ onlineStoreRouter.get('/online/store/all/categories/v1', userAuthentication, all
 onlineStoreRouter.get('/online/store/all/sub/categories/v1', userAuthentication, allSubCategories);
 onlineStoreRouter.get('/online/store/all/brands/v1', userAuthentication, allBrands);
 onlineStoreRouter.get('/online/store/discovery/v1', userAuthentication, onlineStoreDiscovery);
+onlineStoreRouter.get('/online/store/explore/cards/v1', userAuthentication, onlineStoreExploreCards);
+onlineStoreRouter.get('/online/store/popular/categories/v1', userAuthentication, onlineStorePopularCategories);
+onlineStoreRouter.get('/online/store/popular/brands/v1', userAuthentication, onlineStorePopularBrands);
 onlineStoreRouter.get('/online/store/products/list/v1', userAuthentication, onlineProductsList);
 onlineStoreRouter.get('/online/store/products/details/:id/v1', userAuthentication, onlineProductsDetails);
 

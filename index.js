@@ -31,6 +31,7 @@ import paymentRouter from "./routes/paymentRouter.js";
 import sellerRouter from "./routes/sellerRouter.js";
 import pickupAddressRouter from "./routes/pickupAddressRouter.js";
 import { webhookTracking } from "./controllers/shiprocketController.js";
+import { renderSharedProfilePage } from "./controllers/userController.js";
 
 dotEnv.config({ path: './.env' });
 
@@ -68,6 +69,8 @@ app.get("/", (req, res) => {
     serverTime: new Date().toLocaleString(),
   });
 });
+
+app.get("/u/:id", renderSharedProfilePage);
 
 // ✅ Cron Job to check premium expiry daily at 12:01 AM
 cron.schedule("1 0 * * *", () => {

@@ -191,13 +191,228 @@ export const getMyProfile = async (req, res) => {
     }
 };
 
-const buildShareBaseUrl = () => {
-    const base =
-        process.env.USER_PROFILE_SHARE_BASE_URL ||
-        process.env.USER_APP_SHARE_BASE_URL ||
-        "https://orsolum.com/u";
+const trimTrailingSlash = (value = "") =>
+    value.endsWith("/") ? value.slice(0, -1) : value;
 
-    return base.endsWith("/") ? base.slice(0, -1) : base;
+const buildShareBaseUrl = (req) => {
+    const envBase =
+        process.env.USER_PROFILE_SHARE_BASE_URL ||
+        process.env.USER_APP_SHARE_BASE_URL;
+
+    if (envBase) {
+        return trimTrailingSlash(envBase);
+    }
+
+    if (req?.protocol && req?.get) {
+        return `${req.protocol}://${req.get("host")}/u`;
+    }
+
+    return "https://orsolum.com/u";
+};
+
+const buildSharePreviewImage = (image) => {
+    if (image && image.startsWith("http")) {
+        return image;
+    }
+    if (image) {
+        const cdn =
+            process.env.CDN_BASE_URL ||
+            process.env.AWS_CDN_BASE_URL ||
+            "";
+        return cdn ? `${cdn.replace(/\/$/, "")}/${image}` : image;
+    }
+    return (
+        process.env.USER_PROFILE_SHARE_PLACEHOLDER ||
+        "https://cdn.orsolum.com/static/default-user.png"
+    );
+};
+
+const buildShareHtml = ({ user, shareUrl }) => {
+    const name = user.name || "Orsolum User";
+    const location = [user.city, user.state].filter(Boolean).join(", ");
+    const previewImage = buildSharePreviewImage(user.image);
+    const description = location
+        ? `Connect with ${name} from ${location} on Orsolum`
+        : `Connect with ${name} on Orsolum`;
+    const appStoreLink =
+        process.env.USER_APP_PLAYSTORE_URL ||
+        "https://play.google.com/store/apps/details?id=com.orsolum.app";
+    const appStoreText = process.env.USER_APP_NAME || "Orsolum";
+
+    return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${name} • Orsolum</title>
+  <meta name="description" content="${description}" />
+  <meta property="og:type" content="profile" />
+  <meta property="og:title" content="${name} • Orsolum" />
+  <meta property="og:description" content="${description}" />
+  <meta property="og:image" content="${previewImage}" />
+  <meta property="og:url" content="${shareUrl}" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="${name} • Orsolum" />
+  <meta name="twitter:description" content="${description}" />
+  <meta name="twitter:image" content="${previewImage}" />
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+      background: radial-gradient(circle at top, #ecfdf5, #f8fafc);
+      color: #0f172a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 28px;
+      box-shadow: 0 30px 65px rgba(15, 23, 42, 0.1);
+      max-width: 520px;
+      width: 100%;
+      padding: 38px;
+      text-align: center;
+    }
+    .avatar {
+      width: 132px;
+      height: 132px;
+      border-radius: 50%;
+      object-fit: cover;
+      margin-bottom: 24px;
+      border: 6px solid #d1fae5;
+      box-shadow: 0 12px 30px rgba(16, 185, 129, 0.2);
+    }
+    h1 {
+      margin: 0;
+      font-size: 2rem;
+      color: #0f172a;
+    }
+    .location {
+      margin: 10px 0 18px;
+      color: #475569;
+      font-size: 1rem;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: ${user.isPremium ? "#ecfccb" : "#e2e8f0"};
+      color: ${user.isPremium ? "#4d7c0f" : "#475569"};
+      font-weight: 600;
+      font-size: 0.85rem;
+      margin-bottom: 18px;
+    }
+    .details {
+      text-align: left;
+      margin-top: 20px;
+      border-top: 1px solid #e2e8f0;
+      padding-top: 20px;
+    }
+    .detail-row {
+      margin-bottom: 12px;
+    }
+    .detail-label {
+      display: block;
+      font-size: 0.85rem;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .detail-value {
+      font-size: 1.05rem;
+      color: #0f172a;
+      font-weight: 600;
+    }
+    .cta-group {
+      margin-top: 28px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      justify-content: center;
+    }
+    .cta {
+      flex: 1 1 180px;
+      text-align: center;
+      background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
+      color: #fff;
+      padding: 14px 24px;
+      border-radius: 16px;
+      text-decoration: none;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      box-shadow: 0 12px 30px rgba(34, 197, 94, 0.35);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .cta.secondary {
+      background: #e2e8f0;
+      color: #0f172a;
+      box-shadow: none;
+    }
+    .cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 20px 40px rgba(34, 197, 94, 0.4);
+    }
+    .footer {
+      margin-top: 24px;
+      font-size: 0.9rem;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <img class="avatar" src="${previewImage}" alt="${name}" />
+    <h1>${name}</h1>
+    ${location ? `<p class="location">${location}</p>` : ""}
+    <div class="badge">
+      ${user.isPremium ? "🌟 Premium Member" : "Orsolum Member"}
+    </div>
+
+    <div class="details">
+      ${user.entity ? `
+        <div class="detail-row">
+          <span class="detail-label">Business</span>
+          <span class="detail-value">${user.entity}</span>
+        </div>
+      ` : ""}
+      ${user.address ? `
+        <div class="detail-row">
+          <span class="detail-label">Address</span>
+          <span class="detail-value">${user.address}</span>
+        </div>
+      ` : ""}
+      ${user.phone ? `
+        <div class="detail-row">
+          <span class="detail-label">Phone</span>
+          <span class="detail-value">${user.phone}</span>
+        </div>
+      ` : ""}
+    </div>
+
+    <div class="cta-group">
+      <a class="cta" href="${appStoreLink}" target="_blank" rel="noopener noreferrer">
+        Open in ${appStoreText}
+      </a>
+      ${user.phone ? `
+        <a class="cta secondary" href="tel:${user.phone.replace(/\s|\+91/g, '')}">
+          Call ${user.name?.split(" ")[0] || "Now"}
+        </a>
+      ` : ""}
+    </div>
+
+    <div class="footer">
+      Share link: <a href="${shareUrl}">${shareUrl}</a>
+    </div>
+  </main>
+</body>
+</html>
+`;
 };
 
 export const shareMyProfile = async (req, res) => {
@@ -213,7 +428,7 @@ export const shareMyProfile = async (req, res) => {
             });
         }
 
-        const shareBaseUrl = buildShareBaseUrl();
+        const shareBaseUrl = trimTrailingSlash(buildShareBaseUrl(req));
         const shareUrl = `${shareBaseUrl}/${user._id}`;
 
         const location = [user.city, user.state].filter(Boolean).join(", ");
@@ -256,6 +471,49 @@ export const shareMyProfile = async (req, res) => {
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('shareMyProfile', error, req, res);
+    }
+};
+
+export const renderSharedProfilePage = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const user = await User.findById(id).select("name city state phone image entity address isPremium role");
+
+        if (!user) {
+            return res.status(404).send(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8" />
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                    <title>Profile Not Found • Orsolum</title>
+                    <style>
+                        body {font-family: Arial, sans-serif; background:#0f172a; color:#fff; display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0;}
+                        .box {text-align:center; padding:32px;}
+                        a {color:#22d3ee;}
+                    </style>
+                </head>
+                <body>
+                    <div class="box">
+                        <h1>Profile not found</h1>
+                        <p>The invite link is invalid or has expired.</p>
+                        <a href="https://orsolum.com">Go to Orsolum</a>
+                    </div>
+                </body>
+                </html>
+            `);
+        }
+
+        const shareBaseUrl = trimTrailingSlash(buildShareBaseUrl(req));
+        const shareUrl = `${shareBaseUrl}/${user._id}`;
+        const html = buildShareHtml({ user, shareUrl });
+
+        res.set("Content-Type", "text/html").status(200).send(html);
+    } catch (error) {
+        console.error("renderSharedProfilePage error:", error);
+        res
+            .status(status.InternalServerError)
+            .send("Unable to render profile preview right now. Please try again later.");
     }
 };
 
