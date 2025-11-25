@@ -845,6 +845,143 @@ export const allBrands = async (req, res) => {
     }
 };
 
+const parsePositiveInt = (value, fallback) => {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const buildMatchStage = (searchText) => ({
+    deleted: false,
+    ...(searchText && { name: { $regex: searchText, $options: 'i' } })
+});
+
+const buildMeta = (total, page, pageSize) => ({
+    total,
+    page,
+    pageSize,
+    totalPages: Math.ceil(total / pageSize)
+});
+
+const buildDiscoverySection = ({ key, title, items, meta, viewAllEndpoint, description }) => ({
+    key,
+    title,
+    description: description || "",
+    viewAllEndpoint,
+    meta,
+    items
+});
+
+export const onlineStoreDiscovery = async (req, res) => {
+    try {
+        const normalized = (value) => value?.trim() || '';
+
+        const defaultLimit = limit || 10;
+
+        const exploreSearch = normalized(req.query.exploreSearch) || normalized(req.query.search);
+        const categorySearch = normalized(req.query.categorySearch) || normalized(req.query.search);
+        const brandSearch = normalized(req.query.brandSearch) || normalized(req.query.search);
+
+        const explorePage = parsePositiveInt(req.query.exploreSkip, 1);
+        const categoryPage = parsePositiveInt(req.query.categorySkip, 1);
+        const brandPage = parsePositiveInt(req.query.brandSkip, 1);
+
+        const exploreLimitVal = parsePositiveInt(req.query.exploreLimit, defaultLimit);
+        const categoryLimitVal = parsePositiveInt(req.query.categoryLimit, defaultLimit);
+        const brandLimitVal = parsePositiveInt(req.query.brandLimit, defaultLimit);
+
+        const exploreMatch = buildMatchStage(exploreSearch);
+        const categoryMatch = buildMatchStage(categorySearch);
+        const brandMatch = buildMatchStage(brandSearch);
+
+        if (req.query.categoryId) {
+            exploreMatch.categoryId = new ObjectId(req.query.categoryId);
+        }
+
+        const skipCalc = (page, pageSize) => (page - 1) * pageSize;
+
+        const [
+            exploreItems,
+            popularCategories,
+            popularBrands,
+            exploreTotal,
+            categoryTotal,
+            brandTotal
+        ] = await Promise.all([
+            SubCategory.aggregate([
+                { $match: exploreMatch },
+                { $sort: { createdAt: -1 } },
+                { $skip: skipCalc(explorePage, exploreLimitVal) },
+                { $limit: exploreLimitVal }
+            ]),
+            Category.aggregate([
+                { $match: categoryMatch },
+                { $sort: { createdAt: -1 } },
+                { $skip: skipCalc(categoryPage, categoryLimitVal) },
+                { $limit: categoryLimitVal }
+            ]),
+            Brand.aggregate([
+                { $match: brandMatch },
+                { $sort: { createdAt: -1 } },
+                { $skip: skipCalc(brandPage, brandLimitVal) },
+                { $limit: brandLimitVal }
+            ]),
+            SubCategory.countDocuments(exploreMatch),
+            Category.countDocuments(categoryMatch),
+            Brand.countDocuments(brandMatch)
+        ]);
+
+        let totalCartCount = 0;
+        const carts = await OnlineStoreCart.find({ deleted: false, createdBy: req.user._id });
+        if (carts.length > 0) {
+            carts.map(elem => {
+                totalCartCount += elem.quantity;
+            })
+        }
+
+        const sections = {
+            explore: buildDiscoverySection({
+                key: "explore",
+                title: "Explore",
+                description: "Discover quick picks handpicked for you",
+                items: exploreItems,
+                meta: buildMeta(exploreTotal, explorePage, exploreLimitVal),
+                viewAllEndpoint: "/api/online/store/all/sub/categories/v1"
+            }),
+            popularCategories: buildDiscoverySection({
+                key: "popularCategories",
+                title: "Popular Categories",
+                description: "Top categories users are browsing right now",
+                items: popularCategories,
+                meta: buildMeta(categoryTotal, categoryPage, categoryLimitVal),
+                viewAllEndpoint: "/api/online/store/all/categories/v1"
+            }),
+            popularBrands: buildDiscoverySection({
+                key: "popularBrands",
+                title: "Popular Brands",
+                description: "Trending brands trusted by our customers",
+                items: popularBrands,
+                meta: buildMeta(brandTotal, brandPage, brandLimitVal),
+                viewAllEndpoint: "/api/online/store/all/brands/v1"
+            })
+        };
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: {
+                totalCartCount,
+                sections,
+                explore: sections.explore,
+                popularCategories: sections.popularCategories,
+                popularBrands: sections.popularBrands
+            }
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        return catchError('onlineStoreDiscovery', error, req, res);
+    }
+};
+
 export const onlineProductsList = async (req, res) => {
     try {
 

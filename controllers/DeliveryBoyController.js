@@ -42,6 +42,8 @@ export const getNewOrders = async (req, res) => {
             .populate('createdBy', 'firstName lastName phone')
             .populate('storeId', 'storeName address phone')
             .populate('productDetails.productId', 'productName image')
+            .populate('shiprocket.pickup_addresses', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
+            .populate('shiprocket.default_pickup_address', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
             .sort({ createdAt: -1 })
             .limit(20);
 
@@ -573,6 +575,8 @@ export const getOngoingOrders = async (req, res) => {
             .populate('createdBy', 'firstName lastName phone')
             .populate('storeId', 'storeName address phone')
             .populate('productDetails.productId', 'productName image')
+            .populate('shiprocket.pickup_addresses', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
+            .populate('shiprocket.default_pickup_address', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
             .sort({ createdAt: -1 });
 
         res.status(200).json({
@@ -599,7 +603,9 @@ export const getOrderDetails = async (req, res) => {
             .populate('createdBy', 'firstName lastName phone')
             .populate('storeId', 'storeName address phone')
             .populate('productDetails.productId', 'productName image')
-            .populate('assignedDeliveryBoy', 'firstName lastName phone');
+            .populate('assignedDeliveryBoy', 'firstName lastName phone')
+            .populate('shiprocket.pickup_addresses', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
+            .populate('shiprocket.default_pickup_address', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id');
 
         if (!order) {
             return res.status(status.NotFound).json({
@@ -621,6 +627,63 @@ export const getOrderDetails = async (req, res) => {
             message: error.message
         });
         return catchError("getOrderDetails", error, req, res);
+    }
+};
+
+// Get assigned deliveries (Combined: New + Ongoing orders for dashboard)
+export const getAssignedDeliveries = async (req, res) => {
+    try {
+        const deliveryBoyId = req.user._id;
+
+        // Get new orders (Pending, Product shipped, Out for delivery)
+        const deliveryStatuses = ["Pending", "Product shipped", "Out for delivery"];
+        const newOrders = await Order.find({
+            status: { $in: deliveryStatuses },
+            $or: [
+                { assignedDeliveryBoy: { $exists: false } },
+                { assignedDeliveryBoy: null },
+                { assignedDeliveryBoy: deliveryBoyId }
+            ]
+        })
+            .populate('createdBy', 'firstName lastName phone')
+            .populate('storeId', 'storeName address phone')
+            .populate('productDetails.productId', 'productName image')
+            .populate('shiprocket.pickup_addresses', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
+            .populate('shiprocket.default_pickup_address', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
+            .sort({ createdAt: -1 })
+            .limit(10);
+
+        // Get ongoing orders (On the way, Your Destination)
+        const ongoingOrders = await Order.find({
+            assignedDeliveryBoy: deliveryBoyId,
+            status: { $in: ["On the way", "Your Destination"] }
+        })
+            .populate('createdBy', 'firstName lastName phone')
+            .populate('storeId', 'storeName address phone')
+            .populate('productDetails.productId', 'productName image')
+            .populate('shiprocket.pickup_addresses', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
+            .populate('shiprocket.default_pickup_address', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
+            .sort({ createdAt: -1 })
+            .limit(10);
+
+        // Combine both arrays, prioritize ongoing orders
+        const allAssignedDeliveries = [...ongoingOrders, ...newOrders];
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: allAssignedDeliveries,
+            totalCount: allAssignedDeliveries.length,
+            newOrdersCount: newOrders.length,
+            ongoingOrdersCount: ongoingOrders.length
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError("getAssignedDeliveries", error, req, res);
     }
 };
 

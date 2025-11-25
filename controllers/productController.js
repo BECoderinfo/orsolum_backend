@@ -736,15 +736,19 @@ export const getAllCategories = async (req, res) => {
 export const getAllStores = async (req, res) => {
     try {
         const { category, search, relevance, nearMe, offers } = req.query;
+        const searchTerm = (typeof search === "string" ? search : "").trim();
         let { skip } = req.query;
         skip = skip || 1;
         const { lat, long } = req.user || {};
 
         let matchObj = {
             status: "A",
-            name: {
-                $regex: search, $options: 'i'
-            }
+            ...(searchTerm && {
+                name: {
+                    $regex: searchTerm,
+                    $options: 'i'
+                }
+            })
         };
 
         if (category) {

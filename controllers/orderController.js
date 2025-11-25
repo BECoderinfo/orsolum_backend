@@ -1541,13 +1541,40 @@ export const cancelOrder = async (req, res) => {
     }
 
     // 2️⃣ Check if payment record exists
-    const paymentResponse = await Payment.findOne({ orderId: order._id });
-    if (!paymentResponse) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "No payment record found for this order",
+    const paymentResponse = await Payment.findOne({ orderId: order._id, type: "LocalStore" });
+
+    const cancelWithoutRefund = async (message) => {
+      await Order.findOneAndUpdate(
+        { createdBy: req.user._id, _id: id },
+        { status: "Cancelled" },
+        { new: true, runValidators: true }
+      );
+
+      return res.status(status.OK).json({
+        status: jsonStatus.OK,
+        success: true,
+        message,
+        data: { refundInitiated: false },
       });
+    };
+
+    if (!paymentResponse) {
+      return await cancelWithoutRefund("Order cancelled successfully. Payment was not captured for this order.");
+    }
+
+    const isCodOrder =
+      paymentResponse.paymentMethod === "COD" ||
+      paymentResponse.paymentGateway === "COD";
+    const isPaymentCaptured =
+      paymentResponse.paymentStatus === "SUCCESS" ||
+      paymentResponse.status === "SUCCESS";
+
+    if (!isPaymentCaptured || isCodOrder) {
+      const infoMessage = isCodOrder
+        ? "Order cancelled successfully. COD orders do not require refunds."
+        : "Order cancelled successfully. Payment capture was pending, so no refund was needed.";
+
+      return await cancelWithoutRefund(infoMessage);
     }
 
     // 3️⃣ Extract Cashfree order ID safely

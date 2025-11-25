@@ -191,6 +191,74 @@ export const getMyProfile = async (req, res) => {
     }
 };
 
+const buildShareBaseUrl = () => {
+    const base =
+        process.env.USER_PROFILE_SHARE_BASE_URL ||
+        process.env.USER_APP_SHARE_BASE_URL ||
+        "https://orsolum.com/u";
+
+    return base.endsWith("/") ? base.slice(0, -1) : base;
+};
+
+export const shareMyProfile = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id)
+            .select("name city state phone image entity address gst isPremium role createdAt");
+
+        if (!user) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "User not found"
+            });
+        }
+
+        const shareBaseUrl = buildShareBaseUrl();
+        const shareUrl = `${shareBaseUrl}/${user._id}`;
+
+        const location = [user.city, user.state].filter(Boolean).join(", ");
+
+        const textParts = [
+            `Hey! I'm ${user.name || "an Orsolum user"}.`,
+            location ? `Location: ${location}` : null,
+            user.entity ? `Entity: ${user.entity}` : null,
+            user.address ? `Address: ${user.address}` : null,
+            `Let's connect on Orsolum: ${shareUrl}`
+        ].filter(Boolean);
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: {
+                user: {
+                    _id: user._id,
+                    name: user.name,
+                    image: user.image,
+                    city: user.city,
+                    state: user.state,
+                    phone: user.phone,
+                    entity: user.entity,
+                    address: user.address,
+                    isPremium: user.isPremium,
+                    role: user.role
+                },
+                share: {
+                    url: shareUrl,
+                    message: textParts.join("\n"),
+                    meta: {
+                        title: `${user.name || "Orsolum User"} • Orsolum`,
+                        description: `Connect with ${user.name || "this Orsolum user"} and explore their profile`,
+                        previewImage: user.image || ""
+                    }
+                }
+            }
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        return catchError('shareMyProfile', error, req, res);
+    }
+};
+
 export const updateMyProfile = async (req, res) => {
     try {
         // Normalise file based uploads
