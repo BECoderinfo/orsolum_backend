@@ -8,6 +8,12 @@ const UserSchema = new mongoose.Schema({
         maxlength: 25,
         trim: true
     },
+    shareHandle: {
+        type: String,
+        unique: true,
+        sparse: true,
+        trim: true
+    },
     state: {
         type: String,
         trim: true,

@@ -8,6 +8,7 @@ import { signedUrl } from '../helper/s3.config.js';
 import OTP_GENERATOR from "otp-generator";
 import { sendSms } from '../helper/sendSms.js';
 import axios from 'axios';
+import mongoose from 'mongoose';
 
 export const uploadProfileImage = async (req, res) => {
     try {
@@ -208,6 +209,43 @@ const buildShareBaseUrl = (req) => {
     }
 
     return "https://orsolum.com/u";
+};
+
+const slugifyHandle = (value = "") => {
+    return (
+        value
+            .toString()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .replace(/-+/g, '-') || "orsolum-user"
+    );
+};
+
+const createShareHandle = async (user) => {
+    const base = slugifyHandle(user.name || "orsolum-user");
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const suffix = attempt === 0 ? "" : `-${Math.random().toString(36).slice(-4)}`;
+        const candidate = `${base}${suffix}`;
+        const exists = await User.exists({ shareHandle: candidate });
+        if (!exists) {
+            return candidate;
+        }
+    }
+    return `${base}-${user._id.toString().slice(-6)}`;
+};
+
+const ensureShareHandle = async (user) => {
+    if (user.shareHandle) {
+        return user.shareHandle;
+    }
+    const handle = await createShareHandle(user);
+    await User.findByIdAndUpdate(
+        user._id,
+        { shareHandle: handle },
+        { new: true }
+    );
+    return handle;
 };
 
 const buildSharePreviewImage = (image) => {
@@ -418,7 +456,7 @@ const buildShareHtml = ({ user, shareUrl }) => {
 export const shareMyProfile = async (req, res) => {
     try {
         const user = await User.findById(req.user._id)
-            .select("name city state phone image entity address gst isPremium role createdAt");
+            .select("name city state phone image entity address gst isPremium role createdAt shareHandle");
 
         if (!user) {
             return res.status(status.NotFound).json({
@@ -428,8 +466,9 @@ export const shareMyProfile = async (req, res) => {
             });
         }
 
+        const shareHandle = await ensureShareHandle(user);
         const shareBaseUrl = trimTrailingSlash(buildShareBaseUrl(req));
-        const shareUrl = `${shareBaseUrl}/${user._id}`;
+        const shareUrl = `${shareBaseUrl}/${shareHandle}`;
 
         const location = [user.city, user.state].filter(Boolean).join(", ");
 
@@ -455,7 +494,8 @@ export const shareMyProfile = async (req, res) => {
                     entity: user.entity,
                     address: user.address,
                     isPremium: user.isPremium,
-                    role: user.role
+                    role: user.role,
+                    shareHandle
                 },
                 share: {
                     url: shareUrl,
@@ -476,8 +516,12 @@ export const shareMyProfile = async (req, res) => {
 
 export const renderSharedProfilePage = async (req, res) => {
     try {
-        const { id } = req.params;
-        const user = await User.findById(id).select("name city state phone image entity address isPremium role");
+        const { id: handle } = req.params;
+        let user = await User.findOne({ shareHandle: handle }).select("name city state phone image entity address isPremium role shareHandle");
+
+        if (!user && mongoose.Types.ObjectId.isValid(handle)) {
+            user = await User.findById(handle).select("name city state phone image entity address isPremium role shareHandle");
+        }
 
         if (!user) {
             return res.status(404).send(`
@@ -505,7 +549,7 @@ export const renderSharedProfilePage = async (req, res) => {
         }
 
         const shareBaseUrl = trimTrailingSlash(buildShareBaseUrl(req));
-        const shareUrl = `${shareBaseUrl}/${user._id}`;
+        const shareUrl = `${shareBaseUrl}/${user.shareHandle || user._id}`;
         const html = buildShareHtml({ user, shareUrl });
 
         res.set("Content-Type", "text/html").status(200).send(html);

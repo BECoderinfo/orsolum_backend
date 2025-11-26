@@ -11,6 +11,10 @@ const ProductSubCategorySchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    icon: {
+        type: String,
+        default: null
+    },
     categoryId: {
         type: ObjectId,
         ref: 'product_category',

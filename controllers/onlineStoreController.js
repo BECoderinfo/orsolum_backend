@@ -620,12 +620,20 @@ export const onlineStoreHomePage = async (req, res) => {
 
 export const allTrendingProducts = async (req, res) => {
     try {
-
+        const search = req.query.search?.trim() || '';
         const page = parseInt(req.query.skip) || 1;
         const skip = (page - 1) * limit;
 
+        // Build match conditions
+        const matchConditions = { deleted: false, trending: true };
+        
+        // Add search filter if provided
+        if (search) {
+            matchConditions.name = { $regex: search, $options: 'i' };
+        }
+
         const trendingProducts = await OnlineProduct.aggregate([
-            { $match: { deleted: false, trending: true } },
+            { $match: matchConditions },
             {
                 $lookup: {
                     from: "product_units",
@@ -682,10 +690,13 @@ export const allTrendingProducts = async (req, res) => {
             });
         }
 
-        const totalCount = await OnlineProduct.countDocuments({
-            deleted: false,
-            trending: true
-        });
+        // Build count match conditions (same as main query)
+        const countMatchConditions = { deleted: false, trending: true };
+        if (search) {
+            countMatchConditions.name = { $regex: search, $options: 'i' };
+        }
+
+        const totalCount = await OnlineProduct.countDocuments(countMatchConditions);
 
         // Fetch cart items
         let totalCartCount = 0;

@@ -124,7 +124,6 @@ export const updateRetailerProfile = async (req, res) => {
     }
 };
 
-
 // Change phone - OTP flow
 export const sendChangePhoneOtp = async (req, res) => {
     try {
@@ -216,7 +215,6 @@ export const verifyChangePhoneOtp = async (req, res) => {
         return catchError('verifyChangePhoneOtp', error, req, res);
     }
 };
-
 
 export const isExist = async (req, res) => {
     try {
@@ -493,7 +491,6 @@ export const retailerHomePageData = async (req, res) => {
         res.status(500).json({ success: false, message: err.message });
     }
 };
-
 
 export const retailerHomePageDataV2 = async (req, res) => {
     try {
