@@ -512,13 +512,28 @@ export const deleteProductUnit = async (req, res) => {
     }
 };
 
+// Helper function to normalize subcategory data with icon fallback
+const normalizeSubCategory = (subCategory) => {
+    if (!subCategory) return subCategory;
+    // Ensure icon field exists, use image as fallback if icon is missing
+    return {
+        ...subCategory,
+        icon: subCategory.icon || null,
+        displayIcon: subCategory.icon || subCategory.image || null, // Preferred: icon, fallback: image
+        hasSvgIcon: subCategory.icon && subCategory.icon.endsWith('.svg')
+    };
+};
+
 export const onlineStoreHomePage = async (req, res) => {
     try {
         // Fetch subcategories (limit 8)
-        const subCategories = await SubCategory.aggregate([
+        const subCategoriesRaw = await SubCategory.aggregate([
             { $match: { deleted: false } },
             { $limit: 8 }
         ]);
+        
+        // Normalize subcategories to ensure icon field is properly included
+        const subCategories = subCategoriesRaw.map(normalizeSubCategory);
 
         // Fetch categories (limit 8)
         const categories = await Category.aggregate([
@@ -797,7 +812,7 @@ export const allSubCategories = async (req, res) => {
 
         // get all cart count
 
-        const data = await SubCategory.aggregate([
+        const dataRaw = await SubCategory.aggregate([
             {
                 $match: {
                     deleted: false,
@@ -807,6 +822,9 @@ export const allSubCategories = async (req, res) => {
                 }
             }
         ]);
+        
+        // Normalize subcategories to ensure icon field is properly included
+        const data = dataRaw.map(normalizeSubCategory);
 
         let totalCartCount = 0;
         const carts = await OnlineStoreCart.find({ deleted: false, createdBy: req.user._id });
@@ -955,7 +973,7 @@ export const onlineStoreDiscovery = async (req, res) => {
         const shouldSendBrands = requestedSections.has("popularBrands");
 
         const fetchExplore = async () => {
-            const [items, total] = await Promise.all([
+            const [itemsRaw, total] = await Promise.all([
                 SubCategory.aggregate([
                     { $match: exploreMatch },
                     { $sort: { createdAt: -1 } },
@@ -964,6 +982,8 @@ export const onlineStoreDiscovery = async (req, res) => {
                 ]),
                 SubCategory.countDocuments(exploreMatch)
             ]);
+            // Normalize subcategories to ensure icon field is properly included
+            const items = itemsRaw.map(normalizeSubCategory);
             return { items, total };
         };
 
@@ -1076,7 +1096,7 @@ export const onlineStoreExploreCards = async (req, res) => {
 
         const skip = (page - 1) * pageSize;
 
-        const [items, total] = await Promise.all([
+        const [itemsRaw, total] = await Promise.all([
             SubCategory.aggregate([
                 { $match: match },
                 { $sort: { createdAt: -1 } },
@@ -1085,6 +1105,9 @@ export const onlineStoreExploreCards = async (req, res) => {
             ]),
             SubCategory.countDocuments(match)
         ]);
+        
+        // Normalize subcategories to ensure icon field is properly included
+        const items = itemsRaw.map(normalizeSubCategory);
 
         const totalCartCount = await fetchUserCartCount(req.user._id);
 
