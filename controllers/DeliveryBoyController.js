@@ -20,6 +20,11 @@ import Store from '../models/Store.js';
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
 
+const formatFullName = (firstName, lastName, fallback = '') => {
+    const name = [firstName, lastName].filter(Boolean).join(' ').trim();
+    return name || fallback;
+};
+
 // Get new orders for delivery boy
 export const getNewOrders = async (req, res) => {
     try {
@@ -684,6 +689,280 @@ export const getAssignedDeliveries = async (req, res) => {
             message: error.message
         });
         return catchError("getAssignedDeliveries", error, req, res);
+    }
+};
+
+// Dashboard - Profile summary card
+export const getDashboardProfile = async (req, res) => {
+    try {
+        const deliveryBoyId = req.user._id;
+        const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId)
+            .select('firstName lastName phone image currentLocation rating totalDeliveries availabilityStatus');
+
+        if (!deliveryBoy) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Delivery boy not found"
+            });
+        }
+
+        const [lifetimeStats] = await Order.aggregate([
+            {
+                $match: {
+                    assignedDeliveryBoy: new mongoose.Types.ObjectId(deliveryBoyId)
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: 1 },
+                    completed: {
+                        $sum: {
+                            $cond: [{ $eq: ['$status', 'Delivered'] }, 1, 0]
+                        }
+                    },
+                    inProgress: {
+                        $sum: {
+                            $cond: [{ $in: ['$status', ['On the way', 'Your Destination']] }, 1, 0]
+                        }
+                    }
+                }
+            }
+        ]);
+
+        const response = {
+            deliveryBoy: {
+                _id: deliveryBoy._id,
+                name: formatFullName(deliveryBoy.firstName, deliveryBoy.lastName, deliveryBoy.phone),
+                phone: deliveryBoy.phone,
+                avatar: deliveryBoy.image || null,
+                currentLocation: deliveryBoy.currentLocation || null,
+                availabilityStatus: deliveryBoy.availabilityStatus,
+                rating: deliveryBoy.rating || 0
+            },
+            stats: {
+                totalDeliveries: lifetimeStats?.total || deliveryBoy.totalDeliveries || 0,
+                completed: lifetimeStats?.completed || 0,
+                inProgress: lifetimeStats?.inProgress || 0
+            }
+        };
+
+        return res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: response
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError("getDashboardProfile", error, req, res);
+    }
+};
+
+// Dashboard - Today's performance
+export const getDashboardPerformance = async (req, res) => {
+    try {
+        const deliveryBoyId = req.user._id;
+        const dateParam = req.query.date ? new Date(req.query.date) : new Date();
+        if (isNaN(dateParam.getTime())) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Invalid date format"
+            });
+        }
+
+        const startOfDay = new Date(dateParam);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(dateParam);
+        endOfDay.setHours(23, 59, 59, 999);
+
+        const orders = await Order.find({
+            assignedDeliveryBoy: deliveryBoyId,
+            createdAt: { $gte: startOfDay, $lte: endOfDay }
+        })
+            .select('orderId status summary.grandTotal')
+            .lean();
+
+        const deliveredOrders = orders.filter(order => order.status === 'Delivered');
+        const onTheWayStatuses = ['Product shipped', 'On the way', 'Your Destination'];
+        const onTheWayOrders = orders.filter(order => onTheWayStatuses.includes(order.status));
+
+        const earningsAmount = deliveredOrders.reduce((sum, order) => sum + (order.summary?.grandTotal || 0), 0);
+
+        const response = {
+            date: startOfDay.toISOString().split('T')[0],
+            cards: {
+                assigned: {
+                    count: orders.length,
+                    orderIds: orders.map(order => order.orderId)
+                },
+                delivered: {
+                    count: deliveredOrders.length,
+                    orderIds: deliveredOrders.map(order => order.orderId),
+                    deliveredValue: earningsAmount
+                },
+                onTheWay: {
+                    count: onTheWayOrders.length,
+                    orderIds: onTheWayOrders.map(order => order.orderId)
+                },
+                earnings: {
+                    amount: earningsAmount,
+                    currency: "INR"
+                }
+            },
+            lastUpdated: new Date()
+        };
+
+        return res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: response
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError("getDashboardPerformance", error, req, res);
+    }
+};
+
+// Dashboard - Assigned deliveries list
+export const getDashboardAssignedDeliveries = async (req, res) => {
+    try {
+        const deliveryBoyId = req.user._id;
+        const limit = Number(req.query.limit) > 0 ? Number(req.query.limit) : 5;
+        const statusQuery = (req.query.status || 'all').toString();
+
+        const allowedStatuses = ["Pending", "Product shipped", "On the way", "Your Destination", "Delivered"];
+        let statusFilter = allowedStatuses;
+        if (statusQuery !== 'all') {
+            const requested = statusQuery.split(',').map(value => value.trim()).filter(Boolean);
+            const valid = requested.filter(value => allowedStatuses.includes(value));
+            if (valid.length) {
+                statusFilter = valid;
+            }
+        }
+
+        const newOrderStatuses = ["Pending", "Product shipped"];
+        const ongoingOrderStatuses = ["On the way", "Your Destination"];
+        const includeUnassignedNewOrders = statusFilter.some(status => newOrderStatuses.includes(status));
+
+        const baseOrConditions = [
+            { assignedDeliveryBoy: deliveryBoyId }
+        ];
+
+        if (includeUnassignedNewOrders) {
+            baseOrConditions.push({
+                status: { $in: newOrderStatuses },
+                $or: [
+                    { assignedDeliveryBoy: { $exists: false } },
+                    { assignedDeliveryBoy: null }
+                ]
+            });
+        }
+
+        const match = {
+            status: { $in: statusFilter },
+            $or: baseOrConditions
+        };
+
+        const deliveries = await Order.find(match)
+            .populate('createdBy', 'firstName lastName phone')
+            .populate('storeId', 'storeName address phone')
+            .sort({ updatedAt: -1 })
+            .limit(limit)
+            .lean();
+
+        const formatAddress = (address = {}) => {
+            return address.formattedAddress ||
+                address.addressLine1 ||
+                address.address ||
+                address.street ||
+                '';
+        };
+
+        const response = deliveries.map(order => ({
+            taskId: order.orderId,
+            status: order.status,
+            customer: {
+                name: formatFullName(order.createdBy?.firstName, order.createdBy?.lastName, 'Customer'),
+                phone: order.createdBy?.phone || ''
+            },
+            pickup: {
+                storeName: order.storeId?.storeName || '',
+                address: order.storeId?.address || ''
+            },
+            drop: {
+                address: formatAddress(order.address),
+                geocode: {
+                    lat: order.address?.location?.coordinates?.[1] ?? order.address?.lat ?? null,
+                    lng: order.address?.location?.coordinates?.[0] ?? order.address?.lng ?? null
+                }
+            },
+            payment: {
+                mode: order.paymentStatus === "SUCCESS" ? "Prepaid" : "COD",
+                amount: order.summary?.grandTotal || 0
+            },
+            eta: order.estimatedDate
+        }));
+
+        const baseCountOr = [
+            { assignedDeliveryBoy: deliveryBoyId },
+            {
+                status: { $in: newOrderStatuses },
+                $or: [
+                    { assignedDeliveryBoy: { $exists: false } },
+                    { assignedDeliveryBoy: null }
+                ]
+            }
+        ];
+
+        const [totalCount, newOrdersCount, ongoingCount] = await Promise.all([
+            Order.countDocuments({
+                status: { $in: allowedStatuses },
+                $or: baseCountOr
+            }),
+            Order.countDocuments({
+                status: { $in: newOrderStatuses },
+                $or: [
+                    { assignedDeliveryBoy: deliveryBoyId },
+                    {
+                        $and: [
+                            { $or: [{ assignedDeliveryBoy: { $exists: false } }, { assignedDeliveryBoy: null }] }
+                        ]
+                    }
+                ]
+            }),
+            Order.countDocuments({
+                status: { $in: ongoingOrderStatuses },
+                assignedDeliveryBoy: deliveryBoyId
+            })
+        ]);
+
+        return res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: response,
+            meta: {
+                total: totalCount,
+                newOrders: newOrdersCount,
+                ongoing: ongoingCount
+            }
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError("getDashboardAssignedDeliveries", error, req, res);
     }
 };
 

@@ -27,6 +27,9 @@ import {
     getOngoingOrders,
     getOrderDetails,
     getAssignedDeliveries,
+    getDashboardProfile,
+    getDashboardPerformance,
+    getDashboardAssignedDeliveries,
     updateCurrentLocation,
     getEarnings,
     getCashCollections,
@@ -94,6 +97,9 @@ deliveryRouter.put('/deliveryboy/update/work/details/v1', deliveryBoyAuthenticat
 deliveryRouter.post('/deliveryboy/admin/assign/order/v1', adminAuthentication, assignOrderToDeliveryBoy);
 deliveryRouter.get('/deliveryboy/new/orders/v1', deliveryBoyAuthentication, getNewOrders);
 deliveryRouter.get('/deliveryboy/assigned/deliveries/v1', deliveryBoyAuthentication, getAssignedDeliveries);
+deliveryRouter.get('/deliveryboy/dashboard/profile/v1', deliveryBoyAuthentication, getDashboardProfile);
+deliveryRouter.get('/deliveryboy/dashboard/performance/v1', deliveryBoyAuthentication, getDashboardPerformance);
+deliveryRouter.get('/deliveryboy/dashboard/assigned-deliveries/v1', deliveryBoyAuthentication, getDashboardAssignedDeliveries);
 deliveryRouter.post('/deliveryboy/skip/order/v1', deliveryBoyAuthentication, skipOrder);
 deliveryRouter.post('/deliveryboy/accept/order/v1', deliveryBoyAuthentication, acceptOrder);
 deliveryRouter.post('/deliveryboy/pickup/order/v1', deliveryBoyAuthentication, pickupOrder);
