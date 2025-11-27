@@ -19,10 +19,26 @@ import Order from '../models/Order.js';
 import Store from '../models/Store.js';
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
+import PickupAddress from '../models/PickupAddress.js';
 
 const formatFullName = (firstName, lastName, fallback = '') => {
     const name = [firstName, lastName].filter(Boolean).join(' ').trim();
     return name || fallback;
+};
+
+// Helper function to format currentLocation - returns null if empty or invalid
+const formatCurrentLocation = (currentLocation) => {
+    if (!currentLocation || 
+        typeof currentLocation.lat !== 'number' || 
+        typeof currentLocation.lng !== 'number' ||
+        isNaN(currentLocation.lat) ||
+        isNaN(currentLocation.lng)) {
+        return null;
+    }
+    return {
+        lat: currentLocation.lat,
+        lng: currentLocation.lng
+    };
 };
 
 // Get new orders for delivery boy
@@ -532,11 +548,31 @@ export const completeDelivery = async (req, res) => {
             await payment.save();
         }
 
-        // Update delivery boy stats
+        // Update delivery boy stats and credit earning
         const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
         deliveryBoy.totalDeliveries += 1;
         deliveryBoy.availabilityStatus = "available";
+        
+        // Credit delivery earning (₹50 per delivery)
+        const deliveryEarning = 50;
+        const newWalletBalance = (deliveryBoy.walletBalance || 0) + deliveryEarning;
+        deliveryBoy.walletBalance = newWalletBalance;
         await deliveryBoy.save();
+
+        // Create wallet transaction for delivery earning
+        try {
+            await WalletTransaction.create({
+                deliveryBoyId: deliveryBoyId,
+                type: "CREDIT",
+                source: "DELIVERY",
+                amount: deliveryEarning,
+                balanceAfter: newWalletBalance,
+                meta: { orderId: order._id, orderIdString: order.orderId }
+            });
+        } catch (walletError) {
+            console.error('Error creating wallet transaction:', walletError);
+            // Continue even if wallet transaction fails
+        }
 
         // Send notification to retailer about delivery completion
         try {
@@ -555,7 +591,13 @@ export const completeDelivery = async (req, res) => {
             status: jsonStatus.OK,
             success: true,
             message: "Delivery completed successfully",
-            data: order
+            data: {
+                ...order.toObject(),
+                earning: {
+                    amount: deliveryEarning,
+                    newWalletBalance
+                }
+            }
         });
     } catch (error) {
         res.status(status.InternalServerError).json({
@@ -651,7 +693,7 @@ export const getAssignedDeliveries = async (req, res) => {
             ]
         })
             .populate('createdBy', 'firstName lastName phone')
-            .populate('storeId', 'storeName address phone')
+            .populate('storeId', 'name storeName address phone shiprocket.pickup_addresses shiprocket.default_pickup_address')
             .populate('productDetails.productId', 'productName image')
             .populate('shiprocket.pickup_addresses', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
             .populate('shiprocket.default_pickup_address', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
@@ -664,7 +706,7 @@ export const getAssignedDeliveries = async (req, res) => {
             status: { $in: ["On the way", "Your Destination"] }
         })
             .populate('createdBy', 'firstName lastName phone')
-            .populate('storeId', 'storeName address phone')
+            .populate('storeId', 'name storeName address phone shiprocket.pickup_addresses shiprocket.default_pickup_address')
             .populate('productDetails.productId', 'productName image')
             .populate('shiprocket.pickup_addresses', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
             .populate('shiprocket.default_pickup_address', 'nickname shiprocket.pickup_location shiprocket.pickup_address_id')
@@ -673,6 +715,89 @@ export const getAssignedDeliveries = async (req, res) => {
 
         // Combine both arrays, prioritize ongoing orders
         const allAssignedDeliveries = [...ongoingOrders, ...newOrders];
+
+        // Backfill pickup_addresses from Store if order has empty pickup_addresses
+        // Get unique storeIds that need backfilling
+        const ordersNeedingBackfill = allAssignedDeliveries.filter(order => 
+            (!order.shiprocket?.pickup_addresses || order.shiprocket.pickup_addresses.length === 0) && 
+            order.storeId
+        );
+
+        if (ordersNeedingBackfill.length > 0) {
+            // Get unique storeIds
+            const storeIds = [...new Set(ordersNeedingBackfill.map(order => 
+                order.storeId?._id || order.storeId
+            ).filter(Boolean))];
+
+            // Fetch stores with pickup_addresses
+            const stores = await Store.find({
+                _id: { $in: storeIds },
+                'shiprocket.pickup_addresses': { $exists: true, $ne: [] }
+            }).select('_id shiprocket.pickup_addresses shiprocket.default_pickup_address');
+
+            // Create a map of storeId to store data
+            const storeMap = new Map();
+            stores.forEach(store => {
+                storeMap.set(store._id.toString(), store);
+            });
+
+            // Collect all pickup address IDs to fetch in one query
+            const allPickupAddressIds = new Set();
+            stores.forEach(store => {
+                if (store.shiprocket?.pickup_addresses) {
+                    store.shiprocket.pickup_addresses.forEach(id => allPickupAddressIds.add(id));
+                }
+                if (store.shiprocket?.default_pickup_address) {
+                    allPickupAddressIds.add(store.shiprocket.default_pickup_address);
+                }
+            });
+
+            // Fetch all pickup addresses in one query
+            const allPickupAddresses = await PickupAddress.find({
+                _id: { $in: Array.from(allPickupAddressIds) }
+            }).select('nickname shiprocket.pickup_location shiprocket.pickup_address_id');
+
+            // Create a map of pickup address ID to pickup address data
+            const pickupAddressMap = new Map();
+            allPickupAddresses.forEach(addr => {
+                pickupAddressMap.set(addr._id.toString(), addr);
+            });
+
+            // Process each order
+            for (const order of ordersNeedingBackfill) {
+                const storeId = order.storeId?._id || order.storeId;
+                if (!storeId) continue;
+
+                const store = storeMap.get(storeId.toString());
+                if (store && store.shiprocket?.pickup_addresses && store.shiprocket.pickup_addresses.length > 0) {
+                    // Initialize shiprocket if doesn't exist
+                    if (!order.shiprocket) {
+                        order.shiprocket = {};
+                    }
+                    
+                    // Populate pickup_addresses from Store using the map
+                    order.shiprocket.pickup_addresses = store.shiprocket.pickup_addresses
+                        .map(id => pickupAddressMap.get(id.toString()))
+                        .filter(Boolean);
+                    
+                    // Populate default_pickup_address if exists
+                    if (store.shiprocket.default_pickup_address) {
+                        const defaultPickup = pickupAddressMap.get(store.shiprocket.default_pickup_address.toString());
+                        if (defaultPickup) {
+                            order.shiprocket.default_pickup_address = defaultPickup;
+                        }
+                    }
+
+                    // Update in database for future requests (async, don't wait)
+                    Order.findByIdAndUpdate(order._id, {
+                        $set: {
+                            'shiprocket.pickup_addresses': store.shiprocket.pickup_addresses,
+                            'shiprocket.default_pickup_address': store.shiprocket.default_pickup_address || null
+                        }
+                    }).catch(err => console.error('Error updating order pickup_addresses:', err));
+                }
+            }
+        }
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
@@ -737,7 +862,7 @@ export const getDashboardProfile = async (req, res) => {
                 name: formatFullName(deliveryBoy.firstName, deliveryBoy.lastName, deliveryBoy.phone),
                 phone: deliveryBoy.phone,
                 avatar: deliveryBoy.image || null,
-                currentLocation: deliveryBoy.currentLocation || null,
+                currentLocation: formatCurrentLocation(deliveryBoy.currentLocation),
                 availabilityStatus: deliveryBoy.availabilityStatus,
                 rating: deliveryBoy.rating || 0
             },
@@ -875,17 +1000,52 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
 
         const deliveries = await Order.find(match)
             .populate('createdBy', 'firstName lastName phone')
-            .populate('storeId', 'storeName address phone')
+            .populate('storeId', 'name address phone')
             .sort({ updatedAt: -1 })
             .limit(limit)
             .lean();
 
         const formatAddress = (address = {}) => {
-            return address.formattedAddress ||
-                address.addressLine1 ||
-                address.address ||
-                address.street ||
-                '';
+            if (!address || typeof address !== 'object') return '';
+            
+            // Build address from available fields
+            const parts = [];
+            
+            // Primary address line
+            if (address.address_1) {
+                parts.push(address.address_1);
+            }
+            
+            // Flat/House number
+            if (address.flatHouse) {
+                parts.push(address.flatHouse);
+            }
+            
+            // Landmark
+            if (address.landmark) {
+                parts.push(address.landmark);
+            }
+            
+            // City, State, Pincode
+            const cityStatePincode = [];
+            if (address.city) cityStatePincode.push(address.city);
+            if (address.state) cityStatePincode.push(address.state);
+            if (address.pincode) cityStatePincode.push(address.pincode);
+            
+            if (cityStatePincode.length > 0) {
+                parts.push(cityStatePincode.join(', '));
+            }
+            
+            // Fallback to other possible fields
+            if (parts.length === 0) {
+                return address.formattedAddress ||
+                    address.addressLine1 ||
+                    address.address ||
+                    address.street ||
+                    '';
+            }
+            
+            return parts.join(', ');
         };
 
         const response = deliveries.map(order => ({
@@ -896,21 +1056,26 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
                 phone: order.createdBy?.phone || ''
             },
             pickup: {
-                storeName: order.storeId?.storeName || '',
+                storeName: order.storeId?.name || order.storeId?.storeName || '',
                 address: order.storeId?.address || ''
             },
             drop: {
                 address: formatAddress(order.address),
                 geocode: {
                     lat: order.address?.location?.coordinates?.[1] ?? order.address?.lat ?? null,
-                    lng: order.address?.location?.coordinates?.[0] ?? order.address?.lng ?? null
+                    lng: order.address?.location?.coordinates?.[0] ?? order.address?.long ?? order.address?.lng ?? null
                 }
             },
             payment: {
                 mode: order.paymentStatus === "SUCCESS" ? "Prepaid" : "COD",
                 amount: order.summary?.grandTotal || 0
             },
-            eta: order.estimatedDate
+            eta: order.estimatedDate,
+            shiprocket: order.shiprocket ? {
+                shipment_id: order.shiprocket.shipment_id || null,
+                order_id: order.shiprocket.order_id || null,
+                awb_code: order.shiprocket.awb_code || order.shiprocket.awb || null
+            } : null
         }));
 
         const baseCountOr = [
@@ -1730,7 +1895,7 @@ export const updateDeliveryBoyProfile = async (req, res) => {
 
         let { id } = req.params;
 
-        let { firstName, lastName, dob, email } = req.body;
+        let { firstName, lastName, dob, email, phone, state, city } = req.body;
 
         let image;
 
@@ -1745,20 +1910,40 @@ export const updateDeliveryBoyProfile = async (req, res) => {
             });
         }
 
-        if (!firstName || !lastName || !dob || !email) {
+        // Check if delivery boy exists
+        const existingDeliveryBoy = await DeliveryBoy.findById(id);
+        if (!existingDeliveryBoy) {
+            return res.status(404).json({
+                success: false,
+                message: "Delivery Boy not found",
+            });
+        }
+
+        // Build update object with only provided fields
+        const updateData = {};
+        
+        if (firstName) updateData.firstName = firstName;
+        if (lastName) updateData.lastName = lastName;
+        if (dob) updateData.dob = dob;
+        if (email) updateData.email = email.toLowerCase();
+        if (phone) updateData.phone = phone;
+        if (state) updateData.state = state;
+        if (city) updateData.city = city;
+        if (image) updateData.image = image;
+
+        // Check if at least one field is provided for update
+        if (Object.keys(updateData).length === 0) {
             return res.status(400).json({
                 success: false,
-                message: "Missing required fields",
+                message: "Please provide at least one field to update",
             });
         }
 
         const updatedDeliveryBoy = await DeliveryBoy.findByIdAndUpdate(
             id,
-            { firstName, lastName, dob, email, image },
+            updateData,
             { new: true, runValidators: true }
         );
-
-
 
         return res.status(200).json({
             success: true,

@@ -109,6 +109,12 @@ const OrderSchema = new mongoose.Schema({
         type: String
     },
     shiprocket: {
+        shipment_id: { type: String },
+        order_id: { type: String },
+        awb_code: { type: String },
+        awb: { type: String },
+        status: { type: String },
+        last_updated: { type: Date },
         pickup_addresses: [{
             type: ObjectId,
             ref: 'PickupAddress'

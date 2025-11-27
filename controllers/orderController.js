@@ -142,6 +142,9 @@ export const createOrder = async (req, res) => {
           grandTotal,
         };
 
+        // Get store to copy pickup_addresses
+        const store = await Store.findById(item.storeId);
+        
         const newOrder = new Order({
           address,
           createdBy: req.user._id,
@@ -150,13 +153,16 @@ export const createOrder = async (req, res) => {
           productPrice: item.sellingPrice,
           summary,
           orderId,
+          shiprocket: store?.shiprocket?.pickup_addresses ? {
+            pickup_addresses: store.shiprocket.pickup_addresses || [],
+            default_pickup_address: store.shiprocket.default_pickup_address || null
+          } : {}
         });
 
         await newOrder.save();
 
         // 🚀 Create Shiprocket order automatically
         try {
-          const store = await Store.findById(item.storeId);
           if (store && store.shiprocket?.pickup_address_id) {
             const shipOrderPayload = {
               order_id: newOrder._id.toString(),
@@ -189,7 +195,9 @@ export const createOrder = async (req, res) => {
             const shiprocketOrder = await ShiprocketService.createOrder(shipOrderPayload);
 
             if (shiprocketOrder && shiprocketOrder.data?.shipment_id) {
+              // Preserve existing pickup_addresses when updating shiprocket data
               newOrder.shiprocket = {
+                ...(newOrder.shiprocket || {}),
                 shipment_id: shiprocketOrder.data.shipment_id,
                 order_id: shiprocketOrder.data.order_id,
                 awb_code: shiprocketOrder.data.awb_code || null,
@@ -1430,6 +1438,9 @@ export const createOrderV2 = async (req, res) => {
     const cf_order_id = cashFreeSession.data.order_id;
     const paymentSessionId = cashFreeSession.data.payment_session_id;
 
+    // Get store to copy pickup_addresses
+    const store = await Store.findById(storeId);
+
     // ✅ Save the Order in MongoDB before sending response
     const newOrder = new Order({
       createdBy: req.user._id,
@@ -1449,6 +1460,10 @@ export const createOrderV2 = async (req, res) => {
       },
       productDetails,
       status: "Pending",
+      shiprocket: store?.shiprocket?.pickup_addresses ? {
+        pickup_addresses: store.shiprocket.pickup_addresses || [],
+        default_pickup_address: store.shiprocket.default_pickup_address || null
+      } : {}
     });
 
     await newOrder.save();
@@ -3226,7 +3241,11 @@ export const createOrderWithShiprocket = async (req, res) => {
           donate: 0,
           grandTotal: storeOrder.totalAmount
         },
-        estimatedDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) // 3 days from now
+        estimatedDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // 3 days from now
+        shiprocket: storeOrder.store?.shiprocket?.pickup_addresses ? {
+          pickup_addresses: storeOrder.store.shiprocket.pickup_addresses || [],
+          default_pickup_address: storeOrder.store.shiprocket.default_pickup_address || null
+        } : {}
       });
 
       const savedOrder = await order.save();
@@ -3303,15 +3322,16 @@ export const createOrderWithShiprocket = async (req, res) => {
         const shiprocketResponse = await ShiprocketService.createOrder(shiprocketOrder.payload);
 
         if (shiprocketResponse.data) {
-          // Update order with Shiprocket details
+          // Update order with Shiprocket details (preserve existing pickup_addresses)
+          const existingOrder = await Order.findById(shiprocketOrder.orderId);
           await Order.findByIdAndUpdate(shiprocketOrder.orderId, {
-            shiprocket: {
-              shipment_id: shiprocketResponse.data.shipment_id,
-              awb: shiprocketResponse.data.awb_code,
-              status: 'created',
-              last_updated: new Date()
-            },
-            status: "Product shipped"
+            $set: {
+              'shiprocket.shipment_id': shiprocketResponse.data.shipment_id,
+              'shiprocket.awb': shiprocketResponse.data.awb_code,
+              'shiprocket.status': 'created',
+              'shiprocket.last_updated': new Date(),
+              status: "Product shipped"
+            }
           });
 
           shiprocketResults.push({

@@ -480,15 +480,15 @@ export const syncOrdersWithShiprocket = async (req, res) => {
         const shiprocketResponse = await ShiprocketService.createOrder(shiprocketPayload);
         
         if (shiprocketResponse.data) {
-          // Update order with Shiprocket details
+          // Update order with Shiprocket details (preserve existing pickup_addresses)
           await Order.findByIdAndUpdate(orderId, {
-            shiprocket: {
-              shipment_id: shiprocketResponse.data.shipment_id,
-              awb: shiprocketResponse.data.awb_code,
-              status: 'created',
-              last_updated: new Date()
-            },
-            status: "Product shipped"
+            $set: {
+              'shiprocket.shipment_id': shiprocketResponse.data.shipment_id,
+              'shiprocket.awb': shiprocketResponse.data.awb_code,
+              'shiprocket.status': 'created',
+              'shiprocket.last_updated': new Date(),
+              status: "Product shipped"
+            }
           });
 
           results.push({
@@ -694,15 +694,15 @@ export const bulkSyncOrders = async (req, res) => {
         const shiprocketResponse = await ShiprocketService.createOrder(shiprocketPayload);
         
         if (shiprocketResponse.data) {
-          // Update order
+          // Update order (preserve existing pickup_addresses)
           await Order.findByIdAndUpdate(order._id, {
-            shiprocket: {
-              shipment_id: shiprocketResponse.data.shipment_id,
-              awb: shiprocketResponse.data.awb_code,
-              status: 'created',
-              last_updated: new Date()
-            },
-            status: "Product shipped"
+            $set: {
+              'shiprocket.shipment_id': shiprocketResponse.data.shipment_id,
+              'shiprocket.awb': shiprocketResponse.data.awb_code,
+              'shiprocket.status': 'created',
+              'shiprocket.last_updated': new Date(),
+              status: "Product shipped"
+            }
           });
 
           results.push({

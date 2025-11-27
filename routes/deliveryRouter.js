@@ -47,6 +47,19 @@ import {
     assignOrderToDeliveryBoy
 } from "../controllers/DeliveryBoyController.js";
 
+// Import Earning APIs
+import {
+    getEarningScreenSummary,
+    getDetailedEarnings,
+    getWeeklyEarningBreakdown,
+    getPayoutHistory,
+    getCashEarnings,
+    getPocketStatement,
+    getDeductionStatement,
+    createWithdrawRequest,
+    getTodayEarning
+} from "../controllers/EarningController.js";
+
 const deliveryRouter = express.Router();
 
 /* ===========================
@@ -121,6 +134,36 @@ deliveryRouter.get('/deliveryboy/earnings/v1', deliveryBoyAuthentication, getEar
 deliveryRouter.get('/deliveryboy/cash/collections/v1', deliveryBoyAuthentication, getCashCollections);
 deliveryRouter.post('/deliveryboy/settle/cash/v1', deliveryBoyAuthentication, settleCash);
 deliveryRouter.get('/deliveryboy/cash/summary/v1', deliveryBoyAuthentication, getCashSummary);
+
+/* ===========================
+     EARNING SCREEN APIs (NEW)
+=========================== */
+// Main earning screen summary (1st screen - all sections)
+deliveryRouter.get('/deliveryboy/earning/screen/summary/v1', deliveryBoyAuthentication, getEarningScreenSummary);
+
+// Detailed earnings with daily/weekly/monthly tabs (2nd screen)
+deliveryRouter.get('/deliveryboy/earning/detailed/v1', deliveryBoyAuthentication, getDetailedEarnings);
+
+// Weekly earning breakdown (when clicking on top earning card)
+deliveryRouter.get('/deliveryboy/earning/weekly/breakdown/v1', deliveryBoyAuthentication, getWeeklyEarningBreakdown);
+
+// Today's earning quick API
+deliveryRouter.get('/deliveryboy/earning/today/v1', deliveryBoyAuthentication, getTodayEarning);
+
+// Payout history (bottom card - Payout)
+deliveryRouter.get('/deliveryboy/earning/payout/history/v1', deliveryBoyAuthentication, getPayoutHistory);
+
+// Cash earnings (bottom card - Earning in Cash)
+deliveryRouter.get('/deliveryboy/earning/cash/v1', deliveryBoyAuthentication, getCashEarnings);
+
+// Pocket statement (bottom card - Pocket Statement)
+deliveryRouter.get('/deliveryboy/earning/pocket/statement/v1', deliveryBoyAuthentication, getPocketStatement);
+
+// Deduction statement (bottom card - Deduction statement)
+deliveryRouter.get('/deliveryboy/earning/deduction/statement/v1', deliveryBoyAuthentication, getDeductionStatement);
+
+// Withdraw request
+deliveryRouter.post('/deliveryboy/earning/withdraw/v1', deliveryBoyAuthentication, createWithdrawRequest);
 
 /* ===========================
      SETTLEMENTS

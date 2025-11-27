@@ -70,6 +70,22 @@ app.get("/", (req, res) => {
   });
 });
 
+// ✅ Socket.io Health Check Endpoint
+app.get("/socket-health", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Socket.io server is running",
+    socketPath: "/socket.io/",
+    socketNamespaces: ["/", "/delivery"],
+    serverTime: new Date().toISOString(),
+    instructions: {
+      connectUrl: `http://${req.headers.host}`,
+      deliveryNamespace: "/delivery",
+      requiredAuth: "token in handshake.auth.token or handshake.query.token"
+    }
+  });
+});
+
 app.get("/u/:id", renderSharedProfilePage);
 
 // ✅ Cron Job to check premium expiry daily at 12:01 AM
@@ -108,20 +124,39 @@ const server = app.listen(port, '0.0.0.0', () =>
   console.log(`✅ Server is running on PORT - ${port}`)
 );
 
-// ✅ Initialize Socket.io
+// ✅ Initialize Socket.io with enhanced configuration
 const io = new Server(server, {
   pingTimeout: 60000,
-  cors: { origin: "*" },
+  pingInterval: 25000,
+  cors: { 
+    origin: "*",
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'], // Allow both transports for better compatibility
+  allowEIO3: true, // Allow Engine.IO v3 clients
+  connectTimeout: 45000, // Increase connection timeout
 });
 
 io.use(isSocketAuthenticated);
 
 io.on("connection", (socket) => {
-  console.log("✅ Connected to socket.io");
+  console.log("✅ Connected to socket.io - Socket ID:", socket.id);
+  console.log("📱 Client transport:", socket.conn.transport.name);
+  console.log("👤 User role:", socket.role);
 
   socket.on("setup", (user) => {
     socket.join(user._id);
     socket.emit("connected");
+    console.log("🔗 User joined room:", user._id);
+  });
+  
+  socket.on("disconnect", (reason) => {
+    console.log("❌ Socket disconnected:", socket.id, "Reason:", reason);
+  });
+
+  socket.on("error", (error) => {
+    console.log("⚠️ Socket error:", error);
   });
 
   socket.on("join chat", (room) => {
@@ -163,6 +198,13 @@ deliveryIo.use(isSocketAuthenticated);
 
 deliveryIo.on("connection", (socket) => {
   console.log("🚚 Delivery socket connected:", socket.id);
+  console.log("📱 Client transport:", socket.conn.transport.name);
+  
+  // Join delivery boy to their personal room
+  if (socket.deliveryBoy) {
+    socket.join(socket.deliveryBoy._id.toString());
+    console.log("🔗 Delivery boy joined room:", socket.deliveryBoy._id);
+  }
 
   socket.on("goOnline", (body, callback) =>
     goOnlineSocket(deliveryIo, socket, body, callback)
@@ -172,7 +214,19 @@ deliveryIo.on("connection", (socket) => {
     goOfflineSocket(deliveryIo, socket, body, callback)
   );
 
-  socket.on("disconnect", () => {
-    console.log("❌ Delivery socket disconnected:", socket.id);
+  socket.on("disconnect", (reason) => {
+    console.log("❌ Delivery socket disconnected:", socket.id, "Reason:", reason);
   });
+
+  socket.on("error", (error) => {
+    console.log("⚠️ Delivery socket error:", error);
+  });
+});
+
+// Log socket.io engine errors
+io.engine.on("connection_error", (err) => {
+  console.log("🔴 Socket.io connection error:");
+  console.log("   Code:", err.code);
+  console.log("   Message:", err.message);
+  console.log("   Context:", err.context);
 });

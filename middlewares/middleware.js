@@ -288,18 +288,27 @@ export const deliveryBoyAuthentication = async (req, res, next) => {
 /* --------------------------- SOCKET AUTHENTICATION ------------------------ */
 export const isSocketAuthenticated = async (socket, next) => {
   try {
+    console.log("🔐 Socket authentication attempt...");
+    console.log("   Namespace:", socket.nsp.name);
+    console.log("   Transport:", socket.conn?.transport?.name || "unknown");
+    
     let token =
       socket.handshake.auth?.token ||
       socket.handshake.query?.token ||
       socket.request.headers?.token;
 
-    if (!token) return next(new Error("Token missing"));
+    if (!token) {
+      console.log("❌ Socket auth failed: Token missing");
+      return next(new Error("Token missing"));
+    }
+    
     if (token.startsWith("Bearer ")) token = token.slice(7);
 
     let decoded;
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (jwtError) {
+      console.log("❌ Socket auth failed: Invalid token -", jwtError.message);
       return next(new Error("Invalid or expired token"));
     }
 
@@ -308,16 +317,23 @@ export const isSocketAuthenticated = async (socket, next) => {
 
     if (!user) {
       deliveryBoy = await DeliveryBoy.findById(decoded._id);
-      if (!deliveryBoy) return next(new Error("Invalid token"));
+      if (!deliveryBoy) {
+        console.log("❌ Socket auth failed: User/DeliveryBoy not found for ID:", decoded._id);
+        return next(new Error("Invalid token"));
+      }
     }
 
     socket.role = user ? "user" : "deliveryBoy";
     socket.user = user || null;
     socket.deliveryBoy = deliveryBoy || null;
 
+    console.log("✅ Socket authenticated successfully");
+    console.log("   Role:", socket.role);
+    console.log("   ID:", user?._id || deliveryBoy?._id);
+    
     next();
   } catch (err) {
-    console.error("Socket auth failed:", err.message);
+    console.error("❌ Socket auth failed:", err.message);
     return next(new Error("Unauthorized"));
   }
 };
