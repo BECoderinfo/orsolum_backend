@@ -1895,7 +1895,8 @@ export const updateDeliveryBoyProfile = async (req, res) => {
 
         let { id } = req.params;
 
-        let { firstName, lastName, dob, email, phone, state, city } = req.body;
+        // Note: DOB is not included here as it should be read-only (cannot be updated after registration)
+        let { firstName, lastName, email, phone, state, city } = req.body;
 
         let image;
 
@@ -1920,11 +1921,12 @@ export const updateDeliveryBoyProfile = async (req, res) => {
         }
 
         // Build update object with only provided fields
+        // DOB is excluded - it's a read-only field and cannot be changed
         const updateData = {};
         
         if (firstName) updateData.firstName = firstName;
         if (lastName) updateData.lastName = lastName;
-        if (dob) updateData.dob = dob;
+        // DOB removed - not editable after registration
         if (email) updateData.email = email.toLowerCase();
         if (phone) updateData.phone = phone;
         if (state) updateData.state = state;

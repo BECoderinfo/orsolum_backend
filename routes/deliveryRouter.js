@@ -84,10 +84,22 @@ deliveryRouter.post('/deliveryboy/register/v1', registerDeliveryBoy);
 deliveryRouter.post('/deliveryboy/login/v1', loginDeliveryBoy);
 deliveryRouter.get('/deliveryboy/is/exist/v1', isDeliveryBoyExist);
 
+// Conditional middleware - only use multer for multipart/form-data requests
+const conditionalMulterUpload = (req, res, next) => {
+    const contentType = req.headers['content-type'] || '';
+    if (contentType.includes('multipart/form-data')) {
+        // Use multer for multipart requests (with image)
+        uploadDeliveryBoyImage.single('image')(req, res, next);
+    } else {
+        // Skip multer for JSON requests (without image)
+        next();
+    }
+};
+
 deliveryRouter.put(
     '/deliveryboy/update/profile/v1/:id',
     deliveryBoyAuthentication,
-    uploadDeliveryBoyImage.single('image'),
+    conditionalMulterUpload,
     updateDeliveryBoyProfile
 );
 
