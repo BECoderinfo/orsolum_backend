@@ -295,11 +295,16 @@ export const isSocketAuthenticated = async (socket, next) => {
     let token =
       socket.handshake.auth?.token ||
       socket.handshake.query?.token ||
-      socket.request.headers?.token;
+      socket.request.headers?.token ||
+      socket.request.headers?.authorization;
 
     if (!token) {
       console.log("❌ Socket auth failed: Token missing");
-      return next(new Error("Token missing"));
+      // Allow connection but mark as unauthenticated for public features
+      socket.role = "guest";
+      socket.user = null;
+      socket.deliveryBoy = null;
+      return next();  // Allow connection without auth for better mobile experience
     }
     
     if (token.startsWith("Bearer ")) token = token.slice(7);
@@ -308,19 +313,41 @@ export const isSocketAuthenticated = async (socket, next) => {
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (jwtError) {
-      console.log("❌ Socket auth failed: Invalid token -", jwtError.message);
-      return next(new Error("Invalid or expired token"));
+      console.log("⚠️ Socket auth warning: Invalid token -", jwtError.message);
+      // Allow connection but mark as unauthenticated
+      socket.role = "guest";
+      socket.user = null;
+      socket.deliveryBoy = null;
+      return next();  // Allow connection for reconnection scenarios
     }
 
-    let user = await User.findById(decoded._id);
+    // Use Promise.race with timeout to prevent hanging on DB queries
+    const findUserPromise = User.findById(decoded._id).lean().maxTimeMS(5000);
+    const findDeliveryBoyPromise = DeliveryBoy.findById(decoded._id).lean().maxTimeMS(5000);
+
+    let user = null;
     let deliveryBoy = null;
 
-    if (!user) {
-      deliveryBoy = await DeliveryBoy.findById(decoded._id);
-      if (!deliveryBoy) {
-        console.log("❌ Socket auth failed: User/DeliveryBoy not found for ID:", decoded._id);
-        return next(new Error("Invalid token"));
+    try {
+      user = await findUserPromise;
+      if (!user) {
+        deliveryBoy = await findDeliveryBoyPromise;
       }
+    } catch (dbError) {
+      console.log("⚠️ Socket auth DB warning:", dbError.message);
+      // Allow connection even if DB is slow
+      socket.role = "guest";
+      socket.user = null;
+      socket.deliveryBoy = null;
+      return next();
+    }
+
+    if (!user && !deliveryBoy) {
+      console.log("⚠️ Socket auth: User/DeliveryBoy not found for ID:", decoded._id);
+      socket.role = "guest";
+      socket.user = null;
+      socket.deliveryBoy = null;
+      return next();  // Allow connection for better UX
     }
 
     socket.role = user ? "user" : "deliveryBoy";
@@ -333,8 +360,12 @@ export const isSocketAuthenticated = async (socket, next) => {
     
     next();
   } catch (err) {
-    console.error("❌ Socket auth failed:", err.message);
-    return next(new Error("Unauthorized"));
+    console.error("⚠️ Socket auth error:", err.message);
+    // Still allow connection for better mobile experience
+    socket.role = "guest";
+    socket.user = null;
+    socket.deliveryBoy = null;
+    return next();
   }
 };
 

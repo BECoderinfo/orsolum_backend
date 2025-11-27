@@ -126,29 +126,53 @@ const server = app.listen(port, '0.0.0.0', () =>
 
 // ✅ Initialize Socket.io with enhanced configuration
 const io = new Server(server, {
-  pingTimeout: 60000,
-  pingInterval: 25000,
+  pingTimeout: 120000,        // 2 minutes - increased for mobile networks
+  pingInterval: 30000,        // 30 seconds
+  connectTimeout: 60000,      // 1 minute connection timeout
+  upgradeTimeout: 30000,      // 30 seconds for transport upgrade
+  maxHttpBufferSize: 1e6,     // 1MB max buffer
   cors: { 
     origin: "*",
-    methods: ["GET", "POST"],
-    credentials: true
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true,
+    allowedHeaders: ["Authorization", "Content-Type", "token"]
   },
-  transports: ['websocket', 'polling'], // Allow both transports for better compatibility
-  allowEIO3: true, // Allow Engine.IO v3 clients
-  connectTimeout: 45000, // Increase connection timeout
+  transports: ['polling', 'websocket'], // Polling first for better mobile compatibility
+  allowEIO3: true,            // Allow Engine.IO v3 clients
+  allowEIO4: true,            // Allow Engine.IO v4 clients
+  perMessageDeflate: false,   // Disable compression for mobile (reduces latency)
+  httpCompression: false,     // Disable HTTP compression for mobile
 });
 
 io.use(isSocketAuthenticated);
 
 io.on("connection", (socket) => {
   console.log("✅ Connected to socket.io - Socket ID:", socket.id);
-  console.log("📱 Client transport:", socket.conn.transport.name);
-  console.log("👤 User role:", socket.role);
+  console.log("📱 Client transport:", socket.conn?.transport?.name || "unknown");
+  console.log("👤 User role:", socket.role || "guest");
+
+  // Send immediate acknowledgment to client
+  socket.emit("connection_success", { 
+    socketId: socket.id, 
+    role: socket.role || "guest",
+    serverTime: new Date().toISOString()
+  });
 
   socket.on("setup", (user) => {
-    socket.join(user._id);
-    socket.emit("connected");
-    console.log("🔗 User joined room:", user._id);
+    if (user && user._id) {
+      socket.join(user._id);
+      socket.emit("connected", { userId: user._id });
+      console.log("🔗 User joined room:", user._id);
+    }
+  });
+
+  // Heartbeat/ping handler for mobile clients
+  socket.on("ping_server", (callback) => {
+    if (typeof callback === 'function') {
+      callback({ status: "pong", time: Date.now() });
+    } else {
+      socket.emit("pong_client", { status: "pong", time: Date.now() });
+    }
   });
   
   socket.on("disconnect", (reason) => {
@@ -156,11 +180,16 @@ io.on("connection", (socket) => {
   });
 
   socket.on("error", (error) => {
-    console.log("⚠️ Socket error:", error);
+    console.log("⚠️ Socket error:", socket.id, error?.message || error);
+  });
+
+  // Handle connection errors gracefully
+  socket.on("connect_error", (error) => {
+    console.log("⚠️ Socket connect_error:", socket.id, error?.message || error);
   });
 
   socket.on("join chat", (room) => {
-    socket.join(room);
+    if (room) socket.join(room);
   });
 
   socket.on("createChat", (body, callback) =>
@@ -174,11 +203,12 @@ io.on("connection", (socket) => {
   );
 
   socket.on("new message", (newMessageRecieved) => {
-    let chat = newMessageRecieved.chat;
-    socket.in(chat.admin).emit("message recieved", newMessageRecieved);
+    if (newMessageRecieved?.chat?.admin) {
+      socket.in(newMessageRecieved.chat.admin).emit("message recieved", newMessageRecieved);
+    }
   });
 
-  // DeliveryBoy socket logs
+  // DeliveryBoy socket handlers
   socket.on("goOnline", (body, callback) =>
     goOnlineSocket(io, socket, body, callback)
   );
@@ -187,8 +217,8 @@ io.on("connection", (socket) => {
     goOfflineSocket(io, socket, body, callback)
   );
 
-  socket.off("setup", (userData) => {
-    socket.leave(userData._id);
+  socket.on("leave_room", (roomId) => {
+    if (roomId) socket.leave(roomId);
   });
 });
 
@@ -198,28 +228,65 @@ deliveryIo.use(isSocketAuthenticated);
 
 deliveryIo.on("connection", (socket) => {
   console.log("🚚 Delivery socket connected:", socket.id);
-  console.log("📱 Client transport:", socket.conn.transport.name);
+  console.log("📱 Client transport:", socket.conn?.transport?.name || "unknown");
+  console.log("👤 Role:", socket.role || "guest");
   
+  // Send immediate acknowledgment
+  socket.emit("delivery_connected", {
+    socketId: socket.id,
+    role: socket.role || "guest",
+    deliveryBoyId: socket.deliveryBoy?._id || null,
+    serverTime: new Date().toISOString()
+  });
+
   // Join delivery boy to their personal room
-  if (socket.deliveryBoy) {
-    socket.join(socket.deliveryBoy._id.toString());
-    console.log("🔗 Delivery boy joined room:", socket.deliveryBoy._id);
+  if (socket.deliveryBoy && socket.deliveryBoy._id) {
+    const roomId = socket.deliveryBoy._id.toString();
+    socket.join(roomId);
+    console.log("🔗 Delivery boy joined room:", roomId);
   }
 
-  socket.on("goOnline", (body, callback) =>
-    goOnlineSocket(deliveryIo, socket, body, callback)
-  );
+  // Heartbeat handler for delivery app
+  socket.on("ping_server", (callback) => {
+    if (typeof callback === 'function') {
+      callback({ status: "pong", time: Date.now() });
+    } else {
+      socket.emit("pong_client", { status: "pong", time: Date.now() });
+    }
+  });
 
-  socket.on("goOffline", (body, callback) =>
-    goOfflineSocket(deliveryIo, socket, body, callback)
-  );
+  socket.on("goOnline", (body, callback) => {
+    try {
+      goOnlineSocket(deliveryIo, socket, body, callback);
+    } catch (err) {
+      console.log("⚠️ goOnline error:", err.message);
+      if (typeof callback === 'function') {
+        callback({ success: false, error: err.message });
+      }
+    }
+  });
+
+  socket.on("goOffline", (body, callback) => {
+    try {
+      goOfflineSocket(deliveryIo, socket, body, callback);
+    } catch (err) {
+      console.log("⚠️ goOffline error:", err.message);
+      if (typeof callback === 'function') {
+        callback({ success: false, error: err.message });
+      }
+    }
+  });
 
   socket.on("disconnect", (reason) => {
     console.log("❌ Delivery socket disconnected:", socket.id, "Reason:", reason);
   });
 
   socket.on("error", (error) => {
-    console.log("⚠️ Delivery socket error:", error);
+    console.log("⚠️ Delivery socket error:", socket.id, error?.message || error);
+  });
+
+  socket.on("connect_error", (error) => {
+    console.log("⚠️ Delivery connect_error:", socket.id, error?.message || error);
   });
 });
 
