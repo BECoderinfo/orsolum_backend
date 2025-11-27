@@ -822,7 +822,7 @@ export const getDashboardProfile = async (req, res) => {
     try {
         const deliveryBoyId = req.user._id;
         const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId)
-            .select('firstName lastName phone image currentLocation rating totalDeliveries availabilityStatus');
+            .select('firstName lastName dob email phone state city image currentLocation rating totalDeliveries availabilityStatus');
 
         if (!deliveryBoy) {
             return res.status(status.NotFound).json({
@@ -860,7 +860,13 @@ export const getDashboardProfile = async (req, res) => {
             deliveryBoy: {
                 _id: deliveryBoy._id,
                 name: formatFullName(deliveryBoy.firstName, deliveryBoy.lastName, deliveryBoy.phone),
+                firstName: deliveryBoy.firstName || '',
+                lastName: deliveryBoy.lastName || '',
+                dob: deliveryBoy.dob || null,  // DOB for edit profile (read-only field)
+                email: deliveryBoy.email || '',
                 phone: deliveryBoy.phone,
+                state: deliveryBoy.state || '',
+                city: deliveryBoy.city || '',
                 avatar: deliveryBoy.image || null,
                 currentLocation: formatCurrentLocation(deliveryBoy.currentLocation),
                 availabilityStatus: deliveryBoy.availabilityStatus,
