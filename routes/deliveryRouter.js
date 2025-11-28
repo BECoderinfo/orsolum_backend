@@ -85,29 +85,49 @@ deliveryRouter.post('/deliveryboy/login/v1', loginDeliveryBoy);
 deliveryRouter.get('/deliveryboy/is/exist/v1', isDeliveryBoyExist);
 
 // Conditional middleware - only use multer for multipart/form-data requests
+// Image is optional - user can update profile with or without image
 const conditionalMulterUpload = (req, res, next) => {
     const contentType = req.headers['content-type'] || '';
     
     // Debug logging for troubleshooting
     console.log("📦 Update Profile - Content-Type:", contentType);
-    console.log("📦 Update Profile - Request Body keys:", req.body ? Object.keys(req.body) : 'empty');
-    console.log("📦 Update Profile - Request Body:", req.body ? JSON.stringify(req.body) : 'empty');
     
     if (contentType.includes('multipart/form-data')) {
-        // Use multer for multipart requests (with image)
+        // Use multer for multipart requests (with or without image)
+        // single('image') makes image optional - if no file, req.file will be undefined
         uploadDeliveryBoyImage.single('image')(req, res, (err) => {
             if (err) {
-                console.error("❌ Multer error:", err);
-                return res.status(400).json({
-                    success: false,
-                    message: "File upload error: " + err.message
-                });
+                // Only return error for actual file upload errors, not missing file
+                if (err.code === 'LIMIT_FILE_SIZE') {
+                    console.error("❌ Multer error - File too large:", err);
+                    return res.status(400).json({
+                        success: false,
+                        message: "File size exceeds limit (5MB)"
+                    });
+                }
+                if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+                    console.error("❌ Multer error - Unexpected file field:", err);
+                    return res.status(400).json({
+                        success: false,
+                        message: "Unexpected file field. Only 'image' field is allowed."
+                    });
+                }
+                // For missing file or other non-critical errors, just log and continue
+                // Image is optional, so missing file is not an error
+                if (err.message && !err.message.includes('Unexpected field')) {
+                    console.log("⚠️ Multer warning (non-critical):", err.message);
+                }
             }
+            // Continue even if no file was uploaded - image is optional
+            // Multer will parse form data fields into req.body
+            console.log("📦 Update Profile - Request Body keys (after multer):", req.body ? Object.keys(req.body) : 'empty');
+            console.log("📦 Update Profile - File uploaded:", req.file ? 'Yes - ' + req.file.key : 'No (optional)');
             next();
         });
     } else {
         // For JSON requests, express.json() middleware should have already parsed the body
         // Just pass through to the controller
+        console.log("📦 Update Profile - JSON request, body keys:", req.body ? Object.keys(req.body) : 'empty');
         next();
     }
 };

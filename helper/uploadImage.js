@@ -92,4 +92,10 @@ export const uploadDeliveryBoyImage = multer({
             cb(null, `${folderName}/${fileName}`);
         },
     }),
+    // Make image optional - allow requests without image file
+    // Note: single('image') already makes the file optional
+    // If no file is provided, req.file will be undefined (which is fine)
+    limits: {
+        fileSize: 5 * 1024 * 1024, // 5MB limit
+    },
 });
