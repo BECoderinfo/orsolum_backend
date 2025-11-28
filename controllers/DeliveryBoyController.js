@@ -1901,8 +1901,31 @@ export const updateDeliveryBoyProfile = async (req, res) => {
 
         let { id } = req.params;
 
+        // Debug logging to check what's being received
+        console.log("📝 Update Profile - Request Body Type:", typeof req.body);
+        console.log("📝 Update Profile - Request Body:", JSON.stringify(req.body, null, 2));
+        console.log("📝 Update Profile - Request Body Keys:", req.body ? Object.keys(req.body) : 'empty');
+        console.log("📝 Update Profile - Content-Type:", req.headers['content-type']);
+        
+        // Check if body is empty or not parsed
+        if (!req.body || (typeof req.body === 'object' && Object.keys(req.body).length === 0)) {
+            console.log("⚠️ Request body is empty or not parsed");
+            return res.status(400).json({
+                success: false,
+                message: "Request body is empty. Please send JSON data with at least one field to update.",
+                debug: {
+                    bodyType: typeof req.body,
+                    bodyKeys: req.body ? Object.keys(req.body) : [],
+                    contentType: req.headers['content-type'],
+                    rawBody: req.rawBody ? 'exists' : 'missing'
+                }
+            });
+        }
+
         // Note: DOB is not included here as it should be read-only (cannot be updated after registration)
-        let { firstName, lastName, email, phone, state, city } = req.body;
+        let { firstName, lastName, email, phone, state, city, dob } = req.body;
+
+        console.log("📝 Extracted fields:", { firstName, lastName, email, phone, state, city, dob });
 
         let image;
 
@@ -1930,20 +1953,51 @@ export const updateDeliveryBoyProfile = async (req, res) => {
         // DOB is excluded - it's a read-only field and cannot be changed
         const updateData = {};
         
-        if (firstName) updateData.firstName = firstName;
-        if (lastName) updateData.lastName = lastName;
-        // DOB removed - not editable after registration
-        if (email) updateData.email = email.toLowerCase();
-        if (phone) updateData.phone = phone;
-        if (state) updateData.state = state;
-        if (city) updateData.city = city;
-        if (image) updateData.image = image;
+        // Improved validation: check if field exists and is not empty after trimming
+        if (firstName !== undefined && firstName !== null && String(firstName).trim() !== '') {
+            updateData.firstName = String(firstName).trim();
+        }
+        if (lastName !== undefined && lastName !== null && String(lastName).trim() !== '') {
+            updateData.lastName = String(lastName).trim();
+        }
+        // DOB removed - not editable after registration (but we'll log if it's sent)
+        if (dob !== undefined && dob !== null) {
+            console.log("⚠️ DOB field received but ignored (read-only field)");
+        }
+        if (email !== undefined && email !== null && String(email).trim() !== '') {
+            updateData.email = String(email).trim().toLowerCase();
+        }
+        if (phone !== undefined && phone !== null && String(phone).trim() !== '') {
+            updateData.phone = String(phone).trim();
+        }
+        if (state !== undefined && state !== null && String(state).trim() !== '') {
+            updateData.state = String(state).trim();
+        }
+        if (city !== undefined && city !== null && String(city).trim() !== '') {
+            updateData.city = String(city).trim();
+        }
+        if (image) {
+            updateData.image = image;
+        }
+
+        console.log("📝 Update Data Object:", JSON.stringify(updateData, null, 2));
+        console.log("📝 Update Data Keys Count:", Object.keys(updateData).length);
 
         // Check if at least one field is provided for update
         if (Object.keys(updateData).length === 0) {
+            console.log("❌ No valid fields to update");
             return res.status(400).json({
                 success: false,
                 message: "Please provide at least one field to update",
+                receivedFields: Object.keys(req.body || {}),
+                debug: {
+                    firstName: firstName !== undefined ? `"${firstName}"` : 'undefined',
+                    lastName: lastName !== undefined ? `"${lastName}"` : 'undefined',
+                    email: email !== undefined ? `"${email}"` : 'undefined',
+                    phone: phone !== undefined ? `"${phone}"` : 'undefined',
+                    state: state !== undefined ? `"${state}"` : 'undefined',
+                    city: city !== undefined ? `"${city}"` : 'undefined',
+                }
             });
         }
 

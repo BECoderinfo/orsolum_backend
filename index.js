@@ -57,6 +57,7 @@ app.use(
     },
   })
 );
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // ✅ Database Connection
 dbConnect();
@@ -147,9 +148,8 @@ const io = new Server(server, {
 io.use(isSocketAuthenticated);
 
 io.on("connection", (socket) => {
-  console.log("✅ Connected to socket.io - Socket ID:", socket.id);
-  console.log("📱 Client transport:", socket.conn?.transport?.name || "unknown");
-  console.log("👤 User role:", socket.role || "guest");
+  // Reduced logging - only log important events
+  // console.log("✅ Socket connected:", socket.id, "Role:", socket.role || "guest");
 
   // Send immediate acknowledgment to client
   socket.emit("connection_success", { 
@@ -162,7 +162,8 @@ io.on("connection", (socket) => {
     if (user && user._id) {
       socket.join(user._id);
       socket.emit("connected", { userId: user._id });
-      console.log("🔗 User joined room:", user._id);
+      // Only log if needed for debugging
+      // console.log("🔗 User joined room:", user._id);
     }
   });
 
@@ -176,16 +177,25 @@ io.on("connection", (socket) => {
   });
   
   socket.on("disconnect", (reason) => {
-    console.log("❌ Socket disconnected:", socket.id, "Reason:", reason);
+    // Only log unexpected disconnects
+    if (reason !== "client namespace disconnect" && reason !== "transport close") {
+      console.log("❌ Socket disconnected:", socket.id, "Reason:", reason);
+    }
   });
 
   socket.on("error", (error) => {
-    console.log("⚠️ Socket error:", socket.id, error?.message || error);
+    // Only log actual errors, not warnings
+    if (error && error.message && !error.message.includes("transport")) {
+      console.log("⚠️ Socket error:", socket.id, error.message);
+    }
   });
 
-  // Handle connection errors gracefully
+  // Handle connection errors gracefully - silent for common cases
   socket.on("connect_error", (error) => {
-    console.log("⚠️ Socket connect_error:", socket.id, error?.message || error);
+    // Only log if it's not a common transport error
+    if (error && error.message && !error.message.includes("transport")) {
+      console.log("⚠️ Socket connect_error:", socket.id, error.message);
+    }
   });
 
   socket.on("join chat", (room) => {
@@ -227,9 +237,8 @@ const deliveryIo = io.of("/delivery");
 deliveryIo.use(isSocketAuthenticated);
 
 deliveryIo.on("connection", (socket) => {
-  console.log("🚚 Delivery socket connected:", socket.id);
-  console.log("📱 Client transport:", socket.conn?.transport?.name || "unknown");
-  console.log("👤 Role:", socket.role || "guest");
+  // Reduced logging - only log important events
+  // console.log("🚚 Delivery socket connected:", socket.id);
   
   // Send immediate acknowledgment
   socket.emit("delivery_connected", {
@@ -243,7 +252,8 @@ deliveryIo.on("connection", (socket) => {
   if (socket.deliveryBoy && socket.deliveryBoy._id) {
     const roomId = socket.deliveryBoy._id.toString();
     socket.join(roomId);
-    console.log("🔗 Delivery boy joined room:", roomId);
+    // Only log if needed for debugging
+    // console.log("🔗 Delivery boy joined room:", roomId);
   }
 
   // Heartbeat handler for delivery app
@@ -278,15 +288,24 @@ deliveryIo.on("connection", (socket) => {
   });
 
   socket.on("disconnect", (reason) => {
-    console.log("❌ Delivery socket disconnected:", socket.id, "Reason:", reason);
+    // Only log unexpected disconnects
+    if (reason !== "client namespace disconnect" && reason !== "transport close") {
+      console.log("❌ Delivery socket disconnected:", socket.id, "Reason:", reason);
+    }
   });
 
   socket.on("error", (error) => {
-    console.log("⚠️ Delivery socket error:", socket.id, error?.message || error);
+    // Only log actual errors, not warnings
+    if (error && error.message && !error.message.includes("transport")) {
+      console.log("⚠️ Delivery socket error:", socket.id, error.message);
+    }
   });
 
   socket.on("connect_error", (error) => {
-    console.log("⚠️ Delivery connect_error:", socket.id, error?.message || error);
+    // Only log if it's not a common transport error
+    if (error && error.message && !error.message.includes("transport")) {
+      console.log("⚠️ Delivery connect_error:", socket.id, error.message);
+    }
   });
 });
 

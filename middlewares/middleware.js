@@ -288,10 +288,7 @@ export const deliveryBoyAuthentication = async (req, res, next) => {
 /* --------------------------- SOCKET AUTHENTICATION ------------------------ */
 export const isSocketAuthenticated = async (socket, next) => {
   try {
-    console.log("🔐 Socket authentication attempt...");
-    console.log("   Namespace:", socket.nsp.name);
-    console.log("   Transport:", socket.conn?.transport?.name || "unknown");
-    
+    // Reduced logging - only log errors and successful auth
     let token =
       socket.handshake.auth?.token ||
       socket.handshake.query?.token ||
@@ -299,12 +296,11 @@ export const isSocketAuthenticated = async (socket, next) => {
       socket.request.headers?.authorization;
 
     if (!token) {
-      console.log("❌ Socket auth failed: Token missing");
-      // Allow connection but mark as unauthenticated for public features
+      // Silent fail - allow connection as guest without logging
       socket.role = "guest";
       socket.user = null;
       socket.deliveryBoy = null;
-      return next();  // Allow connection without auth for better mobile experience
+      return next();
     }
     
     if (token.startsWith("Bearer ")) token = token.slice(7);
@@ -313,12 +309,11 @@ export const isSocketAuthenticated = async (socket, next) => {
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (jwtError) {
-      console.log("⚠️ Socket auth warning: Invalid token -", jwtError.message);
-      // Allow connection but mark as unauthenticated
+      // Silent fail - allow connection as guest without logging
       socket.role = "guest";
       socket.user = null;
       socket.deliveryBoy = null;
-      return next();  // Allow connection for reconnection scenarios
+      return next();
     }
 
     // Use Promise.race with timeout to prevent hanging on DB queries
@@ -334,8 +329,7 @@ export const isSocketAuthenticated = async (socket, next) => {
         deliveryBoy = await findDeliveryBoyPromise;
       }
     } catch (dbError) {
-      console.log("⚠️ Socket auth DB warning:", dbError.message);
-      // Allow connection even if DB is slow
+      // Silent fail - allow connection even if DB is slow
       socket.role = "guest";
       socket.user = null;
       socket.deliveryBoy = null;
@@ -343,25 +337,24 @@ export const isSocketAuthenticated = async (socket, next) => {
     }
 
     if (!user && !deliveryBoy) {
-      console.log("⚠️ Socket auth: User/DeliveryBoy not found for ID:", decoded._id);
+      // Silent fail - allow connection as guest
       socket.role = "guest";
       socket.user = null;
       socket.deliveryBoy = null;
-      return next();  // Allow connection for better UX
+      return next();
     }
 
     socket.role = user ? "user" : "deliveryBoy";
     socket.user = user || null;
     socket.deliveryBoy = deliveryBoy || null;
-
-    console.log("✅ Socket authenticated successfully");
-    console.log("   Role:", socket.role);
-    console.log("   ID:", user?._id || deliveryBoy?._id);
+    
+    // Only log successful authentication (optional - can remove if too verbose)
+    // console.log("✅ Socket authenticated:", socket.role, user?._id || deliveryBoy?._id);
     
     next();
   } catch (err) {
-    console.error("⚠️ Socket auth error:", err.message);
-    // Still allow connection for better mobile experience
+    // Only log actual errors, not warnings
+    console.error("🔴 Socket auth critical error:", err.message);
     socket.role = "guest";
     socket.user = null;
     socket.deliveryBoy = null;

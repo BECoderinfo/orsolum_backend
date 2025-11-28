@@ -87,11 +87,27 @@ deliveryRouter.get('/deliveryboy/is/exist/v1', isDeliveryBoyExist);
 // Conditional middleware - only use multer for multipart/form-data requests
 const conditionalMulterUpload = (req, res, next) => {
     const contentType = req.headers['content-type'] || '';
+    
+    // Debug logging for troubleshooting
+    console.log("📦 Update Profile - Content-Type:", contentType);
+    console.log("📦 Update Profile - Request Body keys:", req.body ? Object.keys(req.body) : 'empty');
+    console.log("📦 Update Profile - Request Body:", req.body ? JSON.stringify(req.body) : 'empty');
+    
     if (contentType.includes('multipart/form-data')) {
         // Use multer for multipart requests (with image)
-        uploadDeliveryBoyImage.single('image')(req, res, next);
+        uploadDeliveryBoyImage.single('image')(req, res, (err) => {
+            if (err) {
+                console.error("❌ Multer error:", err);
+                return res.status(400).json({
+                    success: false,
+                    message: "File upload error: " + err.message
+                });
+            }
+            next();
+        });
     } else {
-        // Skip multer for JSON requests (without image)
+        // For JSON requests, express.json() middleware should have already parsed the body
+        // Just pass through to the controller
         next();
     }
 };
