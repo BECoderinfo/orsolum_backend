@@ -119,18 +119,6 @@ export const skipOrder = async (req, res) => {
             });
         }
 
-        // Only allow skipping if order is not already assigned
-        if (
-            order.assignedDeliveryBoy &&
-            order.assignedDeliveryBoy.toString() !== deliveryBoyId.toString()
-        ) {
-            return res.status(status.BadRequest).json({
-                status: jsonStatus.BadRequest,
-                success: false,
-                message: "Order is already assigned to another delivery boy"
-            });
-        }
-
         // Add deliveryBoy to skippedBy array if not already skipped
         order.skippedBy = order.skippedBy || [];
         const alreadySkipped = order.skippedBy.some(
@@ -189,20 +177,12 @@ export const acceptOrder = async (req, res) => {
             });
         }
 
-        // Add this validation after line 75 in acceptOrder function
-        if (order.status !== "Product shipped") {
+        const allowedAcceptStatuses = ["Pending", "Product shipped"];
+        if (!allowedAcceptStatuses.includes(order.status)) {
             return res.status(status.BadRequest).json({
                 status: jsonStatus.BadRequest,
                 success: false,
                 message: "Order is not ready for delivery"
-            });
-        }
-
-        if (order.paymentStatus !== "SUCCESS") {
-            return res.status(status.BadRequest).json({
-                status: jsonStatus.BadRequest,
-                success: false,
-                message: "Order payment is not completed"
             });
         }
 
@@ -972,18 +952,45 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
         const statusQuery = (req.query.status || 'all').toString();
 
         const allowedStatuses = ["Pending", "Product shipped", "On the way", "Your Destination", "Delivered"];
+        const newOrderStatuses = ["Pending", "Product shipped"];
+        const ongoingOrderStatuses = ["On the way", "Your Destination"];
+        const statusAliasMap = {
+            new: newOrderStatuses,
+            ongoing: ongoingOrderStatuses,
+            completed: ["Delivered"]
+        };
+        const allowedStatusMap = allowedStatuses.reduce((acc, status) => {
+            acc[status.toLowerCase()] = status;
+            return acc;
+        }, {});
+        
         let statusFilter = allowedStatuses;
         if (statusQuery !== 'all') {
-            const requested = statusQuery.split(',').map(value => value.trim()).filter(Boolean);
-            const valid = requested.filter(value => allowedStatuses.includes(value));
-            if (valid.length) {
-                statusFilter = valid;
+            const normalizedQuery = statusQuery.toLowerCase();
+            
+            if (statusAliasMap[normalizedQuery]) {
+                statusFilter = statusAliasMap[normalizedQuery];
+            } else {
+                // Handle comma-separated status values with relaxed comparisons
+                const requested = statusQuery
+                    .split(',')
+                    .map(value => value.trim().toLowerCase())
+                    .filter(Boolean);
+
+                const valid = requested
+                    .map(value => allowedStatusMap[value])
+                    .filter(Boolean);
+
+                if (valid.length) {
+                    statusFilter = valid;
+                } else {
+                    statusFilter = [];
+                }
             }
         }
 
-        const newOrderStatuses = ["Pending", "Product shipped"];
-        const ongoingOrderStatuses = ["On the way", "Your Destination"];
         const includeUnassignedNewOrders = statusFilter.some(status => newOrderStatuses.includes(status));
+        const includeOngoingFilter = statusFilter.some(status => ongoingOrderStatuses.includes(status));
 
         const baseOrConditions = [
             { assignedDeliveryBoy: deliveryBoyId }
@@ -996,6 +1003,19 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
                     { assignedDeliveryBoy: { $exists: false } },
                     { assignedDeliveryBoy: null }
                 ]
+            });
+        }
+
+        if (!statusFilter.length) {
+            return res.status(status.OK).json({
+                status: jsonStatus.OK,
+                success: true,
+                data: [],
+                meta: {
+                    total: 0,
+                    newOrders: 0,
+                    ongoing: 0
+                }
             });
         }
 
@@ -1054,35 +1074,68 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
             return parts.join(', ');
         };
 
-        const response = deliveries.map(order => ({
-            taskId: order.orderId,
-            status: order.status,
-            customer: {
-                name: formatFullName(order.createdBy?.firstName, order.createdBy?.lastName, 'Customer'),
-                phone: order.createdBy?.phone || ''
-            },
-            pickup: {
-                storeName: order.storeId?.name || order.storeId?.storeName || '',
-                address: order.storeId?.address || ''
-            },
-            drop: {
-                address: formatAddress(order.address),
-                geocode: {
-                    lat: order.address?.location?.coordinates?.[1] ?? order.address?.lat ?? null,
-                    lng: order.address?.location?.coordinates?.[0] ?? order.address?.long ?? order.address?.lng ?? null
-                }
-            },
-            payment: {
-                mode: order.paymentStatus === "SUCCESS" ? "Prepaid" : "COD",
-                amount: order.summary?.grandTotal || 0
-            },
-            eta: order.estimatedDate,
-            shiprocket: order.shiprocket ? {
-                shipment_id: order.shiprocket.shipment_id || null,
-                order_id: order.shiprocket.order_id || null,
-                awb_code: order.shiprocket.awb_code || order.shiprocket.awb || null
-            } : null
-        }));
+        const normalizeCoordinate = (value) => {
+            if (value === null || value === undefined || value === '') {
+                return null;
+            }
+
+            const numeric = Number(value);
+            if (Number.isFinite(numeric)) {
+                return Number(numeric.toFixed(6));
+            }
+
+            return null;
+        };
+
+        const response = deliveries
+            .filter(order => statusFilter.includes(order.status))
+            .map(order => {
+                const pickupName = order.storeId?.name || order.storeId?.storeName || '';
+                const pickupAddress = order.storeId?.address || '';
+                const latCandidate = order.address?.location?.coordinates?.[1] ?? order.address?.lat ?? null;
+                const lngCandidate = order.address?.location?.coordinates?.[0] ?? order.address?.long ?? order.address?.lng ?? null;
+                const lat = normalizeCoordinate(latCandidate);
+                const lng = normalizeCoordinate(lngCandidate);
+
+                return {
+                    taskId: order.orderId,
+                    orderId: order._id,
+                    orderDetails: order,
+                    status: order.status,
+                    customer: {
+                        name: formatFullName(order.createdBy?.firstName, order.createdBy?.lastName, 'Customer'),
+                        phone: order.createdBy?.phone || ''
+                    },
+                    pickup: {
+                        storeName: pickupName || 'Store details unavailable',
+                        address: pickupAddress || 'Pickup address unavailable'
+                    },
+                    drop: {
+                        address: formatAddress(order.address),
+                        geocode: {
+                            lat,
+                            lng
+                        }
+                    },
+                    payment: {
+                        mode: order.paymentStatus === "SUCCESS" ? "Prepaid" : "COD",
+                        amount: order.summary?.grandTotal || 0
+                    },
+                    eta: order.estimatedDate,
+                    shiprocket: order.shiprocket ? {
+                        shipment_id: order.shiprocket.shipment_id || null,
+                        order_id: order.shiprocket.order_id || null,
+                        awb_code: order.shiprocket.awb_code || order.shiprocket.awb || null
+                    } : null
+                };
+            })
+            .filter(task => {
+                const hasPickupDetails = task.pickup.storeName && task.pickup.address;
+                const hasGeocode = task.drop.geocode.lat !== null && task.drop.geocode.lng !== null;
+                return hasPickupDetails && hasGeocode;
+            });
+
+        const responseData = response.length ? response : [];
 
         const baseCountOr = [
             { assignedDeliveryBoy: deliveryBoyId },
@@ -1097,8 +1150,8 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
 
         const [totalCount, newOrdersCount, ongoingCount] = await Promise.all([
             Order.countDocuments({
-                status: { $in: allowedStatuses },
-                $or: baseCountOr
+                status: { $in: statusFilter },
+                $or: baseOrConditions
             }),
             Order.countDocuments({
                 status: { $in: newOrderStatuses },
@@ -1120,11 +1173,11 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
         return res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
-            data: response,
+            data: responseData,
             meta: {
                 total: totalCount,
-                newOrders: newOrdersCount,
-                ongoing: ongoingCount
+                newOrders: includeUnassignedNewOrders ? newOrdersCount : 0,
+                ongoing: includeOngoingFilter ? ongoingCount : 0
             }
         });
     } catch (error) {
@@ -1169,6 +1222,7 @@ export const updateCurrentLocation = async (req, res) => {
         return catchError("updateCurrentLocation", error, req, res);
     }
 };
+
 
 // Get earnings
 export const getEarnings = async (req, res) => {
@@ -1952,10 +2006,58 @@ export const updateDeliveryBoyProfile = async (req, res) => {
             console.log("⚠️ DOB field received but ignored (read-only field)");
         }
         if (email !== undefined && email !== null && String(email).trim() !== '') {
-            updateData.email = String(email).trim().toLowerCase();
+            const newEmail = String(email).trim().toLowerCase();
+            
+            // Check if email is being changed
+            if (existingDeliveryBoy.email && existingDeliveryBoy.email.toLowerCase() !== newEmail) {
+                // Email is being changed, check if new email already exists for another delivery boy
+                const emailExists = await DeliveryBoy.findOne({ 
+                    email: newEmail,
+                    _id: { $ne: id } // Exclude current delivery boy
+                });
+                
+                if (emailExists) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Email "${newEmail}" is already registered with another account. Please use a different email.`
+                    });
+                }
+            } else if (!existingDeliveryBoy.email) {
+                // Current delivery boy doesn't have email, check if new email exists
+                const emailExists = await DeliveryBoy.findOne({ 
+                    email: newEmail,
+                    _id: { $ne: id } // Exclude current delivery boy
+                });
+                
+                if (emailExists) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Email "${newEmail}" is already registered with another account. Please use a different email.`
+                    });
+                }
+            }
+            // Email is same or doesn't exist for others, safe to update
+            updateData.email = newEmail;
         }
         if (phone !== undefined && phone !== null && String(phone).trim() !== '') {
-            updateData.phone = String(phone).trim();
+            const newPhone = String(phone).trim();
+            
+            // Check if phone is being changed
+            if (existingDeliveryBoy.phone && existingDeliveryBoy.phone !== newPhone) {
+                // Phone is being changed, check if new phone already exists for another delivery boy
+                const phoneExists = await DeliveryBoy.findOne({ 
+                    phone: newPhone,
+                    _id: { $ne: id } // Exclude current delivery boy
+                });
+                
+                if (phoneExists) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Phone number "${newPhone}" is already registered with another account. Please use a different phone number.`
+                    });
+                }
+            }
+            updateData.phone = newPhone;
         }
         if (state !== undefined && state !== null && String(state).trim() !== '') {
             updateData.state = String(state).trim();
@@ -2003,9 +2105,31 @@ export const updateDeliveryBoyProfile = async (req, res) => {
             data: updatedDeliveryBoy,
         });
     } catch (error) {
+        // Handle duplicate key errors specifically
+        if (error.code === 11000 || error.message.includes('duplicate key')) {
+            const field = error.keyPattern ? Object.keys(error.keyPattern)[0] : 'field';
+            const value = error.keyValue ? Object.values(error.keyValue)[0] : 'value';
+            
+            let message = `This ${field} is already registered with another account.`;
+            if (field === 'email') {
+                message = `Email "${value}" is already registered with another account. Please use a different email.`;
+            } else if (field === 'phone') {
+                message = `Phone number "${value}" is already registered with another account. Please use a different phone number.`;
+            }
+            
+            return res.status(400).json({
+                success: false,
+                message: message,
+                field: field,
+                value: value
+            });
+        }
+        
+        // Handle other errors
+        console.error("❌ Update Profile Error:", error);
         return res.status(500).json({
             success: false,
-            message: error.message,
+            message: error.message || "An error occurred while updating profile",
         });
     }
 };
