@@ -45,7 +45,7 @@ const OnlineOrderSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ["Pending", "Accepted", "Rejected", "Product shipped", "On the way", "Your Destination", "Delivered", "Cancelled"],
+        enum: ["Pending", "Accepted", "Rejected", "Product shipped", "On the way", "Out for delivery", "Your Destination", "Delivered", "Cancelled"],
         default: "Pending"
     },
     isReturn: {

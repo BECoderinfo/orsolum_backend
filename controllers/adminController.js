@@ -17,6 +17,8 @@ import StoreOffer from '../models/StoreOffer.js';
 import StorePopularProduct from '../models/StorePopularProduct.js';
 import Cart from '../models/Cart.js';
 import PickupAddress from '../models/PickupAddress.js';
+import Offer from '../models/Offer.js';
+import WelcomeImage from '../models/WelcomeImage.js';
 import bcrypt from 'bcrypt';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
@@ -256,8 +258,24 @@ export const storeDetails = async (req, res) => {
             {
                 $lookup: {
                     from: "store_offers",
-                    localField: "_id",
-                    foreignField: "storeId",
+                    let: { storeId: "$_id" },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ["$storeId", "$$storeId"] },
+                                        { $eq: ["$deleted", false] }
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            $sort: {
+                                createdAt: -1
+                            }
+                        }
+                    ],
                     as: "storeOffers"
                 }
             },
@@ -315,6 +333,50 @@ export const storeDetails = async (req, res) => {
             default_pickup_address_data: defaultPickup || null
         };
 
+        const popularProducts = await StorePopularProduct.aggregate([
+            {
+                $match: {
+                    storeId: new ObjectId(id)
+                }
+            },
+            {
+                $lookup: {
+                    from: "products",
+                    localField: "productId",
+                    foreignField: "_id",
+                    as: "product"
+                }
+            },
+            {
+                $unwind: {
+                    path: "$product",
+                    preserveNullAndEmptyArrays: false
+                }
+            },
+            {
+                $project: {
+                    _id: "$product._id",
+                    productName: "$product.productName",
+                    primaryImage: "$product.primaryImage",
+                    mrp: "$product.mrp",
+                    sellingPrice: "$product.sellingPrice",
+                    offPer: "$product.offPer",
+                    status: "$product.status",
+                    createdAt: "$product.createdAt"
+                }
+            },
+            {
+                $sort: {
+                    createdAt: -1
+                }
+            },
+            {
+                $limit: 8
+            }
+        ]);
+
+        storeDetails.popularProducts = popularProducts;
+
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: storeDetails });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
@@ -355,6 +417,77 @@ export const rejectStore = async (req, res) => {
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('rejectStore', error, req, res);
+    }
+};
+
+export const updateStoreRating = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { rating, ratingCount } = req.body || {};
+
+        if (rating === undefined && ratingCount === undefined) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Provide rating or ratingCount to update"
+            });
+        }
+
+        const updatePayload = {
+            updatedBy: req.user._id
+        };
+
+        if (rating !== undefined) {
+            const parsedRating = Number(rating);
+            if (Number.isNaN(parsedRating) || parsedRating < 0 || parsedRating > 5) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: "Rating must be a number between 0 and 5"
+                });
+            }
+            updatePayload.rating = Number(parsedRating.toFixed(2));
+        }
+
+        if (ratingCount !== undefined) {
+            const parsedCount = parseInt(ratingCount, 10);
+            if (Number.isNaN(parsedCount) || parsedCount < 0) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: "ratingCount must be a positive integer"
+                });
+            }
+            updatePayload.ratingCount = parsedCount;
+        }
+
+        const updatedStore = await Store.findByIdAndUpdate(
+            id,
+            updatePayload,
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedStore) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Store not found"
+            });
+        }
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Store rating updated",
+            data: updatedStore
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('updateStoreRating', error, req, res);
     }
 };
 
@@ -577,6 +710,48 @@ export const rejectProduct = async (req, res) => {
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('rejectProduct', error, req, res);
+    }
+};
+
+export const deleteLocalProduct = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Please provide a valid product id",
+            });
+        }
+
+        const product = await Product.findById(id);
+        if (!product) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Product not found",
+            });
+        }
+
+        await Product.findByIdAndUpdate(
+            id,
+            { deleted: true, updatedBy: req.user._id },
+            { new: true, runValidators: true }
+        );
+
+        return res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Product deleted successfully",
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message,
+        });
+        return catchError("deleteLocalProduct", error, req, res);
     }
 };
 
@@ -1118,4 +1293,350 @@ export const returnAdminChangeStatus = async (req, res) => {
     });
     // return catchError("refundChangeStatus", error, req, res);
   }
+};
+
+// ==================== ADMIN OFFERS APIs ====================
+
+export const createOffer = async (req, res) => {
+    try {
+        const { title, description, image, isGlobal, storeId } = req.body;
+
+        if (!title || !description) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Title and description are required"
+            });
+        }
+
+        // Validate storeId if not global
+        if (!isGlobal && !storeId) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Store ID is required when offer is not global"
+            });
+        }
+
+        // Check if store exists (if not global)
+        if (!isGlobal && storeId) {
+            const store = await Store.findById(storeId);
+            if (!store) {
+                return res.status(status.NotFound).json({
+                    status: jsonStatus.NotFound,
+                    success: false,
+                    message: "Store not found"
+                });
+            }
+        }
+
+        const newOffer = new Offer({
+            title: title.trim(),
+            description: description.trim(),
+            image: image || null,
+            isGlobal: isGlobal !== undefined ? isGlobal : true,
+            storeId: isGlobal ? null : storeId,
+            createdBy: req.user._id
+        });
+
+        const savedOffer = await newOffer.save();
+
+        res.status(status.Create).json({
+            status: jsonStatus.Create,
+            success: true,
+            message: "Offer created successfully",
+            data: savedOffer
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('createOffer', error, req, res);
+    }
+};
+
+export const listOffers = async (req, res) => {
+    try {
+        const offers = await Offer.find({})
+            .populate('storeId', 'name')
+            .populate('createdBy', 'email')
+            .sort({ createdAt: -1 });
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: offers
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('listOffers', error, req, res);
+    }
+};
+
+export const updateOffer = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { title, description, image, isGlobal, storeId } = req.body;
+
+        const offer = await Offer.findById(id);
+        if (!offer) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Offer not found"
+            });
+        }
+
+        // Validate storeId if not global
+        if (!isGlobal && !storeId) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Store ID is required when offer is not global"
+            });
+        }
+
+        // Check if store exists (if not global)
+        if (!isGlobal && storeId) {
+            const store = await Store.findById(storeId);
+            if (!store) {
+                return res.status(status.NotFound).json({
+                    status: jsonStatus.NotFound,
+                    success: false,
+                    message: "Store not found"
+                });
+            }
+        }
+
+        offer.title = title ? title.trim() : offer.title;
+        offer.description = description ? description.trim() : offer.description;
+        if (image !== undefined) offer.image = image;
+        if (isGlobal !== undefined) offer.isGlobal = isGlobal;
+        if (isGlobal) {
+            offer.storeId = null;
+        } else {
+            offer.storeId = storeId || offer.storeId;
+        }
+        offer.updatedBy = req.user._id;
+
+        const updatedOffer = await offer.save();
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Offer updated successfully",
+            data: updatedOffer
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('updateOffer', error, req, res);
+    }
+};
+
+export const deleteOffer = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const offer = await Offer.findById(id);
+        if (!offer) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Offer not found"
+            });
+        }
+
+        await Offer.findByIdAndDelete(id);
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Offer deleted successfully"
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('deleteOffer', error, req, res);
+    }
+};
+
+// ==================== ADMIN WELCOME IMAGE APIs ====================
+
+export const getWelcomeImage = async (req, res) => {
+    try {
+        // Get the latest welcome image
+        const welcomeImage = await WelcomeImage.findOne({})
+            .sort({ createdAt: -1 })
+            .populate('createdBy', 'email');
+
+        if (!welcomeImage) {
+            return res.status(status.OK).json({
+                status: jsonStatus.OK,
+                success: true,
+                data: null,
+                message: "No welcome image found"
+            });
+        }
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: welcomeImage
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('getWelcomeImage', error, req, res);
+    }
+};
+
+export const uploadWelcomeImage = async (req, res) => {
+    try {
+        const { imagePath } = req.body;
+
+        if (!imagePath) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Image path is required"
+            });
+        }
+
+        // Delete old welcome images
+        await WelcomeImage.deleteMany({});
+
+        // Create new welcome image
+        const newWelcomeImage = new WelcomeImage({
+            imagePath: imagePath.trim(),
+            createdBy: req.user._id,
+            updatedBy: req.user._id
+        });
+
+        const savedImage = await newWelcomeImage.save();
+
+        res.status(status.Create).json({
+            status: jsonStatus.Create,
+            success: true,
+            message: "Welcome image uploaded successfully",
+            data: savedImage
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('uploadWelcomeImage', error, req, res);
+    }
+};
+
+export const deleteWelcomeImage = async (req, res) => {
+    try {
+        await WelcomeImage.deleteMany({});
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Welcome image removed successfully"
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('deleteWelcomeImage', error, req, res);
+    }
+};
+
+// ==================== ADMIN POPULAR PRODUCTS API ====================
+
+export const saveStorePopularProducts = async (req, res) => {
+    try {
+        const { storeId } = req.params;
+        const { productIds } = req.body;
+
+        // Validate input
+        if (!Array.isArray(productIds)) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Please provide a valid array of Product IDs."
+            });
+        }
+
+        // Validate store exists (admin can manage any store)
+        const store = await Store.findById(storeId);
+        if (!store) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Store not found"
+            });
+        }
+
+        // Check if products exist (optional validation - admin can add any products)
+        if (productIds.length > 0) {
+            const products = await Product.find({
+                _id: { $in: productIds }
+            });
+
+            if (products.length !== productIds.length) {
+                return res.status(status.NotFound).json({
+                    status: jsonStatus.NotFound,
+                    success: false,
+                    message: "Some products were not found"
+                });
+            }
+        }
+
+        // Remove old popular products for this store (admin can manage any store)
+        await StorePopularProduct.deleteMany({ storeId });
+
+        // Create new popular product documents
+        if (productIds.length > 0) {
+            const popularProductDocs = productIds.map(productId => ({
+                productId,
+                storeId,
+                createdBy: store.createdBy // Keep original store owner as createdBy
+            }));
+
+            await StorePopularProduct.insertMany(popularProductDocs);
+        }
+
+        // Fetch updated popular products
+        const updatedPopularProducts = await StorePopularProduct.find({ storeId })
+            .populate('productId');
+
+        res.status(status.Create).json({
+            status: jsonStatus.Create,
+            success: true,
+            message: "Popular products saved successfully",
+            data: updatedPopularProducts
+        });
+    } catch (error) {
+        console.error("Error in saveStorePopularProducts:", error);
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('saveStorePopularProducts', error, req, res);
+    }
 };

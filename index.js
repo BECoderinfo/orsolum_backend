@@ -34,6 +34,7 @@ import { webhookTracking } from "./controllers/shiprocketController.js";
 import { renderSharedProfilePage } from "./controllers/userController.js";
 
 dotEnv.config({ path: './.env' });
+const enableChatSockets = process.env.ENABLE_CHAT_SOCKETS !== "false";
 
 const app = express();
 
@@ -198,25 +199,29 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("join chat", (room) => {
-    if (room) socket.join(room);
-  });
+  if (enableChatSockets) {
+    socket.on("join chat", (room) => {
+      if (room) socket.join(room);
+    });
 
-  socket.on("createChat", (body, callback) =>
-    createChat(io, socket, body, callback)
-  );
-  socket.on("sendMessage", (body, callback) =>
-    sendMessage(io, socket, body, callback)
-  );
-  socket.on("getMessage", (body, callback) =>
-    getMessages(io, socket, body, callback)
-  );
+    socket.on("createChat", (body, callback) =>
+      createChat(io, socket, body, callback)
+    );
+    socket.on("sendMessage", (body, callback) =>
+      sendMessage(io, socket, body, callback)
+    );
+    socket.on("getMessage", (body, callback) =>
+      getMessages(io, socket, body, callback)
+    );
 
-  socket.on("new message", (newMessageRecieved) => {
-    if (newMessageRecieved?.chat?.admin) {
-      socket.in(newMessageRecieved.chat.admin).emit("message recieved", newMessageRecieved);
-    }
-  });
+    socket.on("new message", (newMessageRecieved) => {
+      if (newMessageRecieved?.chat?.admin) {
+        socket
+          .in(newMessageRecieved.chat.admin)
+          .emit("message recieved", newMessageRecieved);
+      }
+    });
+  }
 
   // DeliveryBoy socket handlers
   socket.on("goOnline", (body, callback) =>

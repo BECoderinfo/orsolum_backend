@@ -333,6 +333,77 @@ export const updateProduct = async (req, res) => {
     }
 };
 
+export const updateOnlineProductRating = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { rating, ratingCount } = req.body || {};
+
+        if (rating === undefined && ratingCount === undefined) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Provide rating or ratingCount to update"
+            });
+        }
+
+        const updatePayload = {
+            updatedBy: req.user._id
+        };
+
+        if (rating !== undefined) {
+            const parsedRating = Number(rating);
+            if (Number.isNaN(parsedRating) || parsedRating < 0 || parsedRating > 5) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: "Rating must be between 0 and 5"
+                });
+            }
+            updatePayload.rating = Number(parsedRating.toFixed(2));
+        }
+
+        if (ratingCount !== undefined) {
+            const parsedCount = parseInt(ratingCount, 10);
+            if (Number.isNaN(parsedCount) || parsedCount < 0) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: "ratingCount must be a positive integer"
+                });
+            }
+            updatePayload.ratingCount = parsedCount;
+        }
+
+        const updatedProduct = await OnlineProduct.findByIdAndUpdate(
+            id,
+            updatePayload,
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedProduct) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Product not found"
+            });
+        }
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Product rating updated",
+            data: updatedProduct
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('updateOnlineProductRating', error, req, res);
+    }
+};
+
 export const deleteProduct = async (req, res) => {
     try {
 
@@ -1298,6 +1369,7 @@ export const onlineProductsList = async (req, res) => {
                     units: 1,
                     images: 1,
                     name: 1,
+                    manufacturer: 1,
                     subCategoryPercentageOff: "$subCategory.percentageOff"
                 }
             },
@@ -1373,6 +1445,12 @@ export const onlineProductsDetails = async (req, res) => {
     try {
 
         const { id } = req.params;
+        const viewAllSimilar = req.query.viewAllSimilar === "1";
+        const similarLimit = viewAllSimilar
+            ? 50
+            : Number(req.query.similarLimit) > 0
+                ? Number(req.query.similarLimit)
+                : 8;
 
         const details = await OnlineProduct.aggregate([
             {
@@ -1496,11 +1574,12 @@ export const onlineProductsDetails = async (req, res) => {
                     productUnits: 1,
                     images: 1,
                     name: 1,
+                    manufacturer: 1,
                     subCategoryPercentageOff: "$subCategory.percentageOff"
                 }
             },
             {
-                $limit: 8
+                $limit: similarLimit
             }
         ]);
 
@@ -2747,6 +2826,7 @@ export const onlineOrderChangeStatus = async (req, res) => {
       "Rejected",
       "Product shipped",
       "On the way",
+      "Out for delivery",
       "Your Destination",
       "Delivered",
       "Cancelled",

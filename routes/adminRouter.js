@@ -1,6 +1,6 @@
 import express from "express";
 import { body } from 'express-validator';
-import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, productDetails, acceptProduct, rejectProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus } from "../controllers/adminController.js";
+import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, productDetails, acceptProduct, rejectProduct, deleteLocalProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus, createOffer, listOffers, updateOffer, deleteOffer, getWelcomeImage, uploadWelcomeImage, deleteWelcomeImage, saveStorePopularProducts, updateStoreRating } from "../controllers/adminController.js";
 import { adminAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { createWorkHours, getAllWorkHours, updateWorkHours, deleteWorkHours } from "../controllers/workHoursController.js";
 import ShiprocketService from '../helper/shiprocketService.js';
@@ -30,12 +30,14 @@ adminRouter.post('/admin/accept/store/v1', adminAuthentication, acceptStore);
 adminRouter.post('/admin/reject/store/v1', adminAuthentication, rejectStore);
 adminRouter.post('/admin/create/store/v1', adminAuthentication, createStore);
 adminRouter.delete('/admin/delete/store/:id/v1', adminAuthentication, deleteStore);
+adminRouter.put('/admin/store/:id/rating/v1', adminAuthentication, updateStoreRating);
 
 // product
 adminRouter.get('/admin/list/product/v1', adminAuthentication, listProducts);
 adminRouter.get('/admin/product/details/:id/v1', adminAuthentication, productDetails);
 adminRouter.post('/admin/accept/product/v1', adminAuthentication, acceptProduct);
 adminRouter.post('/admin/reject/product/v1', adminAuthentication, rejectProduct);
+adminRouter.delete('/admin/delete/local/product/:id/v1', adminAuthentication, deleteLocalProduct);
 
 // coupon code
 adminRouter.post('/admin/create/coupon/code/v1', adminAuthentication, createCouponCode);
@@ -80,5 +82,19 @@ adminRouter.delete('/admin/delete/workhours/:id/v1', adminAuthentication, delete
 adminRouter.post('/admin/notifications/v1', adminAuthentication, createNotification);
 adminRouter.get('/admin/notifications/v1', adminAuthentication, listNotifications);
 adminRouter.delete('/admin/notifications/:id/v1', adminAuthentication, deleteNotification);
+
+// Offers
+adminRouter.post('/admin/offers/v1', adminAuthentication, createOffer);
+adminRouter.get('/admin/offers/v1', adminAuthentication, listOffers);
+adminRouter.put('/admin/offers/:id/v1', adminAuthentication, updateOffer);
+adminRouter.delete('/admin/offers/:id/v1', adminAuthentication, deleteOffer);
+
+// Welcome Image
+adminRouter.get('/admin/welcome-image/v1', adminAuthentication, getWelcomeImage);
+adminRouter.post('/admin/welcome-image/v1', adminAuthentication, uploadWelcomeImage);
+adminRouter.delete('/admin/welcome-image/v1', adminAuthentication, deleteWelcomeImage);
+
+// Popular Products (Admin)
+adminRouter.post('/admin/store/:storeId/popular-products/v1', adminAuthentication, saveStorePopularProducts);
 
 export default adminRouter;

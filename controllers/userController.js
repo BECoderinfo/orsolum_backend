@@ -469,16 +469,23 @@ export const shareMyProfile = async (req, res) => {
         const shareHandle = await ensureShareHandle(user);
         const shareBaseUrl = trimTrailingSlash(buildShareBaseUrl(req));
         const shareUrl = `${shareBaseUrl}/${shareHandle}`;
-
         const location = [user.city, user.state].filter(Boolean).join(", ");
+        const previewImage = buildSharePreviewImage(user.image);
 
-        const textParts = [
-            `Hey! I'm ${user.name || "an Orsolum user"}.`,
-            location ? `Location: ${location}` : null,
-            user.entity ? `Entity: ${user.entity}` : null,
-            user.address ? `Address: ${user.address}` : null,
-            `Let's connect on Orsolum: ${shareUrl}`
-        ].filter(Boolean);
+        const storeName = user.name || "Orsolum Store";
+        const category = user.entity || null;
+
+        const shareMessage = [
+            `🏪 Store Name - ${storeName}`,
+            category ? `Category : ${category}` : null,
+            location ? `📍 Location: ${location}` : null,
+            user.address ? `🗺️ Address: ${user.address}` : null,
+            user.phone ? `📞 Contact: ${user.phone}` : null,
+            `🔗 View profile: ${shareUrl}`
+        ]
+            .filter(Boolean)
+            .map(line => `  ${line}`)
+            .join("\n\n");
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
@@ -499,11 +506,12 @@ export const shareMyProfile = async (req, res) => {
                 },
                 share: {
                     url: shareUrl,
-                    message: textParts.join("\n"),
+                    message: shareMessage,
+                    previewImage,
                     meta: {
                         title: `${user.name || "Orsolum User"} • Orsolum`,
                         description: `Connect with ${user.name || "this Orsolum user"} and explore their profile`,
-                        previewImage: user.image || ""
+                        previewImage
                     }
                 }
             }

@@ -18,6 +18,7 @@ import {
   uploadOnlineProductImage,
   createProduct,
   updateProduct,
+  updateOnlineProductRating,
   deleteProduct,
   listProducts,
   createProductUnit,
@@ -125,6 +126,11 @@ onlineStoreRouter.put(
   "/admin/update/product/:id/v1",
   adminAuthentication,
   updateProduct
+);
+onlineStoreRouter.put(
+  "/admin/online/product/:id/rating/v1",
+  adminAuthentication,
+  updateOnlineProductRating
 );
 onlineStoreRouter.delete(
   "/admin/delete/product/:id/v1",

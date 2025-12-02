@@ -99,3 +99,22 @@ export const uploadDeliveryBoyImage = multer({
         fileSize: 5 * 1024 * 1024, // 5MB limit
     },
 });
+
+export const uploadReelFiles = multer({
+    storage: multerS3({
+        s3: s3,
+        bucket: bucketCred.bucketName,
+        contentType: multerS3.AUTO_CONTENT_TYPE,
+        metadata: (req, file, cb) => {
+            cb(null, { fieldName: file.fieldname });
+        },
+        key: (req, file, cb) => {
+            const folderName = file.fieldname === 'video' ? 'Reels' : 'Reels/Thumbnails';
+            const fileName = `${Date.now().toString()}_${file.originalname}`;
+            cb(null, `${folderName}/${fileName}`);
+        },
+    }),
+    limits: {
+        fileSize: 100 * 1024 * 1024, // 100MB limit
+    },
+});

@@ -20,6 +20,7 @@ import Store from '../models/Store.js';
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
 import PickupAddress from '../models/PickupAddress.js';
+import DeliveryFeedback from '../models/DeliveryFeedback.js';
 
 const formatFullName = (firstName, lastName, fallback = '') => {
     const name = [firstName, lastName].filter(Boolean).join(' ').trim();
@@ -40,6 +41,218 @@ const formatCurrentLocation = (currentLocation) => {
         lng: currentLocation.lng
     };
 };
+
+const formatOrderAddress = (address = {}) => {
+    if (!address || typeof address !== 'object') {
+        return '';
+    }
+
+    const parts = [];
+
+    if (address.address_1) parts.push(address.address_1);
+    if (address.flatHouse) parts.push(address.flatHouse);
+    if (address.landmark) parts.push(address.landmark);
+
+    const cityState = [address.city, address.state, address.pincode].filter(Boolean).join(', ');
+    if (cityState) parts.push(cityState);
+
+    if (!parts.length) {
+        return address.formattedAddress ||
+            address.address ||
+            address.street ||
+            '';
+    }
+
+    return parts.join(', ');
+};
+
+const toNumericOrNull = (value) => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+    const num = Number(value);
+    return Number.isFinite(num) ? Number(num.toFixed(6)) : null;
+};
+
+const getLatLngFromAddress = (address = {}) => {
+    const lat = address?.location?.coordinates?.[1] ?? address?.lat;
+    const lng = address?.location?.coordinates?.[0] ?? address?.long ?? address?.lng;
+    return {
+        lat: toNumericOrNull(lat),
+        lng: toNumericOrNull(lng)
+    };
+};
+
+const getStoreLatLng = (store) => {
+    if (!store?.location?.coordinates?.length) {
+        return { lat: null, lng: null };
+    }
+    const [lng, lat] = store.location.coordinates;
+    return {
+        lat: toNumericOrNull(lat),
+        lng: toNumericOrNull(lng)
+    };
+};
+
+const toRadians = (value = 0) => (value * Math.PI) / 180;
+
+const calculateDistanceKm = (pointA, pointB) => {
+    if (!pointA || !pointB || pointA.lat === null || pointA.lng === null || pointB.lat === null || pointB.lng === null) {
+        return null;
+    }
+
+    const earthRadius = 6371;
+    const dLat = toRadians(pointB.lat - pointA.lat);
+    const dLng = toRadians(pointB.lng - pointA.lng);
+    const lat1 = toRadians(pointA.lat);
+    const lat2 = toRadians(pointB.lat);
+
+    const a = Math.sin(dLat / 2) ** 2 +
+        Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const distance = earthRadius * c;
+
+    return Number.isFinite(distance) ? Number(distance.toFixed(2)) : null;
+};
+
+const deriveOrderStage = (order = {}) => {
+    const status = order.status || '';
+    const isDelivered = status === "Delivered" || Boolean(order.deliveredTime);
+    const reached = isDelivered || status === "Your Destination" || Boolean(order.reachedAt);
+    const navigationStarted = reached || status === "Out for delivery" || Boolean(order.navigationStartedAt);
+    const picked = navigationStarted || Boolean(order.pickedUpAt);
+
+    let currentLabel = "On the way to Store";
+    if (!picked) {
+        currentLabel = "On the way to Store";
+    } else if (!reached) {
+        currentLabel = "On the way to customer";
+    } else if (!isDelivered) {
+        currentLabel = "You have reached at the location";
+    } else {
+        currentLabel = "Order Completed";
+    }
+
+    return {
+        picked,
+        navigationStarted,
+        reached,
+        delivered: isDelivered,
+        currentLabel
+    };
+};
+
+const buildTimelineSteps = (order = {}) => {
+    const timeline = [
+        {
+            id: 'to_store',
+            label: 'On the way to Store',
+            completed: Boolean(order.pickedUpAt || order.navigationStartedAt || order.reachedAt || order.deliveredTime),
+            timestamp: order.acceptedAt || order.createdAt || null
+        },
+        {
+            id: 'to_customer',
+            label: 'On the way to customer',
+            completed: Boolean(order.navigationStartedAt || order.reachedAt || order.deliveredTime),
+            timestamp: order.pickedUpAt || null
+        },
+        {
+            id: 'reached',
+            label: 'Reached customer location',
+            completed: Boolean(order.reachedAt || order.deliveredTime),
+            timestamp: order.reachedAt || null
+        },
+        {
+            id: 'delivered',
+            label: 'Order delivered',
+            completed: Boolean(order.deliveredTime),
+            timestamp: order.deliveredTime || null
+        }
+    ];
+
+    const currentIndex = timeline.findIndex(step => !step.completed);
+    return {
+        steps: timeline,
+        currentStepIndex: currentIndex === -1 ? timeline.length - 1 : currentIndex
+    };
+};
+
+const buildPrimaryAction = (order = {}) => {
+    if (!order) return null;
+
+    if (!order.pickedUpAt) {
+        return {
+            id: 'pickup',
+            label: 'Order Picked',
+            method: 'POST',
+            endpoint: '/deliveryboy/pickup/order/v1',
+            payload: { orderId: order._id }
+        };
+    }
+
+    if (!order.navigationStartedAt) {
+        return {
+            id: 'start_navigation',
+            label: 'Start Navigating',
+            method: 'POST',
+            endpoint: '/deliveryboy/start/navigation/v1',
+            payload: { orderId: order._id }
+        };
+    }
+
+    if (!order.reachedAt) {
+        return {
+            id: 'reached_location',
+            label: 'Reached Location',
+            method: 'POST',
+            endpoint: '/deliveryboy/reached/location/v1',
+            payload: { orderId: order._id }
+        };
+    }
+
+    if (order.status !== "Delivered") {
+        return {
+            id: 'complete_delivery',
+            label: 'Order Delivered',
+            method: 'POST',
+            endpoint: '/deliveryboy/complete/delivery/v1',
+            payload: { orderId: order._id }
+        };
+    }
+
+    return null;
+};
+
+const formatCurrency = (amount = 0) => {
+    return {
+        amount: Number(amount || 0),
+        currency: 'INR',
+        formatted: `₹${Number(amount || 0).toFixed(2)}`
+    };
+};
+
+const estimateEtaMinutes = (order = {}) => {
+    if (order.estimatedDate) {
+        const diffMs = new Date(order.estimatedDate).getTime() - Date.now();
+        const diffMinutes = Math.round(diffMs / 60000);
+        if (Number.isFinite(diffMinutes) && diffMinutes > 0) {
+            return diffMinutes;
+        }
+    }
+
+    const stage = deriveOrderStage(order);
+    if (!stage.picked) return 25;
+    if (!stage.reached) return 18;
+    if (!stage.delivered) return 5;
+    return 0;
+};
+
+const CUSTOMER_FEEDBACK_OPTIONS = [
+    "Customer was polite",
+    "Clear delivery instructions",
+    "Easy to locate",
+    "Safe delivery area"
+];
 
 // Get new orders for delivery boy
 export const getNewOrders = async (req, res) => {
@@ -597,7 +810,7 @@ export const getOngoingOrders = async (req, res) => {
 
         const ongoingOrders = await Order.find({
             assignedDeliveryBoy: deliveryBoyId,
-            status: { $in: ["On the way", "Your Destination"] }
+            status: { $in: ["On the way", "Out for delivery", "Your Destination"] }
         })
             .populate('createdBy', 'firstName lastName phone')
             .populate('storeId', 'storeName address phone')
@@ -657,6 +870,461 @@ export const getOrderDetails = async (req, res) => {
     }
 };
 
+export const getOrderTrackingOverview = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const deliveryBoyId = req.user._id;
+
+        const order = await Order.findById(id)
+            .populate('createdBy', 'firstName lastName phone')
+            .populate('storeId', 'name storeName address phone location coordinates')
+            .populate('assignedDeliveryBoy', 'firstName lastName phone currentLocation');
+
+        if (!order) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Order not found"
+            });
+        }
+
+        if (!order.assignedDeliveryBoy || order.assignedDeliveryBoy._id.toString() !== deliveryBoyId.toString()) {
+            return res.status(status.Forbidden).json({
+                status: jsonStatus.Forbidden,
+                success: false,
+                message: "You are not assigned to this order"
+            });
+        }
+
+        const customerName = formatFullName(order.createdBy?.firstName, order.createdBy?.lastName, order.address?.name || 'Customer');
+        const storeName = order.storeId?.name || order.storeId?.storeName || 'Store';
+        const storeAddress = order.storeId?.address || 'Store address unavailable';
+        const dropAddress = formatOrderAddress(order.address);
+        const storeLocation = getStoreLatLng(order.storeId);
+        const dropLocation = getLatLngFromAddress(order.address);
+        const riderLocation = formatCurrentLocation(order.assignedDeliveryBoy?.currentLocation);
+
+        const timeline = buildTimelineSteps(order);
+        const stage = deriveOrderStage(order);
+        const primaryAction = buildPrimaryAction(order);
+        const etaMinutes = estimateEtaMinutes(order);
+        const totalAmount = order.summary?.grandTotal || 0;
+        const paymentMode = order.paymentStatus === "SUCCESS" ? "Prepaid" : "COD";
+
+        const response = {
+            orderId: order._id,
+            orderNumber: order.orderId,
+            status: order.status,
+            stageLabel: stage.currentLabel,
+            etaMinutes,
+            summary: {
+                totalAmount: formatCurrency(totalAmount),
+                paymentMode,
+                itemsCount: Array.isArray(order.productDetails)
+                    ? order.productDetails.reduce((sum, item) => sum + (item.quantity || 0), 0)
+                    : 0
+            },
+            map: {
+                pickup: {
+                    ...storeLocation,
+                    label: storeName,
+                    address: storeAddress
+                },
+                drop: {
+                    ...dropLocation,
+                    label: customerName,
+                    address: dropAddress
+                },
+                rider: riderLocation,
+                route: (storeLocation.lat !== null && dropLocation.lat !== null)
+                    ? {
+                        distanceKm: calculateDistanceKm(storeLocation, dropLocation),
+                        points: [
+                            { ...storeLocation },
+                            { ...dropLocation }
+                        ]
+                    }
+                    : null
+            },
+            timeline,
+            contact: {
+                pickup: {
+                    name: storeName,
+                    phone: order.storeId?.phone || '',
+                    address: storeAddress
+                },
+                customer: {
+                    name: customerName,
+                    phone: order.createdBy?.phone || order.address?.number || '',
+                    address: dropAddress
+                }
+            },
+            actions: {
+                primary: primaryAction,
+                secondary: {
+                    id: 'view_details',
+                    label: 'View Full Order Details',
+                    method: 'GET',
+                    endpoint: `/deliveryboy/order/details/${order._id}/v1`
+                },
+                navigation: (dropLocation.lat !== null && dropLocation.lng !== null) ? {
+                    label: 'Navigation',
+                    url: `https://www.google.com/maps/dir/?api=1&destination=${dropLocation.lat},${dropLocation.lng}`
+                } : null
+            },
+            payment: {
+                mode: paymentMode,
+                total: formatCurrency(totalAmount),
+                pendingAmount: paymentMode === "Prepaid" ? formatCurrency(0) : formatCurrency(totalAmount),
+                isPrepaid: paymentMode === "Prepaid"
+            },
+            timestamps: {
+                assignedAt: order.acceptedAt || order.createdAt,
+                pickedUpAt: order.pickedUpAt,
+                navigationStartedAt: order.navigationStartedAt,
+                reachedAt: order.reachedAt,
+                deliveredAt: order.deliveredTime
+            }
+        };
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: response
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError("getOrderTrackingOverview", error, req, res);
+    }
+};
+
+export const getOrderPaymentSummary = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const deliveryBoyId = req.user._id;
+
+        const order = await Order.findById(id)
+            .populate('createdBy', 'firstName lastName phone');
+
+        if (!order) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Order not found"
+            });
+        }
+
+        if (!order.assignedDeliveryBoy || order.assignedDeliveryBoy.toString() !== deliveryBoyId.toString()) {
+            return res.status(status.Forbidden).json({
+                status: jsonStatus.Forbidden,
+                success: false,
+                message: "You are not assigned to this order"
+            });
+        }
+
+        const totalAmount = order.summary?.grandTotal || 0;
+        const paymentMode = order.paymentStatus === "SUCCESS" ? "Prepaid" : "COD";
+
+        const payments = await Payment.find({
+            orderId: order._id,
+            collectedBy: deliveryBoyId
+        })
+            .sort({ createdAt: -1 })
+            .select('amount paymentMethod status qrCodeUrl paymentGateway collectedAt');
+
+        const successfulPayments = payments.filter(p => ["SUCCESS", "SETTLED"].includes(p.status));
+        const collectedAmount = successfulPayments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
+        const pendingAmountValue = Math.max(totalAmount - collectedAmount, 0);
+
+        const response = {
+            orderId: order._id,
+            orderNumber: order.orderId,
+            customer: {
+                name: formatFullName(order.createdBy?.firstName, order.createdBy?.lastName, 'Customer'),
+                phone: order.createdBy?.phone || order.address?.number || ''
+            },
+            paymentMode,
+            totals: {
+                totalAmount: formatCurrency(totalAmount),
+                collectedAmount: formatCurrency(collectedAmount),
+                pendingAmount: formatCurrency(pendingAmountValue)
+            },
+            scanToPay: {
+                qrCodeUrl: payments.find(p => p.qrCodeUrl)?.qrCodeUrl || null,
+                referenceId: order.cf_order_id || order.orderId
+            },
+            otherOptions: [
+                { id: 'card', label: 'Credit/Debit Card', method: 'CARD' },
+                { id: 'bank_transfer', label: 'Bank Transfer', method: 'BANK_TRANSFER' },
+                { id: 'digital_wallet', label: 'Digital Wallet', method: 'DIGITAL_WALLET' }
+            ],
+            history: payments.map(p => ({
+                paymentMethod: p.paymentMethod,
+                amount: formatCurrency(p.amount),
+                status: p.status,
+                collectedAt: p.collectedAt
+            }))
+        };
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: response
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError("getOrderPaymentSummary", error, req, res);
+    }
+};
+
+export const getOrderCompletionSummary = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const deliveryBoyId = req.user._id;
+
+        const order = await Order.findById(id)
+            .populate('createdBy', 'firstName lastName phone')
+            .populate('storeId', 'name storeName address location coordinates')
+            .populate('productDetails.productId', 'productName image unit');
+
+        if (!order) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Order not found"
+            });
+        }
+
+        if (!order.assignedDeliveryBoy || order.assignedDeliveryBoy.toString() !== deliveryBoyId.toString()) {
+            return res.status(status.Forbidden).json({
+                status: jsonStatus.Forbidden,
+                success: false,
+                message: "You are not assigned to this order"
+            });
+        }
+
+        const storeLocation = getStoreLatLng(order.storeId);
+        const dropLocation = getLatLngFromAddress(order.address);
+        const distanceKm = calculateDistanceKm(storeLocation, dropLocation);
+
+        const startTime = order.pickedUpAt || order.acceptedAt || order.createdAt;
+        const endTime = order.deliveredTime || order.reachedAt || order.updatedAt;
+        const timeTakenMinutes = (startTime && endTime)
+            ? Math.max(0, Math.round((new Date(endTime) - new Date(startTime)) / 60000))
+            : null;
+
+        const items = Array.isArray(order.productDetails) ? order.productDetails.map(item => ({
+            name: item.productId?.productName || 'Item',
+            quantity: item.quantity || 0,
+            price: item.productPrice || item.mrp || 0
+        })) : [];
+
+        const deliveryFee = order.summary?.shippingFee || 0;
+        const bonus = order.summary?.donate || 0;
+        const earningsTotal = deliveryFee + bonus;
+
+        const feedback = await DeliveryFeedback.findOne({
+            orderId: order._id,
+            deliveryBoyId
+        }).select('rating tags comments');
+
+        const response = {
+            orderId: order._id,
+            orderNumber: order.orderId,
+            completedAt: order.deliveredTime,
+            message: "Order Completed!",
+            orderDetails: {
+                customerName: formatFullName(order.createdBy?.firstName, order.createdBy?.lastName, 'Customer'),
+                deliveryAddress: formatOrderAddress(order.address),
+                itemsCount: items.length,
+                items
+            },
+            metrics: {
+                timeTakenMinutes,
+                distanceKm,
+                startTime,
+                endTime
+            },
+            earnings: {
+                deliveryFee: formatCurrency(deliveryFee),
+                bonus: formatCurrency(bonus),
+                total: formatCurrency(earningsTotal)
+            },
+            rating: feedback ? {
+                rating: feedback.rating,
+                tags: feedback.tags,
+                comments: feedback.comments
+            } : null
+        };
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: response
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError("getOrderCompletionSummary", error, req, res);
+    }
+};
+
+export const getOrderRatingForm = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const deliveryBoyId = req.user._id;
+
+        const order = await Order.findById(id)
+            .populate('createdBy', 'firstName lastName phone');
+
+        if (!order) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Order not found"
+            });
+        }
+
+        if (!order.assignedDeliveryBoy || order.assignedDeliveryBoy.toString() !== deliveryBoyId.toString()) {
+            return res.status(status.Forbidden).json({
+                status: jsonStatus.Forbidden,
+                success: false,
+                message: "You are not assigned to this order"
+            });
+        }
+
+        const existingFeedback = await DeliveryFeedback.findOne({
+            orderId: order._id,
+            deliveryBoyId
+        }).select('rating tags comments').lean();
+
+        const response = {
+            orderId: order._id,
+            orderNumber: order.orderId,
+            customerName: formatFullName(order.createdBy?.firstName, order.createdBy?.lastName, 'Customer'),
+            deliveryTime: order.deliveredTime || order.updatedAt,
+            location: formatOrderAddress(order.address),
+            options: CUSTOMER_FEEDBACK_OPTIONS,
+            existingFeedback: existingFeedback || null
+        };
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: response
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError("getOrderRatingForm", error, req, res);
+    }
+};
+
+export const submitCustomerRating = async (req, res) => {
+    try {
+        const deliveryBoyId = req.user._id;
+        const { orderId, rating, tags = [], comments } = req.body;
+
+        if (!orderId || typeof rating !== 'number') {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "orderId and rating are required"
+            });
+        }
+
+        if (rating < 1 || rating > 5) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Rating must be between 1 and 5"
+            });
+        }
+
+        const order = await Order.findById(orderId);
+        if (!order) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Order not found"
+            });
+        }
+
+        if (!order.assignedDeliveryBoy || order.assignedDeliveryBoy.toString() !== deliveryBoyId.toString()) {
+            return res.status(status.Forbidden).json({
+                status: jsonStatus.Forbidden,
+                success: false,
+                message: "You are not assigned to this order"
+            });
+        }
+
+        const sanitizedTags = Array.isArray(tags)
+            ? tags.filter(tag => CUSTOMER_FEEDBACK_OPTIONS.includes(tag)).slice(0, CUSTOMER_FEEDBACK_OPTIONS.length)
+            : [];
+
+        const feedback = await DeliveryFeedback.findOneAndUpdate(
+            { orderId, deliveryBoyId },
+            {
+                customerId: order.createdBy,
+                rating,
+                tags: sanitizedTags,
+                comments,
+                submittedAt: new Date()
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+
+        const [average] = await DeliveryFeedback.aggregate([
+            {
+                $match: {
+                    deliveryBoyId: new mongoose.Types.ObjectId(deliveryBoyId),
+                    rating: { $exists: true }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    avgRating: { $avg: "$rating" }
+                }
+            }
+        ]);
+
+        if (average?.avgRating) {
+            await DeliveryBoy.findByIdAndUpdate(deliveryBoyId, {
+                rating: Number(average.avgRating.toFixed(2))
+            });
+        }
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Feedback submitted",
+            data: feedback
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError("submitCustomerRating", error, req, res);
+    }
+};
+
 // Get assigned deliveries (Combined: New + Ongoing orders for dashboard)
 export const getAssignedDeliveries = async (req, res) => {
     try {
@@ -683,7 +1351,7 @@ export const getAssignedDeliveries = async (req, res) => {
         // Get ongoing orders (On the way, Your Destination)
         const ongoingOrders = await Order.find({
             assignedDeliveryBoy: deliveryBoyId,
-            status: { $in: ["On the way", "Your Destination"] }
+            status: { $in: ["On the way", "Out for delivery", "Your Destination"] }
         })
             .populate('createdBy', 'firstName lastName phone')
             .populate('storeId', 'name storeName address phone shiprocket.pickup_addresses shiprocket.default_pickup_address')
@@ -951,9 +1619,9 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
         const limit = Number(req.query.limit) > 0 ? Number(req.query.limit) : 5;
         const statusQuery = (req.query.status || 'all').toString();
 
-        const allowedStatuses = ["Pending", "Product shipped", "On the way", "Your Destination", "Delivered"];
+        const allowedStatuses = ["Pending", "Product shipped", "On the way", "Out for delivery", "Your Destination", "Delivered"];
         const newOrderStatuses = ["Pending", "Product shipped"];
-        const ongoingOrderStatuses = ["On the way", "Your Destination"];
+        const ongoingOrderStatuses = ["On the way", "Out for delivery", "Your Destination"];
         const statusAliasMap = {
             new: newOrderStatuses,
             ongoing: ongoingOrderStatuses,
@@ -1962,7 +2630,6 @@ export const updateDeliveryBoyProfile = async (req, res) => {
         console.log("📝 Update Profile - Content-Type:", req.headers['content-type']);
         console.log("📝 Update Profile - File uploaded:", req.file ? 'Yes - ' + req.file.key : 'No');
         
-        // Note: DOB is not included here as it should be read-only (cannot be updated after registration)
         // Extract fields from body (body might be empty if only image is being updated)
         let { firstName, lastName, email, phone, state, city, dob } = req.body || {};
 
@@ -1991,7 +2658,6 @@ export const updateDeliveryBoyProfile = async (req, res) => {
         }
 
         // Build update object with only provided fields
-        // DOB is excluded - it's a read-only field and cannot be changed
         const updateData = {};
         
         // Improved validation: check if field exists and is not empty after trimming
@@ -2001,12 +2667,53 @@ export const updateDeliveryBoyProfile = async (req, res) => {
         if (lastName !== undefined && lastName !== null && String(lastName).trim() !== '') {
             updateData.lastName = String(lastName).trim();
         }
-        // DOB removed - not editable after registration (but we'll log if it's sent)
-        if (dob !== undefined && dob !== null) {
-            console.log("⚠️ DOB field received but ignored (read-only field)");
+        /**
+         * DOB handling:
+         *  - If delivery boy already has a DOB saved, treat it as read‑only (cannot be changed).
+         *  - If no DOB is saved yet and client sends dob, validate that age >= 18 before saving.
+         */
+        if (dob !== undefined && dob !== null && String(dob).trim() !== '') {
+            if (existingDeliveryBoy.dob) {
+                console.log("⚠️ DOB field received but ignored (already set and treated as read‑only)");
+            } else {
+                const rawDob = String(dob).trim();
+                const parsedDob = new Date(rawDob);
+
+                if (Number.isNaN(parsedDob.getTime())) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Invalid date of birth format. Please send a valid date (YYYY-MM-DD)."
+                    });
+                }
+
+                const today = new Date();
+                let age = today.getFullYear() - parsedDob.getFullYear();
+                const monthDiff = today.getMonth() - parsedDob.getMonth();
+                if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < parsedDob.getDate())) {
+                    age--;
+                }
+
+                if (age < 18) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Delivery boy must be at least 18 years old."
+                    });
+                }
+
+                updateData.dob = parsedDob;
+            }
         }
         if (email !== undefined && email !== null && String(email).trim() !== '') {
             const newEmail = String(email).trim().toLowerCase();
+
+            // Basic email format validation to prevent invalid values like '@gmail.com'
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(newEmail)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Please enter a valid email address."
+                });
+            }
             
             // Check if email is being changed
             if (existingDeliveryBoy.email && existingDeliveryBoy.email.toLowerCase() !== newEmail) {

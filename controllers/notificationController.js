@@ -352,3 +352,8 @@ export const markDeliveryNotificationRead =
 export const clearDeliveryNotifications =
   clearNotificationsForRole("deliveryboy");
 
+export const getSellerNotifications = (req, res) =>
+  listNotificationsForRole(req, res, "seller");
+export const markSellerNotificationRead = markNotificationReadForRole("seller");
+export const clearSellerNotifications = clearNotificationsForRole("seller");
+

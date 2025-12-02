@@ -66,7 +66,22 @@ const ProductSchema = new mongoose.Schema({
     ],
     offPer: {
         type: String
-    }
+    },
+    units: [
+        {
+            label: {
+                type: String,
+                trim: true
+            },
+            qty: {
+                type: String,
+                trim: true
+            },
+            mrp: Number,
+            sellingPrice: Number,
+            offPer: String
+        }
+    ]
 }, { timestamps: true });
 
 const Product = mongoose.model('product', ProductSchema);

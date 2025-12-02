@@ -26,6 +26,11 @@ import {
     completeDelivery,
     getOngoingOrders,
     getOrderDetails,
+    getOrderTrackingOverview,
+    getOrderPaymentSummary,
+    getOrderCompletionSummary,
+    getOrderRatingForm,
+    submitCustomerRating,
     getAssignedDeliveries,
     getDashboardProfile,
     getDashboardPerformance,
@@ -84,7 +89,6 @@ deliveryRouter.post('/deliveryboy/register/v1', registerDeliveryBoy);
 deliveryRouter.post('/deliveryboy/login/v1', loginDeliveryBoy);
 deliveryRouter.get('/deliveryboy/is/exist/v1', isDeliveryBoyExist);
 
-// Conditional middleware - only use multer for multipart/form-data requests
 // Image is optional - user can update profile with or without image
 const conditionalMulterUpload = (req, res, next) => {
     const contentType = req.headers['content-type'] || '';
@@ -93,8 +97,6 @@ const conditionalMulterUpload = (req, res, next) => {
     console.log("📦 Update Profile - Content-Type:", contentType);
     
     if (contentType.includes('multipart/form-data')) {
-        // Use multer for multipart requests (with or without image)
-        // single('image') makes image optional - if no file, req.file will be undefined
         uploadDeliveryBoyImage.single('image')(req, res, (err) => {
             if (err) {
                 // Only return error for actual file upload errors, not missing file
@@ -169,6 +171,11 @@ deliveryRouter.post('/deliveryboy/reached/location/v1', deliveryBoyAuthenticatio
 deliveryRouter.post('/deliveryboy/complete/delivery/v1', deliveryBoyAuthentication, completeDelivery);
 deliveryRouter.get('/deliveryboy/ongoing/orders/v1', deliveryBoyAuthentication, getOngoingOrders);
 deliveryRouter.get('/deliveryboy/order/details/:id/v1', deliveryBoyAuthentication, getOrderDetails);
+deliveryRouter.get('/deliveryboy/order/tracking/:id/v1', deliveryBoyAuthentication, getOrderTrackingOverview);
+deliveryRouter.get('/deliveryboy/order/payment-summary/:id/v1', deliveryBoyAuthentication, getOrderPaymentSummary);
+deliveryRouter.get('/deliveryboy/order/completion-summary/:id/v1', deliveryBoyAuthentication, getOrderCompletionSummary);
+deliveryRouter.get('/deliveryboy/order/rating/:id/v1', deliveryBoyAuthentication, getOrderRatingForm);
+deliveryRouter.post('/deliveryboy/order/rating/v1', deliveryBoyAuthentication, submitCustomerRating);
 
 /* ===========================
      LOCATION UPDATES

@@ -29,7 +29,7 @@ const { ObjectId } = mongoose.Types;
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
 
-const IN_PROGRESS_STATUSES = ["Accepted", "Product shipped", "On the way", "Your Destination"];
+const IN_PROGRESS_STATUSES = ["Accepted", "Product shipped", "On the way", "Out for delivery", "Your Destination"];
 
 const toRadians = (value = 0) => (value * Math.PI) / 180;
 
@@ -2631,6 +2631,7 @@ export const retailerAssignedDeliveries = async (req, res) => {
       "Accepted",
       "Product shipped",
       "On the way",
+      "Out for delivery",
       "Your Destination",
       "Delivered",
     ];
@@ -2771,7 +2772,7 @@ export const retailerAssignedDeliveries = async (req, res) => {
           },
           onTheWay: {
             $sum: {
-              $cond: [{ $in: ["$status", ["Product shipped", "On the way", "Your Destination"]] }, 1, 0],
+              $cond: [{ $in: ["$status", ["Product shipped", "On the way", "Out for delivery", "Your Destination"]] }, 1, 0],
             },
           },
           earnings: {
@@ -2999,6 +3000,7 @@ export const orderChangeStatus = async (req, res) => {
       "Rejected",
       "Product shipped",
       "On the way",
+      "Out for delivery",
       "Your Destination",
       "Delivered",
       "Cancelled",

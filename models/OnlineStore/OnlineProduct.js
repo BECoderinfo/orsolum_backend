@@ -44,7 +44,7 @@ const OnlineProductSchema = new mongoose.Schema({
     brandId: {
         type: ObjectId,
         ref: 'product_brand',
-        required: true
+        default: null
     },
     categoryId: {
         type: ObjectId,
@@ -57,6 +57,16 @@ const OnlineProductSchema = new mongoose.Schema({
         required: true
     },
     coinCanUsed: {
+        type: Number,
+        default: 0
+    },
+    rating: {
+        type: Number,
+        min: 0,
+        max: 5,
+        default: 0
+    },
+    ratingCount: {
         type: Number,
         default: 0
     }

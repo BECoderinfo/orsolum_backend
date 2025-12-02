@@ -63,6 +63,27 @@ const mergeProductImages = (...lists) => {
   return [...new Set(flat)];
 };
 
+const parseDescriptionField = (incoming) => {
+  if (!incoming) return [];
+  let details = incoming;
+  if (typeof incoming === "string") {
+    try {
+      details = JSON.parse(incoming);
+    } catch (error) {
+      return [];
+    }
+  }
+  if (!Array.isArray(details)) {
+    return [];
+  }
+  return details
+    .map((item) => ({
+      title: (item?.title || "").toString().trim(),
+      details: (item?.details || "").toString().trim(),
+    }))
+    .filter((item) => item.title || item.details);
+};
+
 function calculateDiscount(mrp, sellingPrice) {
     if (mrp <= 0 || sellingPrice < 0 || sellingPrice > mrp) {
         return "Invalid prices";
@@ -70,6 +91,51 @@ function calculateDiscount(mrp, sellingPrice) {
     let discount = ((mrp - sellingPrice) / mrp) * 100;
     return discount.toFixed(2) + "% OFF";
 }
+
+const parseUnitsField = (rawUnits) => {
+    if (!rawUnits) return [];
+    if (Array.isArray(rawUnits)) return rawUnits;
+    if (typeof rawUnits === "string") {
+        try {
+            const parsed = JSON.parse(rawUnits);
+            if (Array.isArray(parsed)) {
+                return parsed;
+            }
+        } catch (error) {
+            return [];
+        }
+    }
+    return [];
+};
+
+const normalizeUnits = (unitPayloads = []) => {
+    const normalized = [];
+    for (const unit of unitPayloads) {
+        if (!unit) continue;
+        const label = (unit.label || unit.qty || "").toString().trim();
+        const qtyValue = unit.qty ? unit.qty.toString().trim() : label;
+        const mrp = Number(unit.mrp);
+        const sellingPrice = Number(unit.sellingPrice);
+
+        if (!label || isNaN(mrp) || isNaN(sellingPrice)) {
+            continue;
+        }
+
+        const offPer = calculateDiscount(mrp, sellingPrice);
+        if (offPer === "Invalid prices") {
+            continue;
+        }
+
+        normalized.push({
+            label,
+            qty: qtyValue,
+            mrp,
+            sellingPrice,
+            offPer
+        });
+    }
+    return normalized;
+};
 
 export const uploadProductImage = async (req, res) => {
     try {
@@ -87,21 +153,45 @@ export const uploadProductImage = async (req, res) => {
  */
 export const createProduct = async (req, res) => {
     try {
-      const { productName, companyName, mrp, sellingPrice, information, storeId, qty } = req.body;
+      const { productName, companyName, mrp, sellingPrice, information, storeId, qty, units, description } = req.body;
+
+      const parsedUnits = parseUnitsField(units);
+      const normalizedUnits = normalizeUnits(parsedUnits);
+
+      if (parsedUnits.length && normalizedUnits.length === 0) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Invalid units provided. Please check qty, MRP and selling price.",
+        });
+      }
+
+      const primaryUnit = normalizedUnits[0];
   
       // ✅ Validate mandatory fields
-      if (!productName || !companyName || !mrp || !sellingPrice || !information || !storeId) {
+      if (!productName || !companyName || !information || !storeId) {
         return res.status(status.BadRequest).json({
           status: jsonStatus.BadRequest,
           success: false,
           message:
-            "Please provide all product details (productName, companyName, mrp, sellingPrice, information, storeId)",
+            "Please provide all product details (productName, companyName, information, storeId)",
         });
       }
   
+      const baseMrp = primaryUnit ? primaryUnit.mrp : mrp;
+      const baseSellingPrice = primaryUnit ? primaryUnit.sellingPrice : sellingPrice;
+
+      if (baseMrp === undefined || baseSellingPrice === undefined) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Please provide MRP and Selling Price or add at least one unit.",
+        });
+      }
+
       // ✅ Convert numeric fields to Number
-      const parsedMrp = Number(mrp);
-      const parsedSellingPrice = Number(sellingPrice);
+      const parsedMrp = Number(baseMrp);
+      const parsedSellingPrice = Number(baseSellingPrice);
   
       if (isNaN(parsedMrp) || isNaN(parsedSellingPrice)) {
         return res.status(status.BadRequest).json({
@@ -145,6 +235,9 @@ export const createProduct = async (req, res) => {
           message: "Invalid MRP or Selling Price. MRP must be greater than Selling Price",
         });
       }
+
+      const finalQtyValue = primaryUnit ? (primaryUnit.qty || qty) : qty;
+      const parsedDetails = parseDescriptionField(description);
   
       // ✅ Create new product
       const newProduct = new Product({
@@ -153,9 +246,11 @@ export const createProduct = async (req, res) => {
         mrp: parsedMrp,
         sellingPrice: parsedSellingPrice,
         information,
-        qty,
+        qty: finalQtyValue,
         offPer,
         storeId,
+        units: normalizedUnits.length ? normalizedUnits : undefined,
+        details: parsedDetails,
         createdBy: req.user._id,
         updatedBy: req.user._id,
         productImages,
@@ -197,20 +292,33 @@ export const editProduct = async (req, res) => {
         }
 
         const updateData = { updatedBy: req.user._id };
+        let priceUpdatedViaUnits = false;
 
         if (Object.prototype.hasOwnProperty.call(payload, "details")) {
-            let productDetails = payload.details;
-            if (typeof productDetails === "string" && productDetails.trim().length > 0) {
-                try {
-                    productDetails = JSON.parse(productDetails);
-                } catch (err) {
-                    return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: 'Invalid JSON format for details.' });
+            const parsedDetails = parseDescriptionField(payload.details);
+            updateData.details = parsedDetails;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(payload, "units")) {
+            const parsedUnits = parseUnitsField(payload.units);
+            if (parsedUnits.length === 0) {
+                updateData.units = [];
+            } else {
+                const normalizedUnits = normalizeUnits(parsedUnits);
+                if (!normalizedUnits.length) {
+                    return res.status(status.BadRequest).json({
+                        status: jsonStatus.BadRequest,
+                        success: false,
+                        message: "Invalid units provided. Please check qty, MRP and selling price."
+                    });
                 }
+                updateData.units = normalizedUnits;
+                priceUpdatedViaUnits = true;
+                updateData.mrp = normalizedUnits[0].mrp;
+                updateData.sellingPrice = normalizedUnits[0].sellingPrice;
+                updateData.offPer = normalizedUnits[0].offPer;
+                updateData.qty = normalizedUnits[0].qty || updateData.qty || product.qty;
             }
-            if (!productDetails) {
-                productDetails = [];
-            }
-            updateData.details = productDetails;
         }
 
         const additionalImages = mergeProductImages(
@@ -244,7 +352,7 @@ export const editProduct = async (req, res) => {
         const hasMrp = Object.prototype.hasOwnProperty.call(payload, "mrp");
         const hasSellingPrice = Object.prototype.hasOwnProperty.call(payload, "sellingPrice");
 
-        if (hasMrp || hasSellingPrice) {
+        if (!priceUpdatedViaUnits && (hasMrp || hasSellingPrice)) {
             const finalMrp = hasMrp ? Number(payload.mrp) : Number(product.mrp);
             const finalSellingPrice = hasSellingPrice ? Number(payload.sellingPrice) : Number(product.sellingPrice);
 
@@ -401,69 +509,52 @@ export const deleteProductImage = async (req, res) => {
 
 export const productList = async (req, res) => {
     try {
-        let { skip, search } = req.query;
-        skip = skip || 1;
-        const trimmedSearch = typeof search === 'string' ? search.trim() : '';
-
-        // Build match query
-        const matchQuery = {
-            deleted: false,
-            createdBy: new ObjectId(req.user._id)
-        };
-
-        // Add search filter if search term is provided
-        if (trimmedSearch) {
-            const searchRegex = new RegExp(trimmedSearch, 'i');
-            matchQuery.$or = [
-                { productName: { $regex: searchRegex } },
-                { companyName: { $regex: searchRegex } },
-                { information: { $regex: searchRegex } }
-            ];
-        }
-
-        const list = await Product.aggregate([
-            {
-                $match: matchQuery
-            },
-            {
-                $sort: {
-                    createdAt: -1
-                }
-            },
-            {
-                $skip: (Number(skip) - 1) * limit
-            },
-            {
-                $limit: limit
-            }
-        ]);
-
-        if (trimmedSearch && list.length === 0) {
-            return res.status(status.NotFound).json({
-                status: jsonStatus.NotFound,
-                success: false,
-                message: "Product not found for the provided search term."
-            });
-        }
-
-        const listWithPrimaryImage = list.map((product) =>
-            applyPrimaryImageFallback(product)
-        );
-
-        res.status(status.OK).json({ 
-            status: jsonStatus.OK, 
-            success: true, 
-            data: listWithPrimaryImage 
-        });
+      let { skip, search } = req.query;
+      skip = skip || 1;
+  
+      const trimmedSearch = typeof search === "string" ? search.trim() : "";
+  
+      const matchQuery = {
+        deleted: false,
+        createdBy: new ObjectId(req.user._id),
+      };
+  
+      // 🔍 LIVE SEARCH SUPPORT
+      if (trimmedSearch) {
+        const searchRegex = new RegExp(trimmedSearch, "i");
+        matchQuery.$or = [
+          { productName: { $regex: searchRegex } },
+          { companyName: { $regex: searchRegex } },
+          { information: { $regex: searchRegex } },
+        ];
+      }
+  
+      const list = await Product.aggregate([
+        { $match: matchQuery },
+        { $sort: { createdAt: -1 } },
+        { $skip: (Number(skip) - 1) * limit },
+        { $limit: limit },
+      ]);
+  
+      // ❌ Remove 404 for live search (should return empty list)
+      const listWithPrimaryImage = list.map((product) =>
+        applyPrimaryImageFallback(product)
+      );
+  
+      return res.status(status.OK).json({
+        status: jsonStatus.OK,
+        success: true,
+        data: listWithPrimaryImage,
+      });
     } catch (error) {
-        res.status(status.InternalServerError).json({ 
-            status: jsonStatus.InternalServerError, 
-            success: false, 
-            message: error.message 
-        });
-        return catchError('productList', error, req, res);
+      res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: error.message,
+      });
+      return catchError("productList", error, req, res);
     }
-};
+  };
 
 export const getLocalStoreHomePageData = async (req, res) => {
     try {
@@ -570,15 +661,34 @@ export const getLocalStoreHomePageData = async (req, res) => {
 
 export const getLocalStoreHomePageDataV2 = async (req, res) => {
     try {
-        const { lat, long } = req.body;
+        const { lat, long, city } = req.body;
+        const userDetails = await User.findById(req.user._id).select("lat long city state");
 
-        if (lat && long) {
-            // Update user location if latitude and longitude are provided
-            await User.findByIdAndUpdate(req.user._id, { lat, long }, { new: true, runValidators: true });
-        } else {
-            // Clear user location if latitude and longitude are not provided
-            await User.findByIdAndUpdate(req.user._id, { lat: "", long: "" }, { new: true, runValidators: true });
+        const parsedLat = lat !== undefined && lat !== null && lat !== "" ? parseFloat(lat) : null;
+        const parsedLong = long !== undefined && long !== null && long !== "" ? parseFloat(long) : null;
+
+        let searchLat = Number.isFinite(parsedLat) ? parsedLat : null;
+        let searchLong = Number.isFinite(parsedLong) ? parsedLong : null;
+
+        if (Number.isFinite(parsedLat) && Number.isFinite(parsedLong)) {
+            // Update user location when a fresh coordinate is provided
+            await User.findByIdAndUpdate(
+                req.user._id,
+                { lat: parsedLat, long: parsedLong },
+                { new: true, runValidators: true }
+            );
+        } else if (userDetails?.lat && userDetails?.long) {
+            const savedLat = parseFloat(userDetails.lat);
+            const savedLong = parseFloat(userDetails.long);
+            if (Number.isFinite(savedLat) && Number.isFinite(savedLong)) {
+                searchLat = savedLat;
+                searchLong = savedLong;
+            }
         }
+
+        const searchCity =
+            (city && city.trim()) ||
+            (userDetails?.city ? userDetails.city.trim() : "");
 
         // Fetch categories (unchanged from original code)
         const categories = await StoreCategory.aggregate([
@@ -599,14 +709,14 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
 
         let stores = [];
 
-        if (lat && long) {
+        if (searchLat !== null && searchLong !== null) {
             // Fetch stores within 15 km radius
             stores = await Store.aggregate([
                 {
                     $geoNear: {
                         near: {
                             type: "Point",
-                            coordinates: [parseFloat(long), parseFloat(lat)] // Longitude first, then latitude
+                            coordinates: [searchLong, searchLat] // Longitude first, then latitude
                         },
                         distanceField: "distance",
                         maxDistance: 15000, // 15 km in meters
@@ -655,10 +765,59 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     $limit: 5
                 }
             ]);
+        } else if (searchCity) {
+            const regex = new RegExp(searchCity, "i");
+            stores = await Store.aggregate([
+                {
+                    $match: {
+                        status: "A",
+                        $or: [
+                            { address: { $regex: regex } },
+                            { "shiprocket.pickup_location.city": { $regex: regex } }
+                        ]
+                    }
+                },
+                {
+                    $lookup: {
+                        from: "store_categories",
+                        localField: "category",
+                        foreignField: "_id",
+                        as: "category_name"
+                    }
+                },
+                {
+                    $addFields: {
+                        category_name: {
+                            $ifNull: [
+                                { $arrayElemAt: ["$category_name.name", 0] },
+                                null
+                            ]
+                        }
+                    }
+                },
+                {
+                    $project: {
+                        productImages: 1,
+                        category_name: 1,
+                        name: 1,
+                        address: 1,
+                        images: 1,
+                        location: 1
+                    }
+                },
+                {
+                    $sort: {
+                        createdAt: -1
+                    }
+                },
+                {
+                    $limit: 8
+                }
+            ]);
         }
 
-        if (lat && long) {
-            const userLocation = { latitude: parseFloat(lat), longitude: parseFloat(long) };
+        if (searchLat !== null && searchLong !== null) {
+            const userLocation = { latitude: searchLat, longitude: searchLong };
             const speedKmPerHour = 30; // Adjust for travel mode
 
             stores = stores.map(store => {
@@ -683,8 +842,13 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     estimatedTimeMinutes: null
                 };
             });
+        } else if (searchCity) {
+            stores = stores.map(store => ({
+                ...store,
+                distanceKm: null,
+                estimatedTimeMinutes: null
+            }));
         } else {
-            // If user location is not available, set distance and time to null for all stores
             stores = stores.map(store => ({
                 ...store,
                 distanceKm: null,
@@ -790,8 +954,19 @@ export const getAllStores = async (req, res) => {
             {
                 $lookup: {
                     from: "store_offers",
-                    localField: "_id",
-                    foreignField: "storeId",
+                    let: { storeId: "$_id" },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ["$storeId", "$$storeId"] },
+                                        { $eq: ["$deleted", false] }
+                                    ]
+                                }
+                            }
+                        }
+                    ],
                     as: "storeOffers"
                 }
             },

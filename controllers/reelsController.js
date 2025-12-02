@@ -15,8 +15,37 @@ export const uploadReelAssetsV1 = async (req, res) => {
 // Create a new reel
 export const createReel = async (req, res) => {
     try {
-        const { title, video, thumbnail } = req.body;
+        const { title } = req.body;
         const createdBy = req.user._id;
+
+        // Get file paths from uploaded files
+        const video = req.files?.video?.[0]?.key || req.file?.key || req.body.video;
+        const thumbnail = req.files?.thumbnail?.[0]?.key || req.body.thumbnail;
+
+        // Validate required fields
+        if (!title) {
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: "Title is required" 
+            });
+        }
+
+        if (!video) {
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: "Video is required" 
+            });
+        }
+
+        if (!thumbnail) {
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: "Thumbnail is required" 
+            });
+        }
 
         const newReel = new Reel({ title, video, thumbnail, createdBy });
         await newReel.save();
@@ -179,9 +208,40 @@ export const getReelById = async (req, res) => {
 export const updateReel = async (req, res) => {
     try {
         const { id } = req.params;
-        const updatedData = req.body;
+        const { title } = req.body;
+        const createdBy = req.user._id;
 
-        const updatedReel = await Reel.findByIdAndUpdate(id, updatedData, { new: true });
+        const existingReel = await Reel.findById(id);
+        if (!existingReel) {
+            return res.status(status.NotFound).json({ 
+                status: jsonStatus.NotFound, 
+                success: false, 
+                message: "Reel not found" 
+            });
+        }
+
+        // Build update object - only update fields that are provided
+        const updatedData = {};
+        if (title) updatedData.title = title;
+        
+        // Get file paths from uploaded files (if new files are uploaded)
+        const video = req.files?.video?.[0]?.key || req.file?.key || req.body.video;
+        const thumbnail = req.files?.thumbnail?.[0]?.key || req.body.thumbnail;
+
+        // Only update video/thumbnail if new files are provided
+        if (video) updatedData.video = video;
+        if (thumbnail) updatedData.thumbnail = thumbnail;
+
+        // If no fields to update
+        if (Object.keys(updatedData).length === 0) {
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: "No fields to update" 
+            });
+        }
+
+        const updatedReel = await Reel.findByIdAndUpdate(id, updatedData, { new: true, runValidators: true });
 
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: "Reel updated successfully", reel: updatedReel });
     } catch (error) {
