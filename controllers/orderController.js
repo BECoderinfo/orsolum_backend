@@ -1468,6 +1468,12 @@ export const createOrderV2 = async (req, res) => {
 
     await newOrder.save();
 
+    // ✅ Soft-clear cart items for this store & user (they are now part of the order)
+    await Cart.updateMany(
+      { createdBy: req.user._id, storeId, deleted: false },
+      { $set: { deleted: true } }
+    );
+
     // ✅ Respond with the actual Mongo ID
     return res.status(status.OK).json({
       status: jsonStatus.OK,
@@ -1726,8 +1732,10 @@ export const orderList = async (req, res) => {
 
 export const orderListV2 = async (req, res) => {
   try {
-    let { skip } = req.query;
-    skip = skip ? skip : 1;
+    let { skip, limit } = req.query;
+    // Pagination defaults
+    const page = skip ? Number(skip) : 1;
+    const pageSize = limit ? Number(limit) : 10;
 
     const list = await Order.aggregate([
       {
@@ -1806,10 +1814,10 @@ export const orderListV2 = async (req, res) => {
         $sort: { createdAt: -1 },
       },
       {
-        $skip: (skip - 1) * limit,
+        $skip: (page - 1) * pageSize,
       },
       {
-        $limit: limit,
+        $limit: pageSize,
       },
     ]);
 
