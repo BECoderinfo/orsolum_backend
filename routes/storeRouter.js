@@ -18,6 +18,7 @@ import {
 } from "../controllers/storeController.js";
 import { retailerAuthentication } from "../middlewares/middleware.js";
 import { uploadStoreImagesMulter } from "../helper/uploadImage.js";
+import { getActiveAds } from "../controllers/adController.js";
 
 const retailerRouter = express.Router();
 
@@ -106,5 +107,10 @@ retailerRouter.get(
     retailerAuthentication,
     searchPopularProduct
 );
+
+/**
+ * 📣 Public Ads API (For User App)
+ */
+retailerRouter.get("/ads/active/v1", getActiveAds);
 
 export default retailerRouter;

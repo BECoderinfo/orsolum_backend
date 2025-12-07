@@ -137,6 +137,84 @@ const normalizeUnits = (unitPayloads = []) => {
     return normalized;
 };
 
+const slugifyKey = (value = "") => {
+    return value
+        .toString()
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || null;
+};
+
+const parseVariantGroupsField = (rawGroups) => {
+    if (!rawGroups) return [];
+    let source = rawGroups;
+    if (typeof rawGroups === "string") {
+        try {
+            source = JSON.parse(rawGroups);
+        } catch (error) {
+            return [];
+        }
+    }
+
+    if (!Array.isArray(source)) return [];
+
+    const normalized = [];
+    source.forEach((group) => {
+        if (!group) return;
+        const name = (group.name || group.label || "").toString().trim();
+        if (!name) return;
+
+        let options = group.options ?? group.values ?? [];
+        if (typeof options === "string") {
+            options = options
+                .split(",")
+                .map((opt) => opt.trim())
+                .filter(Boolean);
+        }
+        if (!Array.isArray(options)) return;
+
+        const normalizedOptions = options
+            .map((opt) =>
+                typeof opt === "string"
+                    ? opt.trim()
+                    : (opt?.value || opt?.label || "").toString().trim()
+            )
+            .filter(Boolean);
+
+        if (!normalizedOptions.length) return;
+
+        normalized.push({
+            key: (group.key && group.key.toString().trim()) || slugifyKey(name) || undefined,
+            name,
+            options: normalizedOptions,
+        });
+    });
+
+    return normalized;
+};
+
+const parseNonNegativeNumber = (value, defaultValue = 0) => {
+    if (value === undefined || value === null || value === "") {
+        return defaultValue;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        return null;
+    }
+    return Math.floor(parsed);
+};
+
+const parseOptionalObjectId = (value) => {
+    if (value === undefined || value === null || value === "") {
+        return { value: null, valid: true };
+    }
+    if (ObjectId.isValid(value)) {
+        return { value: new ObjectId(value), valid: true };
+    }
+    return { value: null, valid: false };
+};
+
 export const uploadProductImage = async (req, res) => {
     try {
         signedUrl(req, res, 'Product/')
@@ -238,8 +316,141 @@ export const createProduct = async (req, res) => {
 
       const finalQtyValue = primaryUnit ? (primaryUnit.qty || qty) : qty;
       const parsedDetails = parseDescriptionField(description);
+      const categoryParse = parseOptionalObjectId(req.body.category || req.body.categoryId);
+      if (!categoryParse.valid) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Invalid category selected.",
+        });
+      }
+      const subCategoryParse = parseOptionalObjectId(req.body.subcategory || req.body.subCategoryId);
+      if (!subCategoryParse.valid) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Invalid subcategory selected.",
+        });
+      }
+
+      const parsedStock = parseNonNegativeNumber(req.body.stock, 0);
+      if (parsedStock === null) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Stock must be a non-negative number.",
+        });
+      }
+
+      const parsedLowStockThreshold = parseNonNegativeNumber(
+        req.body.lowStockThreshold,
+        5
+      );
+      if (parsedLowStockThreshold === null) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Low stock threshold must be a non-negative number.",
+        });
+      }
+
+      const variantGroups = parseVariantGroupsField(req.body.variantGroups);
+      const variantTemplateKey =
+        req.body.variantTemplateKey ||
+        req.body.variantTemplate ||
+        (variantGroups.length ? "custom" : null);
+
+      // Parse vehicle details if provided
+      let vehicleDetails = null;
+      if (req.body.vehicleDetails) {
+        try {
+          const parsed = typeof req.body.vehicleDetails === 'string' 
+            ? JSON.parse(req.body.vehicleDetails) 
+            : req.body.vehicleDetails;
+          
+          // Clean and validate vehicle details
+          if (parsed && typeof parsed === 'object') {
+            // Validate ownerNumber (should be between 1-50)
+            let ownerNumberValue = null;
+            if (parsed.ownerNumber) {
+              const ownerNum = Number(parsed.ownerNumber);
+              if (!isNaN(ownerNum) && ownerNum >= 1 && ownerNum <= 50) {
+                ownerNumberValue = ownerNum;
+              } else {
+                console.warn(`⚠️ Invalid ownerNumber value: ${parsed.ownerNumber}, setting to null`);
+              }
+            }
+
+            // Validate seatingCapacity (should be between 1-50)
+            let seatingCapacityValue = null;
+            if (parsed.seatingCapacity) {
+              const seatingCap = Number(parsed.seatingCapacity);
+              if (!isNaN(seatingCap) && seatingCap >= 1 && seatingCap <= 50) {
+                seatingCapacityValue = seatingCap;
+              } else {
+                console.warn(`⚠️ Invalid seatingCapacity value: ${parsed.seatingCapacity}, setting to null`);
+              }
+            }
+
+            // Validate year (should be between 1900-2100)
+            let yearValue = null;
+            if (parsed.year) {
+              const yearNum = Number(parsed.year);
+              if (!isNaN(yearNum) && yearNum >= 1900 && yearNum <= 2100) {
+                yearValue = yearNum;
+              } else {
+                console.warn(`⚠️ Invalid year value: ${parsed.year}, setting to null`);
+              }
+            }
+
+            // Validate registrationYear (should be between 1900-2100)
+            let registrationYearValue = null;
+            if (parsed.registrationYear) {
+              const regYearNum = Number(parsed.registrationYear);
+              if (!isNaN(regYearNum) && regYearNum >= 1900 && regYearNum <= 2100) {
+                registrationYearValue = regYearNum;
+              } else {
+                console.warn(`⚠️ Invalid registrationYear value: ${parsed.registrationYear}, setting to null`);
+              }
+            }
+
+            // Validate kmDriven (should be >= 0)
+            let kmDrivenValue = null;
+            if (parsed.kmDriven) {
+              const kmNum = Number(parsed.kmDriven);
+              if (!isNaN(kmNum) && kmNum >= 0) {
+                kmDrivenValue = kmNum;
+              } else {
+                console.warn(`⚠️ Invalid kmDriven value: ${parsed.kmDriven}, setting to null`);
+              }
+            }
+
+            vehicleDetails = {
+              vehicleType: parsed.vehicleType || null,
+              brand: parsed.brand || null,
+              model: parsed.model || null,
+              year: yearValue,
+              mileage: parsed.mileage || null,
+              fuelType: parsed.fuelType || null,
+              transmission: parsed.transmission || null,
+              color: parsed.color || null,
+              engineCapacity: parsed.engineCapacity || null,
+              seatingCapacity: seatingCapacityValue,
+              registrationNumber: parsed.registrationNumber || null,
+              registrationYear: registrationYearValue,
+              ownerNumber: ownerNumberValue,
+              condition: parsed.condition || null,
+              kmDriven: kmDrivenValue,
+              insuranceValidTill: parsed.insuranceValidTill ? new Date(parsed.insuranceValidTill) : null,
+              rto: parsed.rto || null,
+            };
+          }
+        } catch (err) {
+          console.warn("⚠️ Failed to parse vehicle details:", err.message);
+        }
+      }
   
-      // ✅ Create new product
+      // ✅ Create new product (auto-approved - status: "A")
       const newProduct = new Product({
         productName,
         companyName,
@@ -255,6 +466,15 @@ export const createProduct = async (req, res) => {
         updatedBy: req.user._id,
         productImages,
         primaryImage: productImages[0] || "",
+        categoryId: categoryParse.value,
+        subCategoryId: subCategoryParse.value,
+        stock: parsedStock,
+        totalStock: parsedStock,
+        lowStockThreshold: parsedLowStockThreshold,
+        variantTemplate: variantTemplateKey,
+        variantGroups,
+        vehicleDetails: vehicleDetails,
+        status: "A" // Auto-approved: products show immediately
       });
   
       const savedProduct = await newProduct.save();
@@ -340,6 +560,94 @@ export const editProduct = async (req, res) => {
             }
         });
 
+        // Parse and update vehicle details if provided
+        if (Object.prototype.hasOwnProperty.call(payload, "vehicleDetails")) {
+            try {
+                const parsed = typeof payload.vehicleDetails === 'string' 
+                    ? JSON.parse(payload.vehicleDetails) 
+                    : payload.vehicleDetails;
+                
+                if (parsed && typeof parsed === 'object') {
+                    // Validate ownerNumber (should be between 1-50)
+                    let ownerNumberValue = null;
+                    if (parsed.ownerNumber) {
+                        const ownerNum = Number(parsed.ownerNumber);
+                        if (!isNaN(ownerNum) && ownerNum >= 1 && ownerNum <= 50) {
+                            ownerNumberValue = ownerNum;
+                        } else {
+                            console.warn(`⚠️ Invalid ownerNumber value: ${parsed.ownerNumber}, setting to null`);
+                        }
+                    }
+
+                    // Validate seatingCapacity (should be between 1-50)
+                    let seatingCapacityValue = null;
+                    if (parsed.seatingCapacity) {
+                        const seatingCap = Number(parsed.seatingCapacity);
+                        if (!isNaN(seatingCap) && seatingCap >= 1 && seatingCap <= 50) {
+                            seatingCapacityValue = seatingCap;
+                        } else {
+                            console.warn(`⚠️ Invalid seatingCapacity value: ${parsed.seatingCapacity}, setting to null`);
+                        }
+                    }
+
+                    // Validate year (should be between 1900-2100)
+                    let yearValue = null;
+                    if (parsed.year) {
+                        const yearNum = Number(parsed.year);
+                        if (!isNaN(yearNum) && yearNum >= 1900 && yearNum <= 2100) {
+                            yearValue = yearNum;
+                        } else {
+                            console.warn(`⚠️ Invalid year value: ${parsed.year}, setting to null`);
+                        }
+                    }
+
+                    // Validate registrationYear (should be between 1900-2100)
+                    let registrationYearValue = null;
+                    if (parsed.registrationYear) {
+                        const regYearNum = Number(parsed.registrationYear);
+                        if (!isNaN(regYearNum) && regYearNum >= 1900 && regYearNum <= 2100) {
+                            registrationYearValue = regYearNum;
+                        } else {
+                            console.warn(`⚠️ Invalid registrationYear value: ${parsed.registrationYear}, setting to null`);
+                        }
+                    }
+
+                    // Validate kmDriven (should be >= 0)
+                    let kmDrivenValue = null;
+                    if (parsed.kmDriven) {
+                        const kmNum = Number(parsed.kmDriven);
+                        if (!isNaN(kmNum) && kmNum >= 0) {
+                            kmDrivenValue = kmNum;
+                        } else {
+                            console.warn(`⚠️ Invalid kmDriven value: ${parsed.kmDriven}, setting to null`);
+                        }
+                    }
+
+                    updateData.vehicleDetails = {
+                        vehicleType: parsed.vehicleType || null,
+                        brand: parsed.brand || null,
+                        model: parsed.model || null,
+                        year: yearValue,
+                        mileage: parsed.mileage || null,
+                        fuelType: parsed.fuelType || null,
+                        transmission: parsed.transmission || null,
+                        color: parsed.color || null,
+                        engineCapacity: parsed.engineCapacity || null,
+                        seatingCapacity: seatingCapacityValue,
+                        registrationNumber: parsed.registrationNumber || null,
+                        registrationYear: registrationYearValue,
+                        ownerNumber: ownerNumberValue,
+                        condition: parsed.condition || null,
+                        kmDriven: kmDrivenValue,
+                        insuranceValidTill: parsed.insuranceValidTill ? new Date(parsed.insuranceValidTill) : null,
+                        rto: parsed.rto || null,
+                    };
+                }
+            } catch (err) {
+                console.warn("⚠️ Failed to parse vehicle details:", err.message);
+            }
+        }
+
         if (Object.prototype.hasOwnProperty.call(payload, "storeId")) {
             const newStoreId = payload.storeId;
             const isStore = await Store.findOne({ createdBy: req.user._id, _id: newStoreId });
@@ -347,6 +655,75 @@ export const editProduct = async (req, res) => {
                 return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Store not found with this account" });
             }
             updateData.storeId = newStoreId;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(payload, "stock")) {
+            const parsedStock = parseNonNegativeNumber(payload.stock);
+            if (parsedStock === null) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: "Stock must be a non-negative number."
+                });
+            }
+            updateData.stock = parsedStock;
+            updateData.totalStock = parsedStock;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(payload, "lowStockThreshold")) {
+            const parsedThreshold = parseNonNegativeNumber(
+                payload.lowStockThreshold,
+                typeof product.lowStockThreshold === "number" ? product.lowStockThreshold : 5
+            );
+            if (parsedThreshold === null) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: "Low stock threshold must be a non-negative number."
+                });
+            }
+            updateData.lowStockThreshold = parsedThreshold;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(payload, "variantGroups")) {
+            updateData.variantGroups = parseVariantGroupsField(payload.variantGroups);
+        }
+
+        if (
+            Object.prototype.hasOwnProperty.call(payload, "variantTemplateKey") ||
+            Object.prototype.hasOwnProperty.call(payload, "variantTemplate")
+        ) {
+            updateData.variantTemplate = payload.variantTemplateKey || payload.variantTemplate || null;
+        }
+
+        if (
+            Object.prototype.hasOwnProperty.call(payload, "category") ||
+            Object.prototype.hasOwnProperty.call(payload, "categoryId")
+        ) {
+            const categoryParse = parseOptionalObjectId(payload.category || payload.categoryId);
+            if (!categoryParse.valid) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: "Invalid category selected."
+                });
+            }
+            updateData.categoryId = categoryParse.value;
+        }
+
+        if (
+            Object.prototype.hasOwnProperty.call(payload, "subcategory") ||
+            Object.prototype.hasOwnProperty.call(payload, "subCategoryId")
+        ) {
+            const subCategoryParse = parseOptionalObjectId(payload.subcategory || payload.subCategoryId);
+            if (!subCategoryParse.valid) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: "Invalid subcategory selected."
+                });
+            }
+            updateData.subCategoryId = subCategoryParse.value;
         }
 
         const hasMrp = Object.prototype.hasOwnProperty.call(payload, "mrp");
@@ -422,6 +799,28 @@ export const productDetails = async (req, res) => {
             {
                 $match: {
                     _id: new ObjectId(id)
+                }
+            },
+            {
+                $lookup: {
+                    from: "product_categories",
+                    localField: "categoryId",
+                    foreignField: "_id",
+                    as: "category"
+                }
+            },
+            {
+                $lookup: {
+                    from: "product_sub_categories",
+                    localField: "subCategoryId",
+                    foreignField: "_id",
+                    as: "subCategory"
+                }
+            },
+            {
+                $addFields: {
+                    category: { $arrayElemAt: ["$category", 0] },
+                    subCategory: { $arrayElemAt: ["$subCategory", 0] }
                 }
             },
             {
@@ -531,6 +930,28 @@ export const productList = async (req, res) => {
   
       const list = await Product.aggregate([
         { $match: matchQuery },
+        {
+          $lookup: {
+            from: "product_categories",
+            localField: "categoryId",
+            foreignField: "_id",
+            as: "category"
+          }
+        },
+        {
+          $lookup: {
+            from: "product_sub_categories",
+            localField: "subCategoryId",
+            foreignField: "_id",
+            as: "subCategory"
+          }
+        },
+        {
+          $addFields: {
+            category: { $arrayElemAt: ["$category", 0] },
+            subCategory: { $arrayElemAt: ["$subCategory", 0] }
+          }
+        },
         { $sort: { createdAt: -1 } },
         { $skip: (Number(skip) - 1) * limit },
         { $limit: limit },

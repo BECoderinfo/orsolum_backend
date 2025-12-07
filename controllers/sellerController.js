@@ -9,6 +9,9 @@ import bcrypt from "bcryptjs";
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
 import Store from '../models/Store.js';
+import SlotBooking from '../models/SlotBooking.js';
+import HelpCenterTicket from '../models/HelpCenterTicket.js';
+import { isAutomobileCategory } from './slotBookingController.js';
 import mongoose from 'mongoose';
 
 // ---------------- Send OTP for Seller Registration ----------------
@@ -40,10 +43,18 @@ export const sendRegisterOtp = async (req, res) => {
       digits: true
     });
 
-    await sendSms(phone.replace('+', ''), {
+    const smsSent = await sendSms(phone.replace('+', ''), {
       var1: req.body.name || 'Seller',
       var2: otp
     });
+
+    if (!smsSent) {
+      return res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: "Failed to send OTP. Please contact support or try again later.",
+      });
+    }
 
     const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
 
@@ -472,7 +483,8 @@ export const verifySellerPassword = async (req, res) => {
 export const getSellerDashboard = async (req, res) => {
   try {
     // Find the store belonging to the current seller
-    const findStore = await Store.findOne({ createdBy: req.user._id });
+    const findStore = await Store.findOne({ createdBy: req.user._id })
+      .populate("category", "name");
     if (!findStore) {
       return res.status(status.NotFound).json({ 
         status: jsonStatus.NotFound,
@@ -482,6 +494,8 @@ export const getSellerDashboard = async (req, res) => {
     }
 
     const storeId = findStore._id;
+    const storeCategoryName = findStore?.category?.name || "";
+    const isAutomobileStore = isAutomobileCategory(storeCategoryName);
     const { ObjectId } = mongoose.Types;
 
     // ========== TODAY'S DATE RANGE ==========
@@ -564,6 +578,54 @@ export const getSellerDashboard = async (req, res) => {
       deleted: false 
     });
 
+    // ========== SLOT BOOKING SUMMARY ==========
+    const slotBookingSummaryAgg = await SlotBooking.aggregate([
+      {
+        $match: {
+          storeId: new ObjectId(storeId),
+        },
+      },
+      {
+        $facet: {
+          total: [{ $count: "count" }],
+          today: [
+            {
+              $match: {
+                createdAt: { $gte: today, $lte: todayEnd },
+              },
+            },
+            { $count: "count" },
+          ],
+          pending: [
+            { $match: { status: "pending" } },
+            { $count: "count" },
+          ],
+          contacted: [
+            { $match: { status: "contacted" } },
+            { $count: "count" },
+          ],
+          done: [
+            { $match: { status: "done" } },
+            { $count: "count" },
+          ],
+          cancelled: [
+            { $match: { status: "cancelled" } },
+            { $count: "count" },
+          ],
+        },
+      },
+    ]);
+
+    const getFacetCount = (facetArray) => facetArray?.[0]?.count || 0;
+    const slotBookingSummary = {
+      total: getFacetCount(slotBookingSummaryAgg[0]?.total),
+      today: getFacetCount(slotBookingSummaryAgg[0]?.today),
+      pending: getFacetCount(slotBookingSummaryAgg[0]?.pending),
+      contacted: getFacetCount(slotBookingSummaryAgg[0]?.contacted),
+      done: getFacetCount(slotBookingSummaryAgg[0]?.done),
+      cancelled: getFacetCount(slotBookingSummaryAgg[0]?.cancelled),
+    };
+
     // ========== MONTHLY ORDERS DATA FOR CHART (Last 8 months) ==========
     const monthlyOrdersData = await Order.aggregate([
       {
@@ -635,6 +697,78 @@ export const getSellerDashboard = async (req, res) => {
     const yesterdayPercent = totalTraffic > 0 ? Math.round((yesterdayCount / totalTraffic) * 100) : 0;
     const todayPercent = totalTraffic > 0 ? Math.round((todayCount / totalTraffic) * 100) : 0;
 
+    // ========== SLOT BOOKING TREND (last 7 days) ==========
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    const slotTrendRaw = await SlotBooking.aggregate([
+      {
+        $match: {
+          storeId: new ObjectId(storeId),
+          createdAt: { $gte: sevenDaysAgo },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: "$createdAt" },
+            month: { $month: "$createdAt" },
+            day: { $dayOfMonth: "$createdAt" },
+          },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { "_id.year": 1, "_id.month": 1, "_id.day": 1 } },
+    ]);
+
+    const slotTrendMap = new Map();
+    slotTrendRaw.forEach((item) => {
+      const key = `${item._id.year}-${item._id.month}-${item._id.day}`;
+      slotTrendMap.set(key, item.count);
+    });
+
+    const slotBookingsTrend = [];
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      date.setHours(0, 0, 0, 0);
+      const key = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+      slotBookingsTrend.push({
+        label: date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
+        count: slotTrendMap.get(key) || 0,
+      });
+    }
+
+    // ========== HELP CENTER SUMMARY ==========
+    const helpCenterStatuses = ["open", "in_progress", "resolved", "closed"];
+    const helpCenterSummaryBase = {
+      total: 0,
+      open: 0,
+      in_progress: 0,
+      resolved: 0,
+      closed: 0
+    };
+
+    const helpCenterAgg = await HelpCenterTicket.aggregate([
+      {
+        $match: { sellerId: new ObjectId(req.user._id) }
+      },
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    helpCenterAgg.forEach(item => {
+      if (helpCenterStatuses.includes(item._id)) {
+        helpCenterSummaryBase[item._id] = item.count;
+        helpCenterSummaryBase.total += item.count;
+      }
+    });
+
     // ========== CALCULATE PERCENTAGE CHANGE ==========
     const lastMonthDate = new Date();
     lastMonthDate.setMonth(lastMonthDate.getMonth() - 1);
@@ -682,15 +816,20 @@ export const getSellerDashboard = async (req, res) => {
           profit: {
             percentage: "80", // Can be calculated based on cost vs revenue
             description: "More profit than loss"
-          }
+          },
+          slotBookings: slotBookingSummary,
+          helpCenter: helpCenterSummaryBase
         },
         charts: {
           ordersData: last8Months,
           trafficData: [
             { name: "Yesterday", value: yesterdayPercent },
             { name: "Today", value: todayPercent }
-          ]
-        }
+          ],
+          slotBookingsTrend
+        },
+        storeCategory: storeCategoryName,
+        isAutomobileStore
       }
     });
   } catch (error) {
@@ -778,6 +917,8 @@ export const getSellerOrderList = async (req, res) => {
           createdAt: { $first: "$createdAt" },
           status: { $first: "$status" },
           paymentStatus: { $first: "$paymentStatus" },
+          invoiceUrl: { $first: "$invoiceUrl" },
+          shiprocketShipmentId: { $first: "$shiprocket.shipment_id" },
           customer: {
             $first: {
               name: {
@@ -808,6 +949,8 @@ export const getSellerOrderList = async (req, res) => {
           createdAt: 1,
           status: 1,
           paymentStatus: 1,
+          invoiceUrl: 1,
+          shiprocketShipmentId: 1,
           customer: 1,
           totalItems: 1,
           totalAmount: 1,
@@ -895,7 +1038,7 @@ export const getSellerOrderDetails = async (req, res) => {
     const orderExists = await Order.findOne({
       _id: new ObjectId(id),
       storeId: store._id,
-    }).select("_id orderId status paymentStatus summary address createdAt createdBy storeId paymentMethod productDetails");
+    }).select("_id orderId status paymentStatus summary address createdAt createdBy storeId paymentMethod productDetails invoiceUrl shiprocket");
 
     if (!orderExists) {
       return res.status(status.NotFound).json({
@@ -974,6 +1117,8 @@ export const getSellerOrderDetails = async (req, res) => {
           paymentMethod: { $first: "$paymentMethod" },
           summary: { $first: "$summary" },
           address: { $first: "$address" },
+          invoiceUrl: { $first: "$invoiceUrl" },
+          shiprocketShipmentId: { $first: "$shiprocket.shipment_id" },
           customer: {
             $first: {
               name: { $ifNull: ["$customerInfo.name", ""] },
@@ -1018,6 +1163,8 @@ export const getSellerOrderDetails = async (req, res) => {
       totalItems: 0,
       createdAt: orderExists.createdAt,
       paymentMethod: orderExists.paymentMethod,
+      invoiceUrl: orderExists.invoiceUrl || null,
+      shiprocketShipmentId: orderExists?.shiprocket?.shipment_id || null,
     };
 
     return res.status(status.OK).json({

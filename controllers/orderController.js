@@ -19,8 +19,10 @@ import {
   handleLocalStoreOrderCallback,
   handleOnlineStoreOrderCallback,
   handlePremiumUserCallback,
+  handleAdPaymentCallback,
 } from "../helper/helper.js";
 import Payment from "../models/Payment.js";
+import { notifyLowStock } from "../helper/notificationHelper.js";
 // import { image } from "pdfkit";
 
 
@@ -94,6 +96,34 @@ export const createOrder = async (req, res) => {
         };
       })
     );
+
+    const stockUpdates = [];
+    for (const detail of cartDetails) {
+      const currentStock =
+        typeof detail.product.stock === "number" ? detail.product.stock : null;
+      if (currentStock === null) {
+        continue;
+      }
+
+      if (detail.quantity > currentStock) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: `Only ${currentStock} unit(s) of ${detail.product.productName} available`,
+        });
+      }
+
+      stockUpdates.push({
+        productId: detail.productId,
+        retailerId: detail.product.createdBy,
+        product: detail.product,
+        newStock: currentStock - detail.quantity,
+        lowStockThreshold:
+          typeof detail.product.lowStockThreshold === "number"
+            ? detail.product.lowStockThreshold
+            : 0,
+      });
+    }
 
     // 🎟️ Coupon logic (unchanged)
     let couponCodeDiscount = 0;
@@ -222,6 +252,38 @@ export const createOrder = async (req, res) => {
 
     await Cart.updateMany({ createdBy: req.user._id }, { $set: { deleted: true } });
 
+    if (stockUpdates.length) {
+      await Promise.all(
+        stockUpdates.map(async (update) => {
+          await Product.findByIdAndUpdate(
+            update.productId,
+            {
+              $set: { stock: update.newStock, totalStock: update.newStock },
+              updatedBy: update.retailerId,
+            },
+            { new: true }
+          );
+
+          if (
+            update.product &&
+            update.lowStockThreshold > 0 &&
+            update.newStock <= update.lowStockThreshold
+          ) {
+            try {
+              update.product.stock = update.newStock;
+              await notifyLowStock(
+                update.retailerId,
+                update.product,
+                update.newStock
+              );
+            } catch (notifyErr) {
+              console.warn("Low stock notification failed:", notifyErr.message);
+            }
+          }
+        })
+      );
+    }
+
     res.status(200).json({
       success: true,
       message: "Order created successfully & synced with Shiprocket",
@@ -261,16 +323,48 @@ export const addProductToCart = async (req, res) => {
       });
     }
 
+    const normalizedQuantity = Number(quantity);
+    const safeQuantity =
+      Number.isFinite(normalizedQuantity) && normalizedQuantity > 0
+        ? Math.floor(normalizedQuantity)
+        : 1;
+    const availableStock =
+      typeof productDetails.stock === "number" ? productDetails.stock : null;
+
     const findProductInCart = await Cart.findOne({
       createdBy: req.user._id,
       productId,
       storeId,
       deleted: false,
     });
+
+    const existingQty = findProductInCart ? findProductInCart.quantity : 0;
+
+    if (availableStock !== null) {
+      if (availableStock <= 0) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Product is currently out of stock.",
+        });
+      }
+
+      const tentativeTotal = existingQty + safeQuantity;
+      if (tentativeTotal > availableStock) {
+        const remaining = Math.max(availableStock - existingQty, 0);
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message:
+            remaining > 0
+              ? `Only ${remaining} unit(s) available in stock`
+              : "You've reached the maximum available stock for this product.",
+        });
+      }
+    }
+
     if (findProductInCart) {
-      findProductInCart.quantity = quantity
-        ? findProductInCart.quantity + quantity
-        : findProductInCart.quantity + 1;
+      findProductInCart.quantity = existingQty + safeQuantity;
       await findProductInCart.save();
 
       let totalCartCount = 0;
@@ -292,11 +386,19 @@ export const addProductToCart = async (req, res) => {
         totalCartCount,
       });
     } else {
+      if (availableStock !== null && safeQuantity > availableStock) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: `Only ${availableStock} unit(s) available in stock`,
+        });
+      }
+
       let newCart = new Cart({
         productId,
         storeId,
         createdBy: req.user._id,
-        quantity: quantity || 1,
+        quantity: safeQuantity || 1,
       });
       newCart = await newCart.save();
 
@@ -350,12 +452,22 @@ export const incrementProductQuantityInCart = async (req, res) => {
       });
     }
 
+    const availableStock = typeof findProduct.stock === "number" ? findProduct.stock : null;
+
     const findCart = await Cart.findOne({
       productId: id,
       createdBy: req.user._id,
       deleted: false,
     });
     if (!findCart) {
+      if (availableStock !== null && availableStock <= 0) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Product is currently out of stock.",
+        });
+      }
+
       let newCart = new Cart({
         productId: id,
         storeId: findProduct.storeId,
@@ -383,6 +495,14 @@ export const incrementProductQuantityInCart = async (req, res) => {
         totalCartCount,
       });
     } else {
+      if (availableStock !== null && findCart.quantity + 1 > availableStock) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "You have reached the available stock for this product.",
+        });
+      }
+
       findCart.quantity += 1;
       await findCart.save();
 
@@ -1163,31 +1283,35 @@ export const couponCodeList = async (req, res) => {
 
 export const createAddress = async (req, res) => {
   try {
-    const { address_1, flatHouse, name, pincode, mapLink, lat, long } =
+    const { address_1, flatHouse, name, pincode, mapLink, lat, long, city, state, landmark } =
       req.body;
 
-    if (
-      !address_1 ||
-      !flatHouse ||
-      !name ||
-      !pincode ||
-      !flatHouse ||
-      !lat ||
-      !long ||
-      !mapLink
-    ) {
+    // Required fields validation
+    if (!address_1 || !pincode) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
-        message: `Please enter details`,
+        message: `address_1 and pincode are required`,
       });
     }
 
-    let newAddress = new Address({
-      ...req.body,
-      number: req.user.phone,
+    // Generate default values for required fields if not provided
+    const addressData = {
+      address_1,
+      flatHouse: flatHouse || "",
+      name: name || req.user?.name || "Home",
+      pincode,
+      city: city || "",
+      state: state || "",
+      landmark: landmark || "",
+      mapLink: mapLink || `https://maps.google.com/?q=${lat || ""},${long || ""}`,
+      lat: lat || "0",
+      long: long || "0",
+      number: req.user?.phone || "",
       createdBy: req.user._id,
-    });
+    };
+
+    let newAddress = new Address(addressData);
     newAddress = await newAddress.save();
 
     return res
@@ -1348,7 +1472,8 @@ export const createOrderV2 = async (req, res) => {
 
     const storeOffers = await StoreOffer.find({ storeId, deleted: false });
 
-    carts.forEach((cart) => {
+    const stockUpdates = [];
+    for (const cart of carts) {
       const productPrice = cart.productId.sellingPrice;
       const mrp = cart.productId.mrp;
       const quantity = cart.quantity;
@@ -1356,7 +1481,10 @@ export const createOrderV2 = async (req, res) => {
       let appliedOffers = [];
 
       storeOffers.forEach((offer) => {
-        if (offer.offerType === "buy_one_get_one" && offer.selectedProducts.includes(cart.productId._id.toString())) {
+        if (
+          offer.offerType === "buy_one_get_one" &&
+          offer.selectedProducts.includes(cart.productId._id.toString())
+        ) {
           freeQuantity = quantity;
           appliedOffers.push({
             type: "buy_one_get_one",
@@ -1364,6 +1492,29 @@ export const createOrderV2 = async (req, res) => {
           });
         }
       });
+
+      const currentStock =
+        typeof cart.productId.stock === "number" ? cart.productId.stock : null;
+      if (currentStock !== null) {
+        if (quantity > currentStock) {
+          return res.status(status.BadRequest).json({
+            status: jsonStatus.BadRequest,
+            success: false,
+            message: `Only ${currentStock} unit(s) of ${cart.productId.productName} available`,
+          });
+        }
+
+        stockUpdates.push({
+          productId: cart.productId._id,
+          retailerId: cart.productId.createdBy,
+          product: cart.productId,
+          newStock: currentStock - quantity,
+          lowStockThreshold:
+            typeof cart.productId.lowStockThreshold === "number"
+              ? cart.productId.lowStockThreshold
+              : 0,
+        });
+      }
 
       storeTotal += productPrice * quantity;
 
@@ -1375,7 +1526,7 @@ export const createOrderV2 = async (req, res) => {
         freeQuantity,
         appliedOffers,
       });
-    });
+    }
 
     // ✅ Coupon Logic
     let couponCodeDiscount = 0;
@@ -1474,6 +1625,38 @@ export const createOrderV2 = async (req, res) => {
       { $set: { deleted: true } }
     );
 
+    if (stockUpdates.length) {
+      await Promise.all(
+        stockUpdates.map(async (update) => {
+          await Product.findByIdAndUpdate(
+            update.productId,
+            {
+              $set: { stock: update.newStock, totalStock: update.newStock },
+              updatedBy: update.retailerId,
+            },
+            { new: true }
+          );
+
+          if (
+            update.product &&
+            update.lowStockThreshold > 0 &&
+            update.newStock <= update.lowStockThreshold
+          ) {
+            try {
+              update.product.stock = update.newStock;
+              await notifyLowStock(
+                update.retailerId,
+                update.product,
+                update.newStock
+              );
+            } catch (notifyErr) {
+              console.warn("Low stock notification failed:", notifyErr.message);
+            }
+          }
+        })
+      );
+    }
+
     // ✅ Respond with the actual Mongo ID
     return res.status(status.OK).json({
       status: jsonStatus.OK,
@@ -1521,6 +1704,8 @@ export const paymentWebhookCall = async (req, res) => {
         await handleOnlineStoreOrderCallback(webhookCallRes);
       } else if (webhookCallRes.order.order_tags.forPayment === "Premium") {
         await handlePremiumUserCallback(webhookCallRes);
+      } else if (webhookCallRes.order.order_tags.forPayment === "Ad") {
+        await handleAdPaymentCallback(webhookCallRes);
       } else {
         console.log("No match");
       }
@@ -1802,6 +1987,7 @@ export const orderListV2 = async (req, res) => {
           storeDetails: { $first: "$storeDetails" },
           orderId: { $first: "$orderId" },
           status: { $first: "$status" },
+          paymentStatus: { $first: "$paymentStatus" }, // Include payment status
           summary: { $first: "$summary" },
           createdAt: { $first: "$createdAt" },
           updatedAt: { $first: "$updatedAt" },
@@ -1832,6 +2018,7 @@ export const orderListV2 = async (req, res) => {
       },
       orderId: order.orderId,
       status: order.status,
+      paymentStatus: order.paymentStatus || "PENDING", // Include payment status
       totalPrice: order.summary.grandTotal,
       discountAmount: order.summary.discountAmount,
       shippingFee: order.summary.shippingFee,
@@ -2986,6 +3173,157 @@ export const retailerAssignOrderToDeliveryBoy = async (req, res) => {
       message: error.message,
     });
     return catchError("retailerAssignOrderToDeliveryBoy", error, req, res);
+  }
+};
+
+// Get Delivery Boy Management Dashboard Statistics
+export const retailerDeliveryBoyDashboard = async (req, res) => {
+  try {
+    // Find the store belonging to the current retailer
+    const findStore = await Store.findOne({ createdBy: req.user._id });
+    if (!findStore) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Store not found",
+      });
+    }
+
+    const storeId = findStore._id;
+
+    // Get all delivery boys who have delivered orders for this store
+    const deliveryBoysWithOrders = await Order.aggregate([
+      {
+        $match: {
+          storeId: new ObjectId(storeId),
+          assignedDeliveryBoy: { $exists: true, $ne: null },
+        },
+      },
+      {
+        $group: {
+          _id: "$assignedDeliveryBoy",
+        },
+      },
+    ]);
+
+    const deliveryBoyIds = deliveryBoysWithOrders.map((item) => item._id);
+
+    // Count total delivery boys who have worked with this store
+    const totalDeliveryBoys = await DeliveryBoy.countDocuments({
+      _id: { $in: deliveryBoyIds },
+      isDeleted: false,
+      isActive: true,
+    });
+
+    // Get all delivery statistics
+    const [deliveryStats, newOrdersData, pendingOrdersData] = await Promise.all([
+      // Total deliveries and earnings
+      Order.aggregate([
+        {
+          $match: {
+            storeId: new ObjectId(storeId),
+            paymentStatus: "SUCCESS",
+            assignedDeliveryBoy: { $exists: true, $ne: null },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            totalDeliveries: { $sum: 1 },
+            totalEarnings: {
+              $sum: {
+                $cond: [{ $eq: ["$status", "Delivered"] }, "$summary.grandTotal", 0],
+              },
+            },
+          },
+        },
+      ]),
+      // New orders (Pending status, not yet assigned)
+      Order.find({
+        storeId: new ObjectId(storeId),
+        status: "Pending",
+        paymentStatus: "SUCCESS",
+        $or: [
+          { assignedDeliveryBoy: { $exists: false } },
+          { assignedDeliveryBoy: null }
+        ],
+      })
+        .populate("createdBy", "name phone")
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean(),
+      // Pending orders (assigned but not delivered)
+      Order.find({
+        storeId: new ObjectId(storeId),
+        status: { $in: ["Pending", "Accepted", "Product shipped", "On the way", "Out for delivery", "Your Destination"] },
+        paymentStatus: "SUCCESS",
+      })
+        .populate("assignedDeliveryBoy", "firstName lastName phone availabilityStatus")
+        .populate("createdBy", "name phone")
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean(),
+    ]);
+
+    const totalDeliveries = deliveryStats[0]?.totalDeliveries || 0;
+    const totalEarnings = deliveryStats[0]?.totalEarnings || 0;
+    const newOrders = newOrdersData.length;
+    const pendingOrders = pendingOrdersData.length;
+
+    // Format new orders with assignment info
+    const newOrdersFormatted = newOrdersData.map((order) => ({
+      orderId: order.orderId,
+      _id: order._id,
+      status: order.status,
+      totalAmount: order.summary?.grandTotal || 0,
+      customerName: order.createdBy?.name || "N/A",
+      customerPhone: order.createdBy?.phone || "N/A",
+      createdAt: order.createdAt,
+      assignedDeliveryBoy: null, // Not assigned yet
+    }));
+
+    // Format pending orders with assigned delivery boy info
+    const pendingOrdersFormatted = pendingOrdersData.map((order) => ({
+      orderId: order.orderId,
+      _id: order._id,
+      status: order.status,
+      totalAmount: order.summary?.grandTotal || 0,
+      customerName: order.createdBy?.name || "N/A",
+      customerPhone: order.createdBy?.phone || "N/A",
+      createdAt: order.createdAt,
+      assignedDeliveryBoy: order.assignedDeliveryBoy
+        ? {
+            _id: order.assignedDeliveryBoy._id,
+            name: [order.assignedDeliveryBoy.firstName, order.assignedDeliveryBoy.lastName]
+              .filter(Boolean)
+              .join(" ")
+              .trim(),
+            phone: order.assignedDeliveryBoy.phone,
+            availabilityStatus: order.assignedDeliveryBoy.availabilityStatus,
+          }
+        : null,
+    }));
+
+    res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      data: {
+        totalDeliveryBoys,
+        totalDeliveries,
+        totalEarnings,
+        pendingOrders,
+        newOrders,
+        assignedOrders: pendingOrdersFormatted.filter((order) => order.assignedDeliveryBoy !== null),
+        unassignedOrders: newOrdersFormatted,
+      },
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("retailerDeliveryBoyDashboard", error, req, res);
   }
 };
 

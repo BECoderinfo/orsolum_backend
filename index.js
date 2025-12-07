@@ -23,7 +23,7 @@ import deliveryRouter from "./routes/deliveryRouter.js";
 import shiprocketRouter from "./routes/shiprocketRouter.js";
 import adminAgriAdviceRouter from "./routes/adminAgriAdvice.js";
 import agriAdviceUserRouter from "./routes/agriAdviceUser.js";
-import { checkPremiumExpiry } from "./services.js";
+import { checkPremiumExpiry, runAdsExpiryCron } from "./services.js";
 import { isSocketAuthenticated } from "./middlewares/middleware.js";
 import { createChat, getMessages, sendMessage } from "./controllers/chatController.js";
 import { goOnlineSocket, goOfflineSocket } from "./controllers/DeliveryBoyController.js";
@@ -96,6 +96,12 @@ cron.schedule("1 0 * * *", () => {
   checkPremiumExpiry();
 });
 
+// ✅ Cron Job to manage Ads expiry & notifications every hour
+cron.schedule("0 * * * *", () => {
+  console.log("Running ads expiry & notification check...");
+  runAdsExpiryCron();
+});
+
 // ✅ Register Routes
 app.use('/api', userRouter);
 app.use('/api', retailerRoute);
@@ -103,7 +109,7 @@ console.log('✅ Retailer routes mounted at /api');
 app.use('/api', storeRouter);
 app.use('/api', adminRouter);
 app.use('/api', productRouter);
-app.use('/api', orderRouter);
+app.use('/api/order', orderRouter);
 app.use('/api', onlineStoreRouter);
 app.use('/api', reelRouter);
 app.use('/api', cropRouter);

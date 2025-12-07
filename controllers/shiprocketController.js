@@ -270,47 +270,137 @@ export const deleteStorePickupAddress = async (req, res) => {
 export const bulkDeletePickupAddresses = async (req, res) => {
   try {
     const { pickupIds } = req.body;
-    console.log("Deleting pickup ID:", pickupIds);
-
+    console.log("🗑️ Bulk deleting pickup addresses:", pickupIds);
 
     if (!pickupIds || !Array.isArray(pickupIds) || pickupIds.length === 0) {
-      return res.status(400).json({ success: false, message: "pickupIds must be a non-empty array" });
+      return res.status(400).json({ 
+        success: false, 
+        message: "pickupIds must be a non-empty array" 
+      });
     }
 
     const Store = (await import('../models/Store.js')).default;
+    const PickupAddress = (await import('../models/PickupAddress.js')).default;
 
     const results = [];
+    let successCount = 0;
+    let failedCount = 0;
+
+    // First, verify Shiprocket authentication
+    try {
+      await ShiprocketService.getPickupLocations();
+      console.log("✅ Shiprocket authentication verified");
+    } catch (authErr) {
+      return res.status(401).json({
+        success: false,
+        message: "Shiprocket authentication failed. Please check your credentials.",
+        error: authErr.message
+      });
+    }
 
     for (const id of pickupIds) {
       try {
-        const store = await Store.findOne({ shiprocketPickupId: id });
-        const response = await ShiprocketService.deletePickupAddress(id);
+        const pickupId = id.toString(); // Ensure it's a string
+        
+        console.log(`🔄 Attempting to delete pickup ID: ${pickupId}`);
+        
+        // Try to delete from Shiprocket
+        const response = await ShiprocketService.deletePickupAddress(pickupId);
+        
+        console.log(`✅ Successfully deleted pickup ID: ${pickupId}`);
 
-        if (store) {
-          store.shiprocketPickupId = null;
-          await store.save();
+        // Find and update stores that reference this pickup ID
+        const stores = await Store.find({
+          $or: [
+            { 'shiprocket.pickup_address_id': pickupId },
+            { shiprocketPickupId: pickupId }
+          ]
+        });
+
+        // Update stores
+        for (const store of stores) {
+          if (store.shiprocket?.pickup_address_id === pickupId) {
+            store.shiprocket.pickup_address_id = null;
+            await store.save();
+          }
+          if (store.shiprocketPickupId === pickupId) {
+            store.shiprocketPickupId = null;
+            await store.save();
+          }
+        }
+
+        // Find and update PickupAddress documents
+        const pickupAddresses = await PickupAddress.find({
+          'shiprocket.pickup_address_id': pickupId
+        });
+
+        for (const pickupAddr of pickupAddresses) {
+          pickupAddr.shiprocket.pickup_address_id = null;
+          await pickupAddr.save();
         }
 
         results.push({
-          id,
+          id: pickupId,
           status: "deleted",
-          response,
-          storeUpdated: !!store
+          response: response || "Success",
+          storesUpdated: stores.length,
+          pickupAddressesUpdated: pickupAddresses.length
         });
+        
+        successCount++;
+
       } catch (err) {
-        results.push({ id, status: "failed", error: err.message });
+        const errorMessage = err.response?.data?.message || 
+                           err.response?.data?.error || 
+                           err.message || 
+                           "Unknown error";
+        const statusCode = err.response?.status;
+        
+        console.error(`❌ Failed to delete pickup ID ${id}:`, {
+          error: errorMessage,
+          status: statusCode
+        });
+
+        // 404 means the pickup doesn't exist in Shiprocket (might already be deleted)
+        if (statusCode === 404) {
+          results.push({ 
+            id: id.toString(), 
+            status: "not_found", 
+            error: "Pickup address not found in Shiprocket (may already be deleted)",
+            note: "This pickup address doesn't exist in Shiprocket. It may have been deleted already."
+          });
+        } else {
+          results.push({ 
+            id: id.toString(), 
+            status: "failed", 
+            error: errorMessage,
+            statusCode: statusCode
+          });
+        }
+        
+        failedCount++;
       }
     }
 
     return res.status(200).json({
       success: true,
-      message: "Bulk delete completed",
+      message: `Bulk delete completed: ${successCount} deleted, ${failedCount} failed/not found`,
+      summary: {
+        total: pickupIds.length,
+        deleted: successCount,
+        failed: failedCount,
+        notFound: results.filter(r => r.status === "not_found").length
+      },
       results
     });
 
   } catch (err) {
-    console.error("Bulk delete error:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    console.error("❌ Bulk delete error:", err);
+    return res.status(500).json({ 
+      success: false, 
+      message: err.message,
+      error: err.toString()
+    });
   }
 };
 
@@ -322,6 +412,109 @@ export const getPickupAddressStatus = async (req, res) => {
     const response = await ShiprocketService.getPickupLocations();
     return res.json(apiResponse(true, 'Pickup address status fetched', response));
   } catch (err) {
+    return res.status(500).json(apiResponse(false, err.message));
+  }
+};
+
+// ✅ Find and delete orphaned pickup addresses from Shiprocket
+// Orphaned = created in Shiprocket but not saved in database
+export const findAndDeleteOrphanedPickupAddresses = async (req, res) => {
+  try {
+    const Store = (await import('../models/Store.js')).default;
+    const PickupAddress = (await import('../models/PickupAddress.js')).default;
+    
+    // Get all pickup addresses from Shiprocket
+    console.log("🔍 Fetching all pickup addresses from Shiprocket...");
+    const shiprocketResponse = await ShiprocketService.getPickupLocations();
+    const shiprocketPickups = shiprocketResponse?.data || [];
+    
+    console.log(`📦 Found ${shiprocketPickups.length} pickup addresses in Shiprocket`);
+    
+    // Get all pickup IDs from database (stores and pickup addresses)
+    const stores = await Store.find({ 
+      'shiprocket.pickup_address_id': { $exists: true, $ne: null } 
+    }).select('shiprocket.pickup_address_id');
+    
+    const pickupAddresses = await PickupAddress.find({ 
+      'shiprocket.pickup_address_id': { $exists: true, $ne: null } 
+    }).select('shiprocket.pickup_address_id');
+    
+    const dbPickupIds = new Set();
+    stores.forEach(store => {
+      if (store.shiprocket?.pickup_address_id) {
+        dbPickupIds.add(store.shiprocket.pickup_address_id.toString());
+      }
+    });
+    pickupAddresses.forEach(addr => {
+      if (addr.shiprocket?.pickup_address_id) {
+        dbPickupIds.add(addr.shiprocket.pickup_address_id.toString());
+      }
+    });
+    
+    console.log(`💾 Found ${dbPickupIds.size} pickup IDs in database`);
+    
+    // Find orphaned pickup addresses
+    const orphanedPickups = [];
+    const results = [];
+    
+    for (const pickup of shiprocketPickups) {
+      const pickupId = pickup?.id?.toString() || pickup?.pickup_location?.toString() || pickup?.pickup_address_id?.toString();
+      
+      if (pickupId && !dbPickupIds.has(pickupId)) {
+        orphanedPickups.push({
+          id: pickupId,
+          name: pickup?.name || pickup?.pickup_location || 'Unknown',
+          address: pickup?.address || 'N/A'
+        });
+      }
+    }
+    
+    console.log(`🔍 Found ${orphanedPickups.length} orphaned pickup addresses`);
+    
+    // Delete orphaned pickups if requested
+    const { deleteOrphaned = false } = req.query;
+    
+    if (deleteOrphaned === 'true' || deleteOrphaned === true) {
+      console.log("🗑️ Deleting orphaned pickup addresses...");
+      
+      for (const orphaned of orphanedPickups) {
+        try {
+          await ShiprocketService.deletePickupAddress(orphaned.id);
+          results.push({
+            id: orphaned.id,
+            name: orphaned.name,
+            status: 'deleted',
+            success: true
+          });
+          console.log(`✅ Deleted orphaned pickup: ${orphaned.id} - ${orphaned.name}`);
+        } catch (err) {
+          results.push({
+            id: orphaned.id,
+            name: orphaned.name,
+            status: 'failed',
+            error: err.message,
+            success: false
+          });
+          console.error(`❌ Failed to delete pickup ${orphaned.id}:`, err.message);
+        }
+      }
+      
+      return res.json(apiResponse(true, `Found ${orphanedPickups.length} orphaned pickups. Deleted ${results.filter(r => r.success).length} successfully.`, {
+        totalOrphaned: orphanedPickups.length,
+        deleted: results.filter(r => r.success).length,
+        failed: results.filter(r => !r.success).length,
+        orphanedPickups,
+        results
+      }));
+    } else {
+      return res.json(apiResponse(true, `Found ${orphanedPickups.length} orphaned pickup addresses. Add ?deleteOrphaned=true to delete them.`, {
+        totalOrphaned: orphanedPickups.length,
+        orphanedPickups,
+        note: 'Add ?deleteOrphaned=true query parameter to delete these orphaned pickups'
+      }));
+    }
+  } catch (err) {
+    console.error("❌ Error finding orphaned pickup addresses:", err);
     return res.status(500).json(apiResponse(false, err.message));
   }
 };

@@ -1,11 +1,14 @@
 import express from "express";
 import { body } from 'express-validator';
 import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, productDetails, acceptProduct, rejectProduct, deleteLocalProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus, createOffer, listOffers, updateOffer, deleteOffer, getWelcomeImage, uploadWelcomeImage, deleteWelcomeImage, saveStorePopularProducts, updateStoreRating } from "../controllers/adminController.js";
+import { uploadStoreImagesMulter } from "../helper/uploadImage.js";
 import { adminAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { createWorkHours, getAllWorkHours, updateWorkHours, deleteWorkHours } from "../controllers/workHoursController.js";
 import ShiprocketService from '../helper/shiprocketService.js';
 import { processGoogleMapsLink } from '../helper/latAndLong.js';
 import { createNotification, listNotifications, deleteNotification } from "../controllers/notificationController.js";
+import { adminListHelpCenterTickets, adminUpdateHelpCenterTicket, adminDeleteHelpCenterTicket } from "../controllers/helpCenterController.js";
+import { adminListAds, adminGetAdDetails, adminUpdateAdStatus, adminCreateOrsolumAd, adminUpdateOrsolumAd, adminDeleteOrsolumAd, adminGetAdsConfig, adminUpdateAdsConfig, adminDeleteAd } from "../controllers/adController.js";
 const adminRouter = express.Router();
 
 // Admin
@@ -96,5 +99,25 @@ adminRouter.delete('/admin/welcome-image/v1', adminAuthentication, deleteWelcome
 
 // Popular Products (Admin)
 adminRouter.post('/admin/store/:storeId/popular-products/v1', adminAuthentication, saveStorePopularProducts);
+
+// Help Center
+adminRouter.get('/admin/help-center/tickets/v1', adminAuthentication, adminListHelpCenterTickets);
+adminRouter.put('/admin/help-center/tickets/:ticketId/v1', adminAuthentication, adminUpdateHelpCenterTicket);
+adminRouter.delete('/admin/help-center/tickets/:ticketId/v1', adminAuthentication, adminDeleteHelpCenterTicket);
+
+// Ads Management
+adminRouter.get('/admin/ads/v1', adminAuthentication, adminListAds);
+adminRouter.get('/admin/ads/:id/v1', adminAuthentication, adminGetAdDetails);
+adminRouter.put('/admin/ads/:id/status/v1', adminAuthentication, adminUpdateAdStatus);
+adminRouter.delete('/admin/ads/:id/v1', adminAuthentication, adminDeleteAd);
+
+// Orsolum own ads CRUD
+adminRouter.post('/admin/orsolum/ads/v1', adminAuthentication, uploadStoreImagesMulter.array("images", 10), adminCreateOrsolumAd);
+adminRouter.put('/admin/orsolum/ads/:id/v1', adminAuthentication, adminUpdateOrsolumAd);
+adminRouter.delete('/admin/orsolum/ads/:id/v1', adminAuthentication, adminDeleteOrsolumAd);
+
+// Ads configuration (rates + bank details)
+adminRouter.get('/admin/ads/config/v1', adminAuthentication, adminGetAdsConfig);
+adminRouter.put('/admin/ads/config/v1', adminAuthentication, adminUpdateAdsConfig);
 
 export default adminRouter;

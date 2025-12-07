@@ -83,11 +83,30 @@ export const createStore = async (req, res) => {
   try {
     const { name, category, information, phone, address, email, location, directMe, city, state, pincode } = req.body;
 
+    // Validate required fields
     if (!name || !category || !information || !phone || !address || !email) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
         message: "Please fill all required fields (name, category, info, phone, address, email)",
+      });
+    }
+
+    // Validate Shiprocket required fields (city, state, pincode)
+    if (!city || !state || !pincode) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Please provide city, state, and pincode for Shiprocket pickup address",
+      });
+    }
+
+    // Validate phone format (should start with +)
+    if (!phone.startsWith('+')) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Phone number must include country code (e.g., +918780654545)",
       });
     }
 
@@ -139,91 +158,226 @@ export const createStore = async (req, res) => {
     const savedStore = await store.save();
 
     // 🚀 Shiprocket Pickup Creation
+    // Ensure all fields are properly formatted
     const pickupPayload = {
       pickup_location: name.replace(/\s+/g, "_").toLowerCase().substring(0, 50),
-      name,
-      email,
-      phone,
-      address,
-      city: city || "Delhi",
-      state: state || "Delhi",
+      name: name.trim(),
+      email: email.trim(),
+      phone: phone.trim(),
+      address: address.trim(),
+      city: city.trim(),
+      state: state.trim(),
       country: "India",
-      pin_code: pincode || "110001",
+      pin_code: pincode.toString().trim(), // Ensure pincode is string
     };
 
+    console.log("📋 Pickup payload prepared:", {
+      pickup_location: pickupPayload.pickup_location,
+      name: pickupPayload.name,
+      email: pickupPayload.email,
+      phone: pickupPayload.phone,
+      city: pickupPayload.city,
+      state: pickupPayload.state,
+      pin_code: pickupPayload.pin_code
+    });
+
+    let shiprocketPickupId = null;
+    let shiprocketError = null;
+    let shipResponse = null;
+
     try {
-      const shipResponse = await ShiprocketService.createPickupAddress(pickupPayload);
+      console.log("🚀 Creating Shiprocket pickup address with payload:", {
+        pickup_location: pickupPayload.pickup_location,
+        name: pickupPayload.name,
+        city: pickupPayload.city,
+        state: pickupPayload.state
+      });
+      
+      shipResponse = await ShiprocketService.createPickupAddress(pickupPayload);
+      console.log("📦 Shiprocket raw response:", JSON.stringify(shipResponse, null, 2));
       
       // Handle different response structures from Shiprocket
-      const pickupId = shipResponse?.data?.pickup_location || 
+      // Try multiple possible response formats
+      shiprocketPickupId = shipResponse?.data?.pickup_location || 
                       shipResponse?.data?.id || 
+                      shipResponse?.data?.pickup_address_id ||
+                      shipResponse?.data?.pickup_id ||
                       shipResponse?.pickup_location || 
-                      shipResponse?.id || 
+                      shipResponse?.id ||
+                      shipResponse?.pickup_address_id ||
+                      shipResponse?.pickup_id ||
+                      shipResponse?.data?.data?.pickup_location ||
+                      shipResponse?.data?.data?.id ||
                       null;
 
-      if (pickupId) {
-        savedStore.shiprocket = {
-          pickup_address_id: pickupId,
-          pickup_location: {
-            name: pickupPayload.name,
-            phone: pickupPayload.phone,
-            email: pickupPayload.email,
-            address: pickupPayload.address,
-            city: pickupPayload.city,
-            state: pickupPayload.state,
-            pincode: pickupPayload.pin_code,
-            country: pickupPayload.country
-          },
-          pickup_addresses: [],
-          pickup_addresses_ids: [],
-          pickup_addresses_data: [],
-          default_pickup_address_id: pickupId,
-          default_pickup_address_data: pickupPayload
-        };
-        await savedStore.save();
+      // If still null, try to extract from response message or other fields
+      if (!shiprocketPickupId && shipResponse?.data) {
+        // Sometimes the ID might be in a nested structure
+        const data = shipResponse.data;
+        shiprocketPickupId = data.pickup_location || data.id || data.pickup_id || 
+                           (typeof data === 'object' && Object.values(data).find(v => typeof v === 'number' || typeof v === 'string'));
+      }
+
+      // Try to extract from response message if it contains the ID
+      if (!shiprocketPickupId && shipResponse?.message) {
+        const messageMatch = shipResponse.message.match(/\d+/);
+        if (messageMatch) {
+          shiprocketPickupId = messageMatch[0];
+          console.log("📝 Extracted Shiprocket ID from message:", shiprocketPickupId);
+        }
+      }
+
+      // Check if Shiprocket credentials are configured
+      if (!process.env.SHIPROCKET_EMAIL || !process.env.SHIPROCKET_PASSWORD) {
+        shiprocketError = "Shiprocket credentials not configured in .env file";
+        console.warn("⚠️ Shiprocket credentials missing. Please configure SHIPROCKET_EMAIL and SHIPROCKET_PASSWORD in .env file");
+      } else if (!shiprocketPickupId) {
+        shiprocketError = "Shiprocket response missing pickup address ID";
+        console.warn("⚠️ Shiprocket pickup creation response format unexpected. Full response:", JSON.stringify(shipResponse, null, 2));
+        // Log the response structure for debugging
+        console.warn("⚠️ Response keys:", Object.keys(shipResponse || {}));
+        if (shipResponse?.data) {
+          console.warn("⚠️ Response.data keys:", Object.keys(shipResponse.data));
+          console.warn("⚠️ Response.data values:", Object.values(shipResponse.data));
+        }
+        // Check if there's an error in the response
+        if (shipResponse?.error || shipResponse?.message) {
+          console.warn("⚠️ Shiprocket error/message:", shipResponse.error || shipResponse.message);
+        }
       } else {
-        // Even if Shiprocket fails, save basic structure
-        savedStore.shiprocket = {
-          pickup_location: {
-            name: pickupPayload.name,
-            phone: pickupPayload.phone,
-            email: pickupPayload.email,
-            address: pickupPayload.address,
-            city: pickupPayload.city,
-            state: pickupPayload.state,
-            pincode: pickupPayload.pin_code,
-            country: pickupPayload.country
-          },
-          pickup_addresses: [],
-          pickup_addresses_ids: [],
-          pickup_addresses_data: [],
-          default_pickup_address_id: null,
-          default_pickup_address_data: null
-        };
-        await savedStore.save();
-        console.warn("⚠️ Shiprocket pickup creation response format unexpected:", shipResponse);
+        console.log("✅ Shiprocket pickup created successfully. ID:", shiprocketPickupId);
       }
     } catch (err) {
-      console.warn("⚠️ Shiprocket pickup creation failed:", err.message);
-      // Save basic structure even if Shiprocket fails
-      savedStore.shiprocket = {
-        pickup_location: {
-          name: pickupPayload.name,
-          phone: pickupPayload.phone,
-          email: pickupPayload.email,
-          address: pickupPayload.address,
-          city: pickupPayload.city,
-          state: pickupPayload.state,
-          pincode: pickupPayload.pin_code,
-          country: pickupPayload.country
+      shiprocketError = err.message || err.response?.data?.message || "Unknown error";
+      console.error("❌ Shiprocket pickup creation failed:", {
+        message: err.message,
+        response: err.response?.data,
+        status: err.response?.status
+      });
+    }
+
+    // 📦 Create PickupAddress document in database (ALWAYS create, even if Shiprocket fails)
+    let savedPickupAddress = null;
+    try {
+      // Ensure all required fields are present
+      if (!name || !phone || !address || !pickupPayload.city || !pickupPayload.state || !pickupPayload.pin_code) {
+        throw new Error(`Missing required fields for pickup address: name=${!!name}, phone=${!!phone}, address=${!!address}, city=${!!pickupPayload.city}, state=${!!pickupPayload.state}, pincode=${!!pickupPayload.pin_code}`);
+      }
+
+      console.log("📝 Creating PickupAddress document for store:", savedStore._id);
+
+      const pickupAddress = new PickupAddress({
+        storeId: savedStore._id,
+        nickname: name, // Use store name as nickname
+        isPrimary: true, // First pickup address is always primary
+        spocDetails: {
+          name: name,
+          phone: phone,
+          email: email || `${phone}@orsolum.com`
         },
-        pickup_addresses: [],
-        pickup_addresses_ids: [],
-        pickup_addresses_data: [],
-        default_pickup_address_id: null,
-        default_pickup_address_data: null
+        shiprocket: {
+          pickup_address_id: shiprocketPickupId,
+          pickup_location: {
+            name: pickupPayload.name,
+            phone: pickupPayload.phone,
+            address: pickupPayload.address,
+            city: pickupPayload.city,
+            state: pickupPayload.state,
+            pincode: pickupPayload.pin_code,
+            country: pickupPayload.country
+          },
+          error: shiprocketError || null
+        },
+        createdBy: req.user._id,
+        updatedBy: req.user._id
+      });
+
+      savedPickupAddress = await pickupAddress.save();
+      console.log("✅ PickupAddress document created successfully. ID:", savedPickupAddress._id);
+      console.log("✅ PickupAddress Shiprocket ID (before update):", savedPickupAddress.shiprocket?.pickup_address_id);
+
+      // Get Shiprocket ID from saved PickupAddress if it wasn't set earlier
+      let finalShiprocketId = shiprocketPickupId || savedPickupAddress.shiprocket?.pickup_address_id;
+      
+      // If we have Shiprocket ID but PickupAddress doesn't, update it
+      if (shiprocketPickupId && !savedPickupAddress.shiprocket.pickup_address_id) {
+        savedPickupAddress.shiprocket.pickup_address_id = shiprocketPickupId;
+        await savedPickupAddress.save();
+        finalShiprocketId = shiprocketPickupId;
+        console.log("✅ Updated PickupAddress with Shiprocket ID:", finalShiprocketId);
+      }
+      
+      // Refresh PickupAddress to get latest data
+      savedPickupAddress = await PickupAddress.findById(savedPickupAddress._id);
+      finalShiprocketId = savedPickupAddress.shiprocket?.pickup_address_id || finalShiprocketId;
+      console.log("✅ Final Shiprocket ID for store:", finalShiprocketId);
+
+      // Use findByIdAndUpdate to ensure array is properly saved
+      await Store.findByIdAndUpdate(
+        savedStore._id,
+        {
+          $set: {
+            'shiprocket.pickup_address_id': finalShiprocketId, // Use final Shiprocket ID
+            'shiprocket.pickup_location': {
+              name: pickupPayload.name,
+              phone: pickupPayload.phone,
+              email: pickupPayload.email,
+              address: pickupPayload.address,
+              city: pickupPayload.city,
+              state: pickupPayload.state,
+              pincode: pickupPayload.pin_code,
+              country: pickupPayload.country
+            },
+            'shiprocket.default_pickup_address': savedPickupAddress._id
+          },
+          $addToSet: {
+            'shiprocket.pickup_addresses': savedPickupAddress._id
+          }
+        },
+        { new: true, runValidators: true }
+      );
+      
+      console.log("✅ Store updated with pickup address using findByIdAndUpdate");
+      console.log("✅ Shiprocket pickup_address_id set to:", finalShiprocketId);
+      
+      // Refresh store to get latest data
+      savedStore = await Store.findById(savedStore._id).populate('shiprocket.pickup_addresses');
+      console.log("✅ Store refreshed. pickup_addresses count:", savedStore.shiprocket?.pickup_addresses?.length || 0);
+      console.log("✅ Store pickup_addresses IDs:", savedStore.shiprocket?.pickup_addresses?.map(a => typeof a === 'object' ? a._id : a) || []);
+      console.log("✅ Store pickup_address_id:", savedStore.shiprocket?.pickup_address_id);
+    } catch (pickupErr) {
+      console.error("❌ CRITICAL: Error creating PickupAddress document:", pickupErr);
+      console.error("❌ Error details:", {
+        message: pickupErr.message,
+        stack: pickupErr.stack,
+        name: pickupErr.name,
+        errors: pickupErr.errors
+      });
+      
+      // Even if PickupAddress creation fails, save complete pickup_location structure
+      if (!savedStore.shiprocket) {
+        savedStore.shiprocket = {};
+      }
+      
+      savedStore.shiprocket.pickup_address_id = shiprocketPickupId;
+      savedStore.shiprocket.pickup_location = {
+        name: pickupPayload.name,
+        phone: pickupPayload.phone,
+        email: pickupPayload.email,
+        address: pickupPayload.address,
+        city: pickupPayload.city,
+        state: pickupPayload.state,
+        pincode: pickupPayload.pin_code,
+        country: pickupPayload.country
       };
+      savedStore.shiprocket.pickup_addresses = [];
+      savedStore.shiprocket.default_pickup_address = null;
+      
+      savedStore.markModified('shiprocket');
+      savedStore.markModified('shiprocket.pickup_location');
+      
       await savedStore.save();
+      console.warn("⚠️ Store saved with basic shiprocket structure (PickupAddress creation failed)");
     }
 
     // 🔄 Sync store address, city, state to seller profile
@@ -245,15 +399,148 @@ export const createStore = async (req, res) => {
       console.warn("⚠️ Failed to sync store address to seller profile:", err.message);
     }
 
-    const responseStore = applyCoverImageFallback(
-      savedStore.toObject ? savedStore.toObject() : savedStore
-    );
+    // Populate pickup_addresses if they exist - ALWAYS populate to get Shiprocket ID
+    let responseStore = savedStore;
+    
+    // Always try to populate pickup_addresses to get Shiprocket IDs
+    if (savedStore.shiprocket?.pickup_addresses?.length > 0) {
+      // Always populate to ensure we get the Shiprocket ID
+      responseStore = await Store.findById(savedStore._id)
+        .populate({
+          path: 'shiprocket.pickup_addresses',
+          select: '_id shiprocket.pickup_address_id nickname'
+        })
+        .lean();
+      
+      // If populate didn't work, try direct query
+      if (!responseStore.shiprocket?.pickup_addresses || responseStore.shiprocket.pickup_addresses.length === 0) {
+        const pickupIds = savedStore.shiprocket.pickup_addresses.map(id => 
+          typeof id === 'object' ? id._id || id : id
+        ).filter(Boolean);
+        
+        if (pickupIds.length > 0) {
+          const pickupAddresses = await PickupAddress.find({ _id: { $in: pickupIds } })
+            .select('_id shiprocket.pickup_address_id nickname')
+            .lean();
+          
+          responseStore = savedStore.toObject ? savedStore.toObject() : savedStore;
+          responseStore.shiprocket.pickup_addresses = pickupAddresses;
+        }
+      }
+    } else {
+      responseStore = savedStore.toObject ? savedStore.toObject() : savedStore;
+    }
+
+    // Ensure shiprocket structure is complete in response
+    if (!responseStore.shiprocket) {
+      responseStore.shiprocket = {
+        pickup_location: {},
+        pickup_addresses: [],
+        pickup_address_id: null,
+        default_pickup_address: null
+      };
+    }
+    
+    // Ensure pickup_addresses is always an array
+    if (!Array.isArray(responseStore.shiprocket.pickup_addresses)) {
+      responseStore.shiprocket.pickup_addresses = [];
+    }
+    
+    // If pickup_addresses is populated, add the data
+    if (Array.isArray(responseStore.shiprocket.pickup_addresses) && responseStore.shiprocket.pickup_addresses.length > 0) {
+      // Get full PickupAddress documents with all fields
+      const pickupIds = responseStore.shiprocket.pickup_addresses.map(addr => 
+        typeof addr === 'object' ? addr._id || addr : addr
+      ).filter(Boolean);
+      
+      // Fetch full PickupAddress documents
+      const fullPickupAddresses = await PickupAddress.find({ _id: { $in: pickupIds } })
+        .select('-__v')
+        .lean();
+      
+      responseStore.shiprocket.pickup_addresses_data = fullPickupAddresses;
+      responseStore.shiprocket.pickup_addresses_ids = pickupIds;
+      
+      // Get Shiprocket ID from the first pickup address if available
+      if (!responseStore.shiprocket.pickup_address_id && fullPickupAddresses.length > 0) {
+        const firstPickup = fullPickupAddresses[0];
+        if (firstPickup?.shiprocket?.pickup_address_id) {
+          responseStore.shiprocket.pickup_address_id = firstPickup.shiprocket.pickup_address_id;
+        }
+      }
+    } else {
+      responseStore.shiprocket.pickup_addresses_data = [];
+      responseStore.shiprocket.pickup_addresses_ids = [];
+    }
+
+    const finalResponseStore = applyCoverImageFallback(responseStore);
+    
+    // Final validation - ensure no null values in critical fields
+    if (finalResponseStore.shiprocket) {
+      if (!Array.isArray(finalResponseStore.shiprocket.pickup_addresses)) {
+        finalResponseStore.shiprocket.pickup_addresses = [];
+      }
+      
+      // If default_pickup_address exists but pickup_addresses is empty, add it
+      if (finalResponseStore.shiprocket.default_pickup_address && 
+          (!finalResponseStore.shiprocket.pickup_addresses || finalResponseStore.shiprocket.pickup_addresses.length === 0)) {
+        finalResponseStore.shiprocket.pickup_addresses = [finalResponseStore.shiprocket.default_pickup_address];
+        finalResponseStore.shiprocket.pickup_addresses_ids = [finalResponseStore.shiprocket.default_pickup_address];
+      }
+      
+      // Get Shiprocket ID from PickupAddress if not set in store
+      if (!finalResponseStore.shiprocket.pickup_address_id) {
+        // First try from savedPickupAddress
+        if (savedPickupAddress?.shiprocket?.pickup_address_id) {
+          finalResponseStore.shiprocket.pickup_address_id = savedPickupAddress.shiprocket.pickup_address_id;
+        } 
+        // Then try from pickup_addresses_data (already populated above)
+        else if (finalResponseStore.shiprocket.pickup_addresses_data?.length > 0) {
+          const firstPickup = finalResponseStore.shiprocket.pickup_addresses_data[0];
+          if (firstPickup?.shiprocket?.pickup_address_id) {
+            finalResponseStore.shiprocket.pickup_address_id = firstPickup.shiprocket.pickup_address_id;
+          }
+        }
+        // Then try from populated pickup_addresses
+        else if (finalResponseStore.shiprocket.pickup_addresses?.length > 0) {
+          const firstAddr = finalResponseStore.shiprocket.pickup_addresses[0];
+          if (typeof firstAddr === 'object' && firstAddr.shiprocket?.pickup_address_id) {
+            finalResponseStore.shiprocket.pickup_address_id = firstAddr.shiprocket.pickup_address_id;
+          } else if (typeof firstAddr === 'string') {
+            // If it's just an ID, fetch the PickupAddress document
+            try {
+              const pickupAddr = await PickupAddress.findById(firstAddr);
+              if (pickupAddr?.shiprocket?.pickup_address_id) {
+                finalResponseStore.shiprocket.pickup_address_id = pickupAddr.shiprocket.pickup_address_id;
+              }
+            } catch (err) {
+              console.warn("Could not fetch PickupAddress:", err.message);
+            }
+          }
+        }
+        // If still not found, try to get from store directly
+        else {
+          const freshStore = await Store.findById(savedStore._id).lean();
+          if (freshStore?.shiprocket?.pickup_address_id) {
+            finalResponseStore.shiprocket.pickup_address_id = freshStore.shiprocket.pickup_address_id;
+          }
+        }
+      }
+      if (!finalResponseStore.shiprocket.default_pickup_address && savedPickupAddress?._id) {
+        finalResponseStore.shiprocket.default_pickup_address = savedPickupAddress._id;
+        // Also add to pickup_addresses if not already there
+        if (!finalResponseStore.shiprocket.pickup_addresses || finalResponseStore.shiprocket.pickup_addresses.length === 0) {
+          finalResponseStore.shiprocket.pickup_addresses = [savedPickupAddress._id];
+          finalResponseStore.shiprocket.pickup_addresses_ids = [savedPickupAddress._id];
+        }
+      }
+    }
 
     res.status(status.Create).json({
       status: jsonStatus.Create,
       success: true,
       message: "Store created successfully",
-      data: responseStore,
+      data: finalResponseStore,
     });
   } catch (error) {
     console.error("❌ Error creating store:", error);

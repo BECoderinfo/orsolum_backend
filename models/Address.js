@@ -9,11 +9,11 @@ const AddressSchema = new mongoose.Schema({
     },
     name: {
         type: String,
-        required: true
+        default: "Home"
     },
     number: {
         type: String,
-        required: true
+        default: ""
     },
     address_1: {
         type: String,
@@ -21,19 +21,19 @@ const AddressSchema = new mongoose.Schema({
     },
     mapLink: {
         type: String,
-        required: true
+        default: ""
     },
     lat: {
         type: String,
-        required: true
+        default: "0"
     },
     long: {
         type: String,
-        required: true
+        default: "0"
     },
     flatHouse: {
         type: String,
-        required: true
+        default: ""
     },
     landmark: {
         type: String

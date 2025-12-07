@@ -1,7 +1,8 @@
 import express from "express";
-import { addProductToCart, incrementProductQuantityInCart, decrementProductQuantityInCart, deleteProductFromCart, cartDetails, allCartDetails, couponCodeList, createAddress, editAddress, getAddress, getAllAddress, createOrder, cancelOrder, orderList, orderDetails, retailerOrderList, retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetails, orderChangeStatus, createOrderV2, orderListV2, orderDetailsV2, retailerOrderDetailsV2, paymentWebhookCall, getUserAllAddress, createOrderWithShiprocket, processPaymentAndUpdateShiprocket, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy } from "../controllers/orderController.js";
+import { addProductToCart, incrementProductQuantityInCart, decrementProductQuantityInCart, deleteProductFromCart, cartDetails, allCartDetails, couponCodeList, createAddress, editAddress, getAddress, getAllAddress, createOrder, cancelOrder, orderList, orderDetails, retailerOrderList, retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetails, orderChangeStatus, createOrderV2, orderListV2, orderDetailsV2, retailerOrderDetailsV2, paymentWebhookCall, getUserAllAddress, createOrderWithShiprocket, processPaymentAndUpdateShiprocket, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy, retailerDeliveryBoyDashboard } from "../controllers/orderController.js";
 import { retailerAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { webhookTracking } from '../controllers/shiprocketController.js';
+import { createSlotBooking, getUserSlotBookings } from "../controllers/slotBookingController.js";
 const orderRouter = express.Router();
 
 // cart
@@ -54,9 +55,12 @@ orderRouter.get('/retailer/order/history/list/v2', retailerAuthentication, retai
 orderRouter.get('/retailer/order/details/:id/v2', retailerAuthentication, retailerOrderDetailsV2);
 orderRouter.get('/retailer/delivery/assigned/list/v1', retailerAuthentication, retailerAssignedDeliveries);
 orderRouter.get('/retailer/delivery/boys/v1', retailerAuthentication, retailerAvailableDeliveryBoys);
+orderRouter.get('/retailer/delivery/boys/dashboard/v1', retailerAuthentication, retailerDeliveryBoyDashboard);
 orderRouter.post('/retailer/delivery/assign/v1', retailerAuthentication, retailerAssignOrderToDeliveryBoy);
 orderRouter.put('/retailer/order/change/status/:id/v1', retailerAuthentication, orderChangeStatus);
 
-
+// Slot Booking (User App)
+orderRouter.post('/slot/booking/create/v1', userAuthentication, createSlotBooking);
+orderRouter.get('/slot/bookings/list/v1', userAuthentication, getUserSlotBookings);
 
 export default orderRouter;

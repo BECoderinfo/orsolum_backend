@@ -22,6 +22,7 @@ import {
   updateStorePickupAddress,
   deleteStorePickupAddress,
   getPickupAddressStatus,
+  findAndDeleteOrphanedPickupAddresses,
   syncOrdersWithShiprocket,
   getOrdersWithShiprocketStatus,
   bulkSyncOrders,
@@ -90,6 +91,9 @@ router.post('/store/pickup-addresses/bulk-delete', bulkDeletePickupAddresses);
 
 // ✅ Get pickup address status
 router.get('/pickup-address/status', getPickupAddressStatus);
+
+// ✅ Find and delete orphaned pickup addresses
+router.get('/pickup-address/orphaned', findAndDeleteOrphanedPickupAddresses);
 
 router.post('/sync-orders', syncOrdersWithShiprocket);
 router.get('/orders-status', getOrdersWithShiprocketStatus);

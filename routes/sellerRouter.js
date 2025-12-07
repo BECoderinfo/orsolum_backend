@@ -12,11 +12,14 @@ import {
   verifySellerPassword,
   getSellerProfile,
   getSellerDashboard,
-    getSellerOrderList,
-    getSellerOrderDetails,
+  getSellerOrderList,
+  getSellerOrderDetails,
 } from "../controllers/sellerController.js";
 import { getSellerNotifications, markSellerNotificationRead, clearSellerNotifications } from "../controllers/notificationController.js";
 import { orderChangeStatus } from "../controllers/orderController.js";
+import { getSellerInquiries, updateInquiryStatus, deleteInquiry } from "../controllers/slotBookingController.js";
+import { createHelpCenterTicket, getSellerHelpTickets } from "../controllers/helpCenterController.js";
+import { createSellerAdRequest, listSellerAds, getSellerAdDetails, renewSellerAd, getSellerAdsConfig, deleteSellerAd, createAdPaymentSession } from "../controllers/adController.js";
 
 const sellerRouter = express.Router();
 
@@ -61,5 +64,23 @@ sellerRouter.put("/seller/store/license/v1", sellerAuthentication, uploadStoreIm
 
 // 📊 Get Seller Store Details
 sellerRouter.get("/seller/store/details/v1", sellerAuthentication, getSellerStoreDetails);
+
+// 📅 Slot Booking / Inquiries
+sellerRouter.get("/seller/inquiries/v1", sellerAuthentication, getSellerInquiries);
+sellerRouter.put("/seller/inquiry/:inquiryId/status/v1", sellerAuthentication, updateInquiryStatus);
+sellerRouter.delete("/seller/inquiry/:inquiryId/v1", sellerAuthentication, deleteInquiry);
+
+// 🆘 Help Center
+sellerRouter.get("/seller/help-center/tickets/v1", sellerAuthentication, getSellerHelpTickets);
+sellerRouter.post("/seller/help-center/tickets/v1", sellerAuthentication, createHelpCenterTicket);
+
+// 📣 Seller Ads Management
+sellerRouter.get("/seller/ads/config/v1", sellerAuthentication, getSellerAdsConfig);
+sellerRouter.post("/seller/ads/v1", sellerAuthentication, uploadStoreImagesMulter.array("images", 10), createSellerAdRequest);
+sellerRouter.get("/seller/ads/v1", sellerAuthentication, listSellerAds);
+sellerRouter.get("/seller/ads/:id/v1", sellerAuthentication, getSellerAdDetails);
+sellerRouter.post("/seller/ads/:id/renew/v1", sellerAuthentication, renewSellerAd);
+sellerRouter.delete("/seller/ads/:id/v1", sellerAuthentication, deleteSellerAd);
+sellerRouter.post("/seller/ads/payment/session/v1", sellerAuthentication, createAdPaymentSession);
 
 export default sellerRouter;

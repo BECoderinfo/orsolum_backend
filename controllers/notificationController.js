@@ -247,6 +247,18 @@ export const createNotification = async (req, res) => {
 
     await notification.save();
 
+    // TODO: Send push notifications to target users
+    // This requires FCM setup and device tokens in User model
+    // For now, notifications are saved to database and can be fetched via API
+    // To implement push notifications:
+    // 1. Add deviceToken field to User model
+    // 2. Install firebase-admin package
+    // 3. Create FCM helper function
+    // 4. Query users by targetRoles and targetUserIds
+    // 5. Send FCM notifications to their device tokens
+    
+    console.log(`Notification created: ${notification._id} for roles: ${notification.targetRoles.join(', ')}`);
+
     return res.status(status.Create).json({
       status: jsonStatus.Create,
       success: true,
