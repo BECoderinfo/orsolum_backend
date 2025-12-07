@@ -2398,8 +2398,8 @@ export const retailerPendingOrderList = async (req, res) => {
   try {
     const { recent, hightolow, lowtohigh, products } = req.query;
 
-    // Retrieve the store linked to the retailer
-    const findStore = await Store.findOne({ createdBy: req.user._id });
+    // Retrieve the store linked to the retailer - use lean() for faster query
+    const findStore = await Store.findOne({ createdBy: req.user._id }).lean();
     if (!findStore) {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
@@ -2415,79 +2415,75 @@ export const retailerPendingOrderList = async (req, res) => {
       paymentStatus: "SUCCESS",
     };
 
+    // Build sort object once (more efficient than multiple $sort stages)
+    let sortObj = {};
+    if (hightolow === "1") {
+      sortObj.totalAmount = -1;
+    } else if (lowtohigh === "1") {
+      sortObj.totalAmount = 1;
+    }
+    if (recent === "1") {
+      sortObj.createdAt = -1;
+    } else if (!sortObj.totalAmount) {
+      sortObj.createdAt = -1; // Default sort by newest
+    }
+
     const pipeline = [
       {
         $match: matchObj, // Filter only pending orders of the store
       },
       {
-        $unwind: {
-          path: "$productDetails", // Unwind productDetails array
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-      {
-        $lookup: {
-          from: "products",
-          localField: "productDetails.productId",
-          foreignField: "_id",
-          as: "productInfo",
+        $project: {
+          orderId: 1,
+          createdAt: 1,
+          status: 1,
+          "summary.grandTotal": 1,
+          productDetails: 1,
         },
       },
       {
         $unwind: {
-          path: "$productInfo",
+          path: "$productDetails",
           preserveNullAndEmptyArrays: true,
         },
       },
       {
         $group: {
-          _id: "$_id", // Group by order document's _id
-          orderId: { $first: "$orderId" }, // Order ID
-          createdAt: { $first: "$createdAt" }, // Created At
+          _id: "$_id",
+          orderId: { $first: "$orderId" },
+          createdAt: { $first: "$createdAt" },
           totalItems: {
             $sum: {
               $add: [
-                "$productDetails.quantity",
-                "$productDetails.freeQuantity",
+                { $ifNull: ["$productDetails.quantity", 0] },
+                { $ifNull: ["$productDetails.freeQuantity", 0] },
               ],
             },
-          }, // ✅ Fix: Correctly counts both purchased and free BOGO items
-          totalAmount: { $first: "$summary.grandTotal" }, // ✅ Use grandTotal for total order amount
-          status: { $first: "$status" }, // Status
+          },
+          totalAmount: { $first: "$summary.grandTotal" },
+          status: { $first: "$status" },
         },
       },
     ];
 
-    // If 'products' query is present, filter orders based on the number of products in the order
+    // If 'products' query is present, filter orders based on the number of products
     if (products && products !== "0") {
       pipeline.push({
         $match: {
-          totalItems: { $gte: Number(products) }, // ✅ Filter by correct product quantity (including free items)
+          totalItems: { $gte: Number(products) },
         },
       });
     }
 
-    // Add sorting based on query parameters
-    if (recent === "1") {
-      pipeline.push({
-        $sort: { createdAt: -1 }, // ✅ Sort by newest orders first
-      });
+    // Add single sort stage (more efficient)
+    if (Object.keys(sortObj).length > 0) {
+      pipeline.push({ $sort: sortObj });
     }
 
-    if (hightolow === "1") {
-      pipeline.push({
-        $sort: { totalAmount: -1 }, // ✅ Sort by total amount (high to low)
-      });
-    } else if (lowtohigh === "1") {
-      pipeline.push({
-        $sort: { totalAmount: 1 }, // ✅ Sort by total amount (low to high)
-      });
-    }
+    // Execute the aggregation pipeline with allowDiskUse for better performance
+    const pendingOrders = await Order.aggregate(pipeline).allowDiskUse(true);
 
-    // Execute the aggregation pipeline
-    const pendingOrders = await Order.aggregate(pipeline);
-
-    // Respond with the pending orders
+    // Respond immediately with the pending orders
     res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
@@ -2507,8 +2503,8 @@ export const retailerOrderHistoryList = async (req, res) => {
   try {
     const { recent, hightolow, lowtohigh, products } = req.query;
 
-    // Retrieve the store linked to the retailer
-    const findStore = await Store.findOne({ createdBy: req.user._id });
+    // Retrieve the store linked to the retailer - use lean() for faster query
+    const findStore = await Store.findOne({ createdBy: req.user._id }).lean();
     if (!findStore) {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
@@ -2523,79 +2519,75 @@ export const retailerOrderHistoryList = async (req, res) => {
       status: { $ne: "Pending" },
     };
 
+    // Build sort object once (more efficient than multiple $sort stages)
+    let sortObj = {};
+    if (hightolow === "1") {
+      sortObj.totalAmount = -1;
+    } else if (lowtohigh === "1") {
+      sortObj.totalAmount = 1;
+    }
+    if (recent === "1") {
+      sortObj.createdAt = -1;
+    } else if (!sortObj.totalAmount) {
+      sortObj.createdAt = -1; // Default sort by newest
+    }
+
     const pipeline = [
       {
         $match: matchObj, // Filter only non-pending orders
       },
       {
-        $unwind: {
-          path: "$productDetails", // Unwind productDetails array
-          preserveNullAndEmptyArrays: true,
-        },
-      },
-      {
-        $lookup: {
-          from: "products",
-          localField: "productDetails.productId",
-          foreignField: "_id",
-          as: "productInfo",
+        $project: {
+          orderId: 1,
+          createdAt: 1,
+          status: 1,
+          "summary.grandTotal": 1,
+          productDetails: 1,
         },
       },
       {
         $unwind: {
-          path: "$productInfo",
+          path: "$productDetails",
           preserveNullAndEmptyArrays: true,
         },
       },
       {
         $group: {
-          _id: "$_id", // Group by order document's _id
-          orderId: { $first: "$orderId" }, // Order ID
-          createdAt: { $first: "$createdAt" }, // Created At
+          _id: "$_id",
+          orderId: { $first: "$orderId" },
+          createdAt: { $first: "$createdAt" },
           totalItems: {
             $sum: {
               $add: [
-                "$productDetails.quantity",
-                "$productDetails.freeQuantity",
+                { $ifNull: ["$productDetails.quantity", 0] },
+                { $ifNull: ["$productDetails.freeQuantity", 0] },
               ],
             },
-          }, // ✅ Fix: Correctly count both purchased and free BOGO items
-          totalAmount: { $first: "$summary.grandTotal" }, // ✅ Use grandTotal for accurate total order amount
-          status: { $first: "$status" }, // Status
+          },
+          totalAmount: { $first: "$summary.grandTotal" },
+          status: { $first: "$status" },
         },
       },
     ];
 
-    // If 'products' query is present, filter orders based on the number of products in the order
+    // If 'products' query is present, filter orders based on the number of products
     if (products && products !== "0") {
       pipeline.push({
         $match: {
-          totalItems: { $gte: Number(products) }, // ✅ Filter by correct product quantity (including free items)
+          totalItems: { $gte: Number(products) },
         },
       });
     }
 
-    // Add sorting based on query parameters
-    if (recent === "1") {
-      pipeline.push({
-        $sort: { createdAt: -1 }, // ✅ Sort by newest orders first
-      });
+    // Add single sort stage (more efficient)
+    if (Object.keys(sortObj).length > 0) {
+      pipeline.push({ $sort: sortObj });
     }
 
-    if (hightolow === "1") {
-      pipeline.push({
-        $sort: { totalAmount: -1 }, // ✅ Sort by total amount (high to low)
-      });
-    } else if (lowtohigh === "1") {
-      pipeline.push({
-        $sort: { totalAmount: 1 }, // ✅ Sort by total amount (low to high)
-      });
-    }
+    // Execute the aggregation pipeline with allowDiskUse for better performance
+    const orderHistory = await Order.aggregate(pipeline).allowDiskUse(true);
 
-    // Execute the aggregation pipeline
-    const orderHistory = await Order.aggregate(pipeline);
-
-    // Respond with the order history
+    // Respond immediately with the order history
     res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,

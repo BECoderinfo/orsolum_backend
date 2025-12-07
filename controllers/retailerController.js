@@ -31,6 +31,7 @@ export const updateRetailerProfile = async (req, res) => {
     try {
         const payload = { ...req.body };
 
+        // Handle image upload - only add if file is provided
         if (req.file) {
             payload.image = req.file.key;
         }
@@ -81,17 +82,26 @@ export const updateRetailerProfile = async (req, res) => {
         const allowedFields = ["name", "state", "city", "entity", "address", "gst", "image", "email"];
         const updateData = {};
 
+        // Process allowed fields - include fields that are provided (even if empty string)
         allowedFields.forEach((field) => {
+            // Check if field exists in payload (including empty strings)
             if (Object.prototype.hasOwnProperty.call(payload, field)) {
                 const value = payload[field];
-                if (field === "email" && value) {
-                    updateData.email = value.toLowerCase();
-                } else {
-                    updateData[field] = value;
+                // Only add non-empty values (except for image which is handled separately)
+                if (field === "image") {
+                    // Image is only added if req.file exists (handled above)
+                    if (payload.image) {
+                        updateData.image = payload.image;
+                    }
+                } else if (field === "email" && value && value.trim()) {
+                    updateData.email = value.toLowerCase().trim();
+                } else if (value !== undefined && value !== null && value !== "") {
+                    updateData[field] = typeof value === "string" ? value.trim() : value;
                 }
             }
         });
 
+        // Check if we have at least one field to update
         if (Object.keys(updateData).length === 0) {
             return res.status(status.BadRequest).json({
                 status: jsonStatus.BadRequest,

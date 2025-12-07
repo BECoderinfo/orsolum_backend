@@ -2964,21 +2964,27 @@ export const deleteDBoyAddress = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const address = await DBoyAddress.findById(id);
+        // Verify the address exists and belongs to the current delivery boy
+        const address = await DBoyAddress.findOne({
+            _id: id,
+            createdBy: req.user._id
+        });
+
         if (!address) {
             return res.status(status.NotFound).json({
                 status: jsonStatus.NotFound,
                 success: false,
-                message: "Address not found",
+                message: "Address not found or you don't have permission to delete it",
             });
         }
 
+        // Delete only the address - this does NOT affect delivery boy's location/profile
         await DBoyAddress.findByIdAndDelete(id);
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
-            messages: "Address deleted successfully",
+            message: "Address deleted successfully",
         });
     } catch (error) {
         res.status(status.InternalServerError).json({
