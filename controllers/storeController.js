@@ -10,6 +10,7 @@ import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
 import { processGoogleMapsLink } from '../helper/latAndLong.js';
 import PickupAddress from '../models/PickupAddress.js';
+import ShiprocketService from '../helper/shiprocketService.js';
 
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
@@ -80,7 +81,7 @@ export const uploadStoreImage = async (req, res) => {
  */
 export const createStore = async (req, res) => {
   try {
-    const { name, category, information, phone, address, email, location, directMe } = req.body;
+    const { name, category, information, phone, address, email, location, directMe, city, state, pincode } = req.body;
 
     if (!name || !category || !information || !phone || !address || !email) {
       return res.status(status.BadRequest).json({
@@ -136,6 +137,114 @@ export const createStore = async (req, res) => {
     });
 
     const savedStore = await store.save();
+
+    // 🚀 Shiprocket Pickup Creation
+    const pickupPayload = {
+      pickup_location: name.replace(/\s+/g, "_").toLowerCase().substring(0, 50),
+      name,
+      email,
+      phone,
+      address,
+      city: city || "Delhi",
+      state: state || "Delhi",
+      country: "India",
+      pin_code: pincode || "110001",
+    };
+
+    try {
+      const shipResponse = await ShiprocketService.createPickupAddress(pickupPayload);
+      
+      // Handle different response structures from Shiprocket
+      const pickupId = shipResponse?.data?.pickup_location || 
+                      shipResponse?.data?.id || 
+                      shipResponse?.pickup_location || 
+                      shipResponse?.id || 
+                      null;
+
+      if (pickupId) {
+        savedStore.shiprocket = {
+          pickup_address_id: pickupId,
+          pickup_location: {
+            name: pickupPayload.name,
+            phone: pickupPayload.phone,
+            email: pickupPayload.email,
+            address: pickupPayload.address,
+            city: pickupPayload.city,
+            state: pickupPayload.state,
+            pincode: pickupPayload.pin_code,
+            country: pickupPayload.country
+          },
+          pickup_addresses: [],
+          pickup_addresses_ids: [],
+          pickup_addresses_data: [],
+          default_pickup_address_id: pickupId,
+          default_pickup_address_data: pickupPayload
+        };
+        await savedStore.save();
+      } else {
+        // Even if Shiprocket fails, save basic structure
+        savedStore.shiprocket = {
+          pickup_location: {
+            name: pickupPayload.name,
+            phone: pickupPayload.phone,
+            email: pickupPayload.email,
+            address: pickupPayload.address,
+            city: pickupPayload.city,
+            state: pickupPayload.state,
+            pincode: pickupPayload.pin_code,
+            country: pickupPayload.country
+          },
+          pickup_addresses: [],
+          pickup_addresses_ids: [],
+          pickup_addresses_data: [],
+          default_pickup_address_id: null,
+          default_pickup_address_data: null
+        };
+        await savedStore.save();
+        console.warn("⚠️ Shiprocket pickup creation response format unexpected:", shipResponse);
+      }
+    } catch (err) {
+      console.warn("⚠️ Shiprocket pickup creation failed:", err.message);
+      // Save basic structure even if Shiprocket fails
+      savedStore.shiprocket = {
+        pickup_location: {
+          name: pickupPayload.name,
+          phone: pickupPayload.phone,
+          email: pickupPayload.email,
+          address: pickupPayload.address,
+          city: pickupPayload.city,
+          state: pickupPayload.state,
+          pincode: pickupPayload.pin_code,
+          country: pickupPayload.country
+        },
+        pickup_addresses: [],
+        pickup_addresses_ids: [],
+        pickup_addresses_data: [],
+        default_pickup_address_id: null,
+        default_pickup_address_data: null
+      };
+      await savedStore.save();
+    }
+
+    // 🔄 Sync store address, city, state to seller profile
+    try {
+      const seller = await User.findById(req.user._id);
+      if (seller) {
+        if (address && !seller.address) {
+          seller.address = address;
+        }
+        if (city && !seller.city) {
+          seller.city = city;
+        }
+        if (state && !seller.state) {
+          seller.state = state;
+        }
+        await seller.save();
+      }
+    } catch (err) {
+      console.warn("⚠️ Failed to sync store address to seller profile:", err.message);
+    }
+
     const responseStore = applyCoverImageFallback(
       savedStore.toObject ? savedStore.toObject() : savedStore
     );
@@ -696,15 +805,29 @@ export const deletePopularProduct = async (req, res) => {
 
         const storeDetails = await Store.findOne({ _id: store, createdBy: req.user._id });
         if (!storeDetails) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store not found" });
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Store not found"
+            });
         }
 
-        const findPopProduct = await StorePopularProduct.findById(id);
+        // In seller panel we pass the productId in :id param.
+        // So delete by (storeId + productId + createdBy) instead of by document _id.
+        const findPopProduct = await StorePopularProduct.findOne({
+            storeId: storeDetails._id,
+            productId: id,
+            createdBy: req.user._id
+        });
         if (!findPopProduct) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Popular product not found with this ID" });
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Popular product not found with this ID"
+            });
         }
 
-        await StorePopularProduct.findByIdAndDelete(id);
+        await StorePopularProduct.findByIdAndDelete(findPopProduct._id);
 
         res.status(status.OK).json({ status: jsonStatus.OK, success: true });
     } catch (error) {
