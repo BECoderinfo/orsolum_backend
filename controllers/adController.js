@@ -1133,9 +1133,9 @@ export const getActiveAds = async (req, res) => {
       productId: ad.productId
         ? {
             _id: ad.productId._id,
-            name: ad.productId.productName || null,
+            name: ad.productId.productName || ad.productId.name || null,
             images: productImagesArray,
-            price: ad.productId.sellingPrice || null,
+            price: ad.productId.sellingPrice ?? ad.productId.price ?? null,
             mrp: ad.productId.mrp || null,
           }
         : null,
@@ -1144,37 +1144,8 @@ export const getActiveAds = async (req, res) => {
     };
   });
 
-    // Format main ads array with proper product images
-  const formattedAds = Object.values(adsByLocation).map((ad) => {
-      // Prepare product images - combine primaryImage and productImages
-      let productImagesArray = [];
-      if (ad.productId) {
-        // Add primaryImage first if exists
-        if (ad.productId.primaryImage) {
-          productImagesArray.push(ad.productId.primaryImage);
-        }
-        // Add other productImages (avoid duplicates)
-        if (Array.isArray(ad.productId.productImages) && ad.productId.productImages.length > 0) {
-          ad.productId.productImages.forEach((img) => {
-            if (img && !productImagesArray.includes(img)) {
-              productImagesArray.push(img);
-            }
-          });
-        }
-      }
-      
-      return {
-        ...ad,
-        productId: ad.productId
-          ? {
-              ...ad.productId,
-              name: ad.productId.productName || null,
-              images: productImagesArray,
-              price: ad.productId.sellingPrice || null,
-            }
-          : null,
-      };
-    });
+  // Flatten for compatibility
+  const formattedAds = Object.values(adsByLocation);
 
     return res.status(status.OK).json({
       status: jsonStatus.OK,

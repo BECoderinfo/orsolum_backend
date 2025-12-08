@@ -1321,7 +1321,22 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             totalCartCount = 0;
         }
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: { categories, stores, totalCartCount } });
+        const resolvedLocation = {
+            lat: searchLat,
+            long: searchLong,
+            city: searchCity || null
+        };
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: {
+                categories,
+                stores,
+                totalCartCount,
+                location: resolvedLocation
+            }
+        });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('getLocalStoreHomePageDataV2', error, req, res);
