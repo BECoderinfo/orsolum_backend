@@ -1,7 +1,7 @@
 import express from "express";
 import { body } from 'express-validator';
 import { uploadProfileImage, loginUser, registerUser, sendLoginOtp, sendRegisterOtp, getMyProfile, updateMyProfile, deleteMyAccount, purchasePremium, reActivateMyAccount, logoutUser, shareMyProfile } from "../controllers/userController.js";
-import { createAddress, editAddress, deleteAddress, getAddress, getAllAddress, getUserAllAddress } from "../controllers/orderController.js";
+import { createAddress, editAddress, deleteAddress, getAddress, getAllAddress, getUserAllAddress, addProductToCart } from "../controllers/orderController.js";
 import { userAuthentication } from "../middlewares/middleware.js";
 import { uploadUserImage } from "../helper/uploadImage.js";
 import { getUserNotifications, markUserNotificationRead, clearUserNotifications } from "../controllers/notificationController.js";
@@ -45,5 +45,8 @@ userRouter.delete('/delete/address/:id/v1', userAuthentication, deleteAddress);
 userRouter.get('/get/address/:id/v1', userAuthentication, getAddress);
 userRouter.get('/get/address/v1', userAuthentication, getAllAddress);
 userRouter.get('/get/address/user/list/v1', userAuthentication, getUserAllAddress);
+
+// Cart (alias without /order prefix for mobile clients)
+userRouter.post('/add/product/in/cart/v1', userAuthentication, addProductToCart);
 
 export default userRouter;

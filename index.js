@@ -117,7 +117,8 @@ app.use('/api', storeRouter);
 app.use('/api', adminRouter);
 app.use('/api', superadminRouter);
 app.use('/api', productRouter);
- app.use('/api/order', orderRouter); // Keep at /api/order for cart and user order routes
+app.use('/api/order', orderRouter); // Primary mount for order/cart routes
+app.use('/api', orderRouter);       // Backward-compat: allow /api/add/product/in/cart/v1, etc.
 app.use('/api', onlineStoreRouter);
 app.use('/api', reelRouter);
 app.use('/api', cropRouter);

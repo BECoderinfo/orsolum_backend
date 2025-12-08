@@ -11,10 +11,47 @@ import axios from "axios";
 const { ObjectId } = mongoose.Types;
 
 const AD_LOCATIONS = ["banner", "popup", "offer_bar", "crazy_deals", "trending_items", "popular_categories", "stores_near_me", "promotional_banner"];
+// Allow only one ad per location per date range. If you ever want more concurrent
+// ads per slot, bump this value.
+const MAX_CONCURRENT_ADS_PER_LOCATION = 1;
 
 const getAdsConfig = async () => {
   const config = await AdConfig.getSingleton();
   return config;
+};
+
+/**
+ * Check for overlapping ads for a given location and date range.
+ * It looks at active ads and paid/approved ads that are already scheduled.
+ */
+const findOverlappingAds = async ({
+  location,
+  projectedStart,
+  projectedEnd,
+  excludeAdId,
+}) => {
+  if (!projectedStart || !projectedEnd) {
+    return { count: 0, conflicts: [] };
+  }
+
+  const query = {
+    location,
+    deleted: { $ne: true },
+    _id: excludeAdId ? { $ne: excludeAdId } : { $exists: true },
+    // Consider active ads, or approved ads that are already paid/scheduled
+    $or: [
+      { status: "active" },
+      { status: "approved", paymentStatus: "paid" },
+    ],
+    startDate: { $lte: projectedEnd },
+    endDate: { $gte: projectedStart },
+  };
+
+  const conflicts = await Ad.find(query)
+    .select("name startDate endDate sellerId")
+    .lean();
+
+  return { count: conflicts.length, conflicts };
 };
 
 // ===================== SELLER APIs =====================
@@ -218,7 +255,7 @@ export const listSellerAds = async (req, res) => {
     const ads = await Ad.find(filter)
       .populate("sellerId", "name phone email")
       .populate("storeId", "name phone images")
-      .populate("productId", "productName primaryImage sellingPrice")
+      .populate("productId", "productName primaryImage productImages sellingPrice mrp price name")
       .sort({ createdAt: -1 })
       .lean();
 
@@ -348,6 +385,12 @@ export const renewSellerAd = async (req, res) => {
   }
 };
 
+// Retailer APIs reuse seller logic (retailers are also stored as users)
+export const createRetailerAdRequest = (req, res) => createSellerAdRequest(req, res);
+export const listRetailerAds = (req, res) => listSellerAds(req, res);
+export const getRetailerAdDetails = (req, res) => getSellerAdDetails(req, res);
+export const deleteRetailerAd = (req, res) => deleteSellerAd(req, res);
+
 // ===================== ADMIN APIs =====================
 
 export const adminListAds = async (req, res) => {
@@ -377,6 +420,7 @@ export const adminListAds = async (req, res) => {
     const ads = await Ad.find(filter)
       .populate("sellerId", "name phone email")
       .populate("storeId", "name phone")
+    .populate("productId", "name productName productImages primaryImage sellingPrice mrp price")
       .sort({ createdAt: -1 })
       .lean();
 
@@ -483,15 +527,46 @@ export const adminUpdateAdStatus = async (req, res) => {
       ad.amount = Number(req.body.amount);
     }
 
-    // Helper function to set start and end dates
-    const setAdDates = (providedStartDate) => {
+    // Helper function to project start/end without mutating ad
+    const projectAdDates = (providedStartDate) => {
       const start = providedStartDate ? new Date(providedStartDate) : new Date();
       const end = new Date(start);
       end.setDate(end.getDate() + (ad.totalRunDays || 1));
-      ad.startDate = start;
-      ad.endDate = end;
-      ad.expiryNotified = false;
+      return { start, end };
     };
+
+  // Helper function to set start and end dates
+  const setAdDates = (providedStartDate) => {
+    const { start, end } = projectAdDates(providedStartDate);
+    ad.startDate = start;
+    ad.endDate = end;
+    ad.expiryNotified = false;
+    return { start, end };
+  };
+
+  // Prevent overlapping ads for the same location (active or scheduled/paid)
+  const ensureNoActiveConflict = async (projectedStart) => {
+    const projectedEnd = new Date(projectedStart);
+    projectedEnd.setDate(projectedEnd.getDate() + (ad.totalRunDays || 1));
+
+    const { count, conflicts } = await findOverlappingAds({
+      location: ad.location,
+      projectedStart,
+      projectedEnd,
+      excludeAdId: ad._id,
+    });
+
+    if (count >= MAX_CONCURRENT_ADS_PER_LOCATION) {
+      const c = conflicts[0];
+      const conflictStart = c?.startDate?.toISOString?.() || "";
+      const conflictEnd = c?.endDate?.toISOString?.() || "";
+      return {
+        conflict: true,
+        message: `Ad slot already booked for ${ad.location} between ${conflictStart} and ${conflictEnd}. Please choose different dates.`,
+      };
+    }
+    return { conflict: false };
+  };
 
     if (newStatus === "rejected") {
       ad.status = "rejected";
@@ -504,6 +579,15 @@ export const adminUpdateAdStatus = async (req, res) => {
       // If payment is already paid or being set to paid, set start/end dates
       const finalPaymentStatus = paymentStatus || ad.paymentStatus;
       if (finalPaymentStatus === "paid") {
+        const { start } = projectAdDates(startDate);
+        const conflictCheck = await ensureNoActiveConflict(start);
+        if (conflictCheck.conflict) {
+          return res.status(status.BadRequest).json({
+            status: jsonStatus.BadRequest,
+            success: false,
+            message: conflictCheck.message,
+          });
+        }
         setAdDates(startDate);
         // If payment is paid, automatically activate the ad
         ad.status = "active";
@@ -518,7 +602,15 @@ export const adminUpdateAdStatus = async (req, res) => {
           message: "Payment must be marked as paid before activating the ad",
         });
       }
-
+      const { start } = projectAdDates(startDate);
+      const conflictCheck = await ensureNoActiveConflict(start);
+      if (conflictCheck.conflict) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: conflictCheck.message,
+        });
+      }
       setAdDates(startDate);
       ad.status = "active";
       ad.approvedBy = ad.approvedBy || adminId;
@@ -528,6 +620,15 @@ export const adminUpdateAdStatus = async (req, res) => {
       // If no new status but payment status is being updated to "paid"
       // and ad is already approved, set dates and activate
       if (paymentStatus === "paid" && ad.status === "approved") {
+        const { start } = projectAdDates(startDate);
+        const conflictCheck = await ensureNoActiveConflict(start);
+        if (conflictCheck.conflict) {
+          return res.status(status.BadRequest).json({
+            status: jsonStatus.BadRequest,
+            success: false,
+            message: conflictCheck.message,
+          });
+        }
         setAdDates(startDate);
         ad.status = "active";
         ad.approvedBy = ad.approvedBy || adminId;
@@ -1090,8 +1191,8 @@ export const getActiveAds = async (req, res) => {
     .populate("sellerId", "name phone")
     .populate("storeId", "name phone images")
     .populate("productId", "productName primaryImage productImages sellingPrice mrp")
-    // Prefer the most recently scheduled ads; we'll keep only one per slot
-    .sort({ startDate: -1 })
+    // Prefer the earliest active ad to avoid newer ones replacing it
+    .sort({ startDate: 1 })
     .lean();
 
   // Group ads by location, keeping only one ad per location (first from sorted list)

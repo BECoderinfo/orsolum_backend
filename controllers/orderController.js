@@ -1522,10 +1522,17 @@ export const deleteAddress = async (req, res) => {
 
     await Address.findByIdAndDelete(id);
 
+    // Return remaining addresses so mobile app can refresh immediately
+    const remainingAddresses = await Address.find({ createdBy: req.user._id }).lean();
+
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
       message: "Address deleted successfully",
+      data: {
+        addresses: remainingAddresses,
+        hasAddress: remainingAddresses.length > 0,
+      },
     });
   } catch (error) {
     res.status(status.InternalServerError).json({
