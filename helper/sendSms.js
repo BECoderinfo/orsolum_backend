@@ -21,6 +21,7 @@ export const sendSms = async (mobileNumber, templateParams) => {
             ],
         };
 
+        // Add timeout of 10 seconds to prevent hanging
         const response = await axios.post(
             "https://api.msg91.com/api/v5/flow/",
             payload,
@@ -29,6 +30,7 @@ export const sendSms = async (mobileNumber, templateParams) => {
                     authkey: SMS_API_KEY,
                     "Content-Type": "application/json",
                 },
+                timeout: 10000, // 10 seconds timeout
             }
         );
 
@@ -40,6 +42,7 @@ export const sendSms = async (mobileNumber, templateParams) => {
             "Error sending SMS:",
             error.response ? error.response.data : error.message
         );
+        // Return false but don't throw error - let the calling function handle it
         return false;
     }
 };

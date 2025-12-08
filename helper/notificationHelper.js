@@ -269,3 +269,96 @@ export const notifyDeliveryStatus = async (retailerId, order, deliveryStatus) =>
     // Don't throw - notification failure shouldn't break the main flow
   }
 };
+
+/**
+ * Store offer notification (for retailer)
+ */
+export const notifyStoreOffer = async (retailerId, offer) => {
+  try {
+    const notification = new Notification({
+      title: 'New Store Offer',
+      message: `Your store offer '${offer.title}' has been created successfully.`,
+      type: 'promo',
+      image: 'Notifications/store-offer.png',
+      action: {
+        label: 'View Offer',
+        type: 'screen',
+        value: `/dashboard/offers/view/${offer._id}`,
+      },
+      targetRoles: ['retailer'],
+      targetUserIds: [new ObjectId(retailerId)],
+      meta: {
+        priority: 'medium',
+        category: 'offer',
+        offerId: offer._id.toString(),
+        offerType: offer.offerType,
+      },
+    });
+    await notification.save();
+    return notification;
+  } catch (error) {
+    console.error('Error sending store offer notification:', error);
+  }
+};
+
+/**
+ * Admin message notification (for retailer/user)
+ */
+export const notifyAdminMessage = async (userId, messageData) => {
+  try {
+    const notification = new Notification({
+      title: messageData.title || 'Admin Message',
+      message: messageData.message,
+      type: messageData.type || 'info',
+      image: messageData.image || 'Notifications/admin-message.png',
+      action: {
+        label: messageData.actionLabel || 'View',
+        type: messageData.actionType || 'none',
+        value: messageData.actionValue || '',
+      },
+      targetRoles: messageData.targetRoles || ['retailer', 'user'],
+      targetUserIds: messageData.targetUserIds ? messageData.targetUserIds.map(id => new ObjectId(id)) : [],
+      meta: {
+        priority: messageData.priority || 'medium',
+        category: 'admin',
+        ...messageData.meta,
+      },
+      createdBy: messageData.adminId ? new ObjectId(messageData.adminId) : null,
+    });
+    await notification.save();
+    return notification;
+  } catch (error) {
+    console.error('Error sending admin message notification:', error);
+  }
+};
+
+/**
+ * New product added notification (for retailer)
+ */
+export const notifyNewProduct = async (retailerId, product) => {
+  try {
+    const notification = new Notification({
+      title: 'New Product Added',
+      message: `Your product '${product.productName}' has been added successfully and is pending approval.`,
+      type: 'info',
+      image: 'Notifications/new-product.png',
+      action: {
+        label: 'View Product',
+        type: 'screen',
+        value: `/dashboard/products/view/${product._id}`,
+      },
+      targetRoles: ['retailer'],
+      targetUserIds: [new ObjectId(retailerId)],
+      meta: {
+        priority: 'medium',
+        category: 'product',
+        productId: product._id.toString(),
+        status: 'pending',
+      },
+    });
+    await notification.save();
+    return notification;
+  } catch (error) {
+    console.error('Error sending new product notification:', error);
+  }
+};

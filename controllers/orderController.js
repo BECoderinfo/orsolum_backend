@@ -1286,27 +1286,45 @@ export const createAddress = async (req, res) => {
     const { address_1, flatHouse, name, pincode, mapLink, lat, long, city, state, landmark } =
       req.body;
 
-    // Required fields validation
-    if (!address_1 || !pincode) {
+    // Required fields validation with type safety
+    if (!address_1 || (typeof address_1 === 'string' && address_1.trim() === "")) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
-        message: `address_1 and pincode are required`,
+        message: "Address (address_1) is required",
+      });
+    }
+
+    if (!pincode || (typeof pincode === 'string' && pincode.trim() === "")) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Pincode is required",
+      });
+    }
+
+    // Validate pincode format (should be 6 digits)
+    const pincodeStr = pincode.toString().trim();
+    if (!/^\d{6}$/.test(pincodeStr)) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Pincode must be 6 digits",
       });
     }
 
     // Generate default values for required fields if not provided
     const addressData = {
-      address_1,
-      flatHouse: flatHouse || "",
-      name: name || req.user?.name || "Home",
-      pincode,
-      city: city || "",
-      state: state || "",
-      landmark: landmark || "",
-      mapLink: mapLink || `https://maps.google.com/?q=${lat || ""},${long || ""}`,
-      lat: lat || "0",
-      long: long || "0",
+      address_1: typeof address_1 === 'string' ? address_1.trim() : address_1,
+      flatHouse: flatHouse ? (typeof flatHouse === 'string' ? flatHouse.trim() : flatHouse.toString()) : "",
+      name: name ? (typeof name === 'string' ? name.trim() : name.toString()) : (req.user?.name || "Home"),
+      pincode: pincodeStr,
+      city: city ? (typeof city === 'string' ? city.trim() : city.toString()) : "",
+      state: state ? (typeof state === 'string' ? state.trim() : state.toString()) : "",
+      landmark: landmark ? (typeof landmark === 'string' ? landmark.trim() : landmark.toString()) : "",
+      mapLink: mapLink ? (typeof mapLink === 'string' ? mapLink.trim() : mapLink.toString()) : `https://maps.google.com/?q=${lat || ""},${long || ""}`,
+      lat: lat ? lat.toString() : "0",
+      long: long ? long.toString() : "0",
       number: req.user?.phone || "",
       createdBy: req.user._id,
     };
@@ -1316,8 +1334,22 @@ export const createAddress = async (req, res) => {
 
     return res
       .status(status.OK)
-      .json({ status: jsonStatus.OK, success: true, data: newAddress });
+      .json({ 
+        status: jsonStatus.OK, 
+        success: true, 
+        message: "Address created successfully",
+        data: newAddress 
+      });
   } catch (error) {
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: error.message || "Validation error",
+      });
+    }
+    
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
@@ -1331,24 +1363,87 @@ export const editAddress = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Validate address ID parameter
+    if (!id) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Address ID is required",
+      });
+    }
+
+    // Validate MongoDB ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid address ID format",
+      });
+    }
+
+    // Check if address exists and belongs to user
     const address = await Address.findOne({ _id: id, createdBy: req.user._id });
     if (!address) {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
         success: false,
-        message: "Address not found",
+        message: "Address not found or you don't have permission to update it",
       });
     }
 
-    const updateAddress = await Address.findByIdAndUpdate(id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    // Validate required fields if they are being updated
+    const { address_1, pincode } = req.body;
+    if (address_1 !== undefined && !address_1) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "address_1 cannot be empty",
+      });
+    }
+    if (pincode !== undefined && !pincode) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "pincode cannot be empty",
+      });
+    }
+
+    // Update address
+    const updateAddress = await Address.findByIdAndUpdate(
+      id,
+      { ...req.body },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    if (!updateAddress) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Address not found after update",
+      });
+    }
 
     return res
       .status(status.OK)
-      .json({ status: jsonStatus.OK, success: true, data: updateAddress });
+      .json({ 
+        status: jsonStatus.OK, 
+        success: true, 
+        message: "Address updated successfully",
+        data: updateAddress 
+      });
   } catch (error) {
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: error.message || "Validation error",
+      });
+    }
+    
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
@@ -1408,6 +1503,37 @@ export const getAllAddress = async (req, res) => {
       message: error.message,
     });
     return catchError("getAllAddress", error, req, res);
+  }
+};
+
+// Delete user address (for location-based addresses from permission)
+export const deleteAddress = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const address = await Address.findOne({ _id: id, createdBy: req.user._id });
+    if (!address) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Address not found or you don't have permission to delete it",
+      });
+    }
+
+    await Address.findByIdAndDelete(id);
+
+    return res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      message: "Address deleted successfully",
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("deleteAddress", error, req, res);
   }
 };
 
@@ -1618,6 +1744,18 @@ export const createOrderV2 = async (req, res) => {
     });
 
     await newOrder.save();
+
+    // ✅ Send notification to retailer about new order
+    try {
+      const { notifyNewOrder } = await import('../helper/notificationHelper.js');
+      const store = await Store.findById(storeId);
+      if (store && store.createdBy) {
+        await notifyNewOrder(store.createdBy, newOrder);
+      }
+    } catch (notifError) {
+      console.error('Error sending new order notification:', notifError);
+      // Continue even if notification fails
+    }
 
     // ✅ Soft-clear cart items for this store & user (they are now part of the order)
     await Cart.updateMany(
@@ -1926,6 +2064,7 @@ export const orderListV2 = async (req, res) => {
       {
         $match: {
           createdBy: new mongoose.Types.ObjectId(req.user._id),
+          // Show all orders regardless of payment status
         },
       },
       // Lookup for store details

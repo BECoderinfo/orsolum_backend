@@ -109,7 +109,7 @@ console.log('✅ Retailer routes mounted at /api');
 app.use('/api', storeRouter);
 app.use('/api', adminRouter);
 app.use('/api', productRouter);
-app.use('/api/order', orderRouter);
+ app.use('/api/order', orderRouter); // Keep at /api/order for cart and user order routes
 app.use('/api', onlineStoreRouter);
 app.use('/api', reelRouter);
 app.use('/api', cropRouter);

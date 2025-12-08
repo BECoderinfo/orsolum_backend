@@ -1,5 +1,5 @@
 import express from "express";
-import { addProductToCart, incrementProductQuantityInCart, decrementProductQuantityInCart, deleteProductFromCart, cartDetails, allCartDetails, couponCodeList, createAddress, editAddress, getAddress, getAllAddress, createOrder, cancelOrder, orderList, orderDetails, retailerOrderList, retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetails, orderChangeStatus, createOrderV2, orderListV2, orderDetailsV2, retailerOrderDetailsV2, paymentWebhookCall, getUserAllAddress, createOrderWithShiprocket, processPaymentAndUpdateShiprocket, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy, retailerDeliveryBoyDashboard } from "../controllers/orderController.js";
+import { addProductToCart, incrementProductQuantityInCart, decrementProductQuantityInCart, deleteProductFromCart, cartDetails, allCartDetails, couponCodeList, createAddress, editAddress, getAddress, getAllAddress, createOrder, cancelOrder, orderList, orderDetails, retailerOrderList, retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetails, orderChangeStatus, createOrderV2, orderListV2, orderDetailsV2, retailerOrderDetailsV2, paymentWebhookCall, getUserAllAddress, createOrderWithShiprocket, processPaymentAndUpdateShiprocket, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy, retailerDeliveryBoyDashboard, deleteAddress } from "../controllers/orderController.js";
 import { retailerAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { webhookTracking } from '../controllers/shiprocketController.js';
 import { createSlotBooking, getUserSlotBookings } from "../controllers/slotBookingController.js";
@@ -17,6 +17,7 @@ orderRouter.get('/coupon/code/list/v1', userAuthentication, couponCodeList);
 // address
 orderRouter.post('/create/address/v1', userAuthentication, createAddress);
 orderRouter.put('/edit/address/:id/v1', userAuthentication, editAddress);
+orderRouter.delete('/delete/address/:id/v1', userAuthentication, deleteAddress);
 orderRouter.get('/get/address/:id/v1', userAuthentication, getAddress);
 orderRouter.get('/get/address/v1', userAuthentication, getAllAddress);
 orderRouter.get('/get/address/user/list/v1', userAuthentication, getUserAllAddress);

@@ -3,6 +3,7 @@ import { isExist, sendRegisterOtp, sendLoginOtp, registerRetailer, loginRetailer
 import { retailerAuthentication } from "../middlewares/middleware.js";
 import { uploadUserImage } from "../helper/uploadImage.js";
 import { getRetailerNotifications, markRetailerNotificationRead, clearRetailerNotifications } from "../controllers/notificationController.js";
+import { retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetailsV2, orderChangeStatus, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy, retailerDeliveryBoyDashboard } from "../controllers/orderController.js";
 const retailerRouter = express.Router();
 
 // auth
@@ -28,5 +29,17 @@ retailerRouter.post('/retailer/logout/v1', retailerAuthentication, logoutRetaile
 retailerRouter.get('/retailer/notifications/v1', retailerAuthentication, getRetailerNotifications);
 retailerRouter.patch('/retailer/notifications/:id/read/v1', retailerAuthentication, markRetailerNotificationRead);
 retailerRouter.delete('/retailer/notifications/clear/v1', retailerAuthentication, clearRetailerNotifications);
+
+// retailer order routes (mounted at /api, so accessible at /api/retailer/order/...)
+retailerRouter.get('/retailer/pending/order/list/v2', retailerAuthentication, retailerPendingOrderList);
+retailerRouter.get('/retailer/order/history/list/v2', retailerAuthentication, retailerOrderHistoryList);
+retailerRouter.get('/retailer/order/details/:id/v2', retailerAuthentication, retailerOrderDetailsV2);
+retailerRouter.put('/retailer/order/change/status/:id/v1', retailerAuthentication, orderChangeStatus);
+
+// retailer delivery boy management routes
+retailerRouter.get('/retailer/delivery/assigned/list/v1', retailerAuthentication, retailerAssignedDeliveries);
+retailerRouter.get('/retailer/delivery/boys/v1', retailerAuthentication, retailerAvailableDeliveryBoys);
+retailerRouter.get('/retailer/delivery/boys/dashboard/v1', retailerAuthentication, retailerDeliveryBoyDashboard);
+retailerRouter.post('/retailer/delivery/assign/v1', retailerAuthentication, retailerAssignOrderToDeliveryBoy);
 
 export default retailerRouter;

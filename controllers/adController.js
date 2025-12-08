@@ -355,9 +355,9 @@ export const adminListAds = async (req, res) => {
     const { status: statusFilter, sellerId, location, search, includeDeleted } = req.query;
 
     const filter = {};
-    // By default, show deleted ads to admin (for management)
-    // But can filter if needed
-    if (includeDeleted === "false") {
+    // By default, exclude deleted ads from admin list
+    // Only show deleted ads if explicitly requested with includeDeleted=true
+    if (includeDeleted !== "true") {
       filter.deleted = { $ne: true };
     }
     
@@ -483,16 +483,35 @@ export const adminUpdateAdStatus = async (req, res) => {
       ad.amount = Number(req.body.amount);
     }
 
+    // Helper function to set start and end dates
+    const setAdDates = (providedStartDate) => {
+      const start = providedStartDate ? new Date(providedStartDate) : new Date();
+      const end = new Date(start);
+      end.setDate(end.getDate() + (ad.totalRunDays || 1));
+      ad.startDate = start;
+      ad.endDate = end;
+      ad.expiryNotified = false;
+    };
+
     if (newStatus === "rejected") {
       ad.status = "rejected";
       ad.rejectionReason = rejectionReason || "Rejected by admin";
     } else if (newStatus === "approved") {
-      // Only mark as approved – payment pending, show bank details to seller
+      // Mark as approved
       ad.status = "approved";
       ad.approvedBy = adminId;
+      
+      // If payment is already paid or being set to paid, set start/end dates
+      const finalPaymentStatus = paymentStatus || ad.paymentStatus;
+      if (finalPaymentStatus === "paid") {
+        setAdDates(startDate);
+        // If payment is paid, automatically activate the ad
+        ad.status = "active";
+      }
     } else if (newStatus === "active") {
       // Ad should start only after payment is marked paid
-      if (ad.paymentStatus !== "paid" && paymentStatus !== "paid") {
+      const finalPaymentStatus = paymentStatus || ad.paymentStatus;
+      if (finalPaymentStatus !== "paid") {
         return res.status(status.BadRequest).json({
           status: jsonStatus.BadRequest,
           success: false,
@@ -500,17 +519,19 @@ export const adminUpdateAdStatus = async (req, res) => {
         });
       }
 
-      const start = startDate ? new Date(startDate) : new Date();
-      const end = new Date(start);
-      end.setDate(end.getDate() + (ad.totalRunDays || 1));
-
-      ad.startDate = start;
-      ad.endDate = end;
+      setAdDates(startDate);
       ad.status = "active";
       ad.approvedBy = ad.approvedBy || adminId;
-      ad.expiryNotified = false;
     } else if (newStatus) {
       ad.status = newStatus;
+    } else {
+      // If no new status but payment status is being updated to "paid"
+      // and ad is already approved, set dates and activate
+      if (paymentStatus === "paid" && ad.status === "approved") {
+        setAdDates(startDate);
+        ad.status = "active";
+        ad.approvedBy = ad.approvedBy || adminId;
+      }
     }
 
     await ad.save();
@@ -1068,7 +1089,7 @@ export const getActiveAds = async (req, res) => {
     const ads = await Ad.find(filter)
       .populate("sellerId", "name phone")
       .populate("storeId", "name phone images")
-      .populate("productId", "name images price")
+      .populate("productId", "productName primaryImage productImages sellingPrice mrp")
       .sort({ createdAt: -1 })
       .lean();
 
@@ -1078,6 +1099,28 @@ export const getActiveAds = async (req, res) => {
       if (!adsByLocation[ad.location]) {
         adsByLocation[ad.location] = [];
       }
+      
+      // Prepare product images - combine primaryImage and productImages
+      let productImagesArray = [];
+      if (ad.productId) {
+        // Add primaryImage first if exists
+        if (ad.productId.primaryImage) {
+          productImagesArray.push(ad.productId.primaryImage);
+        }
+        // Add other productImages (avoid duplicates)
+        if (Array.isArray(ad.productId.productImages) && ad.productId.productImages.length > 0) {
+          ad.productId.productImages.forEach((img) => {
+            if (img && !productImagesArray.includes(img)) {
+              productImagesArray.push(img);
+            }
+          });
+        }
+        // If no images found, use empty array
+        if (productImagesArray.length === 0) {
+          productImagesArray = [];
+        }
+      }
+      
       adsByLocation[ad.location].push({
         _id: ad._id,
         name: ad.name,
@@ -1094,9 +1137,10 @@ export const getActiveAds = async (req, res) => {
         productId: ad.productId
           ? {
               _id: ad.productId._id,
-              name: ad.productId.name,
-              images: ad.productId.images || [],
-              price: ad.productId.price,
+              name: ad.productId.productName || null,
+              images: productImagesArray,
+              price: ad.productId.sellingPrice || null,
+              mrp: ad.productId.mrp || null,
             }
           : null,
         startDate: ad.startDate,
@@ -1104,11 +1148,43 @@ export const getActiveAds = async (req, res) => {
       });
     });
 
+    // Format main ads array with proper product images
+    const formattedAds = ads.map((ad) => {
+      // Prepare product images - combine primaryImage and productImages
+      let productImagesArray = [];
+      if (ad.productId) {
+        // Add primaryImage first if exists
+        if (ad.productId.primaryImage) {
+          productImagesArray.push(ad.productId.primaryImage);
+        }
+        // Add other productImages (avoid duplicates)
+        if (Array.isArray(ad.productId.productImages) && ad.productId.productImages.length > 0) {
+          ad.productId.productImages.forEach((img) => {
+            if (img && !productImagesArray.includes(img)) {
+              productImagesArray.push(img);
+            }
+          });
+        }
+      }
+      
+      return {
+        ...ad,
+        productId: ad.productId
+          ? {
+              ...ad.productId,
+              name: ad.productId.productName || null,
+              images: productImagesArray,
+              price: ad.productId.sellingPrice || null,
+            }
+          : null,
+      };
+    });
+
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
       data: {
-        ads: ads,
+        ads: formattedAds,
         adsByLocation: adsByLocation,
       },
     });

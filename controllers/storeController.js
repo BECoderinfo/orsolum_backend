@@ -564,11 +564,15 @@ export const editStore = async (req, res) => {
     }
 
     const updateData = { updatedBy: req.user._id };
-    const allowedFields = ["name", "category", "information", "phone", "address", "email"];
+    // Include all fields that can be updated, including Shiprocket required fields
+    const allowedFields = ["name", "category", "information", "phone", "address", "email", "city", "state", "pincode", "pin_code"];
 
     allowedFields.forEach((field) => {
       if (Object.prototype.hasOwnProperty.call(payload, field)) {
-        updateData[field] = payload[field];
+        // Only update if value is not empty (except for address which can be updated to empty)
+        if (field === "address" || (payload[field] && payload[field].toString().trim() !== "")) {
+          updateData[field] = payload[field];
+        }
       }
     });
 
@@ -620,12 +624,172 @@ export const editStore = async (req, res) => {
       });
     }
 
+    // Update store first
     await Store.findByIdAndUpdate(
       id,
       updateData,
       { new: true, runValidators: true }
     );
 
+    // Get updated store data for pickup address creation
+    const updatedStore = await Store.findById(id);
+    // Use payload values first, then fallback to store values
+    const name = payload.name || updatedStore.name;
+    const phone = payload.phone || updatedStore.phone;
+    const address = payload.address || updatedStore.address;
+    const email = payload.email || updatedStore.email;
+
+    // Check if city, state, pincode are provided for pickup address
+    const city = payload.city || updatedStore.shiprocket?.pickup_location?.city;
+    const state = payload.state || updatedStore.shiprocket?.pickup_location?.state;
+    const pincode = payload.pincode || payload.pin_code || updatedStore.shiprocket?.pickup_location?.pincode;
+
+    // If city, state, and pincode are available, create/update pickup address
+    if (city && state && pincode && name && phone && address) {
+      try {
+        // Prepare pickup payload for Shiprocket
+        const pickupPayload = {
+          name: name,
+          phone: phone,
+          email: email || `${phone}@orsolum.com`,
+          address: address,
+          city: city,
+          state: state,
+          pin_code: pincode,
+          country: "India"
+        };
+
+        // Check if pickup address already exists for this store
+        let existingPickupAddress = await PickupAddress.findOne({ 
+          storeId: id,
+          isPrimary: true 
+        });
+
+        let shiprocketPickupId = null;
+        let shiprocketError = null;
+
+        // Try to create/update pickup address in Shiprocket
+        try {
+          const shiprocketService = new ShiprocketService();
+          let shipResponse;
+
+          if (existingPickupAddress?.shiprocket?.pickup_address_id) {
+            // Update existing pickup address in Shiprocket
+            shipResponse = await shiprocketService.updatePickupAddress(
+              existingPickupAddress.shiprocket.pickup_address_id,
+              pickupPayload
+            );
+            shiprocketPickupId = existingPickupAddress.shiprocket.pickup_address_id;
+          } else {
+            // Create new pickup address in Shiprocket
+            shipResponse = await shiprocketService.createPickupAddress(pickupPayload);
+            
+            // Extract Shiprocket ID from response
+            shiprocketPickupId = shipResponse?.data?.pickup_location || 
+                                shipResponse?.data?.id || 
+                                shipResponse?.data?.pickup_address_id ||
+                                shipResponse?.data?.pickup_id ||
+                                shipResponse?.pickup_location || 
+                                shipResponse?.id || null;
+          }
+
+          if (!shiprocketPickupId && !existingPickupAddress?.shiprocket?.pickup_address_id) {
+            shiprocketError = "Shiprocket response missing pickup address ID";
+          }
+        } catch (err) {
+          shiprocketError = err.message || "Shiprocket sync failed";
+          console.warn("⚠️ Shiprocket pickup address sync failed:", shiprocketError);
+        }
+
+        // Create or update PickupAddress document
+        if (existingPickupAddress) {
+          // Update existing pickup address
+          existingPickupAddress.nickname = name;
+          existingPickupAddress.spocDetails = {
+            name: name,
+            phone: phone,
+            email: email || `${phone}@orsolum.com`
+          };
+          existingPickupAddress.shiprocket = {
+            pickup_address_id: shiprocketPickupId || existingPickupAddress.shiprocket?.pickup_address_id,
+            pickup_location: {
+              name: pickupPayload.name,
+              phone: pickupPayload.phone,
+              address: pickupPayload.address,
+              city: pickupPayload.city,
+              state: pickupPayload.state,
+              pincode: pickupPayload.pin_code,
+              country: pickupPayload.country
+            },
+            error: shiprocketError || null
+          };
+          existingPickupAddress.updatedBy = req.user._id;
+          await existingPickupAddress.save();
+        } else {
+          // Create new pickup address
+          const newPickupAddress = new PickupAddress({
+            storeId: id,
+            nickname: name,
+            isPrimary: true,
+            spocDetails: {
+              name: name,
+              phone: phone,
+              email: email || `${phone}@orsolum.com`
+            },
+            shiprocket: {
+              pickup_address_id: shiprocketPickupId,
+              pickup_location: {
+                name: pickupPayload.name,
+                phone: pickupPayload.phone,
+                address: pickupPayload.address,
+                city: pickupPayload.city,
+                state: pickupPayload.state,
+                pincode: pickupPayload.pin_code,
+                country: pickupPayload.country
+              },
+              error: shiprocketError || null
+            },
+            createdBy: req.user._id,
+            updatedBy: req.user._id
+          });
+          existingPickupAddress = await newPickupAddress.save();
+        }
+
+        // Update store with pickup address reference
+        const finalShiprocketId = shiprocketPickupId || existingPickupAddress.shiprocket?.pickup_address_id;
+        
+        await Store.findByIdAndUpdate(
+          id,
+          {
+            $set: {
+              'shiprocket.pickup_address_id': finalShiprocketId,
+              'shiprocket.pickup_location': {
+                name: pickupPayload.name,
+                phone: pickupPayload.phone,
+                email: pickupPayload.email,
+                address: pickupPayload.address,
+                city: pickupPayload.city,
+                state: pickupPayload.state,
+                pincode: pickupPayload.pin_code,
+                country: pickupPayload.country
+              },
+              'shiprocket.default_pickup_address': existingPickupAddress._id
+            },
+            $addToSet: {
+              'shiprocket.pickup_addresses': existingPickupAddress._id
+            }
+          },
+          { new: true, runValidators: true }
+        );
+
+        console.log("✅ Pickup address created/updated for store:", id);
+      } catch (pickupErr) {
+        console.error("❌ Error creating/updating pickup address:", pickupErr);
+        // Continue even if pickup address creation fails
+      }
+    }
+
+    // Fetch store details with populated data
     const storeDetails = await Store.aggregate([
       { $match: { _id: new ObjectId(id) } },
       {
@@ -645,10 +809,37 @@ export const editStore = async (req, res) => {
       },
     ]);
 
+    // Enrich store details with pickup address data (similar to storeDetails function)
+    const enrichedStore = storeDetails[0];
+    if (enrichedStore) {
+      const shiprocketInfo = enrichedStore.shiprocket || {};
+      const pickupIds = shiprocketInfo.pickup_addresses || [];
+
+      let pickupAddresses = [];
+      if (pickupIds.length) {
+        pickupAddresses = await PickupAddress.find({ _id: { $in: pickupIds } })
+          .select("-__v")
+          .lean();
+      }
+
+      const defaultPickupId = shiprocketInfo.default_pickup_address?.toString() || null;
+      const defaultPickup = defaultPickupId
+        ? pickupAddresses.find((addr) => addr._id.toString() === defaultPickupId)
+        : null;
+
+      enrichedStore.shiprocket = {
+        ...shiprocketInfo,
+        pickup_addresses_ids: pickupIds,
+        pickup_addresses_data: pickupAddresses,
+        default_pickup_address_id: defaultPickupId,
+        default_pickup_address_data: defaultPickup || null
+      };
+    }
+
     res.status(200).json({
       success: true,
       message: "Store updated successfully",
-      data: applyCoverImageFallback(storeDetails[0]),
+      data: applyCoverImageFallback(enrichedStore),
     });
   } catch (error) {
     console.error("Error editing store:", error);

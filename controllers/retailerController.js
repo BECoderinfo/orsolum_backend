@@ -251,33 +251,69 @@ export const sendRegisterOtp = async (req, res) => {
         const { phone } = req.body;
 
         if (!phone) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter phone number` });
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: `Please enter phone number` 
+            });
         }
 
         const userRecord = await User.findOne({ phone });
         if (userRecord) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `${userRecord.role === 'user' ? 'User account' : 'Retailer account'} Already exists with ${phone} mobile number.` });
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: `${userRecord.role === 'user' ? 'User account' : 'Retailer account'} Already exists with ${phone} mobile number.` 
+            });
         }
 
-        // generate OTP login
-        const otp = OTP_GENERATOR.generate(6, { upperCaseAlphabets: false, specialChars: false, lowerCaseAlphabets: false, digits: true })
-        // send OTP using msg91
-        await sendSms(phone.replace('+', ''), { var1: req.body.name || 'User', var2: otp });
+        // Generate OTP
+        const otp = OTP_GENERATOR.generate(6, { 
+            upperCaseAlphabets: false, 
+            specialChars: false, 
+            lowerCaseAlphabets: false, 
+            digits: true 
+        });
 
-        // const otp = '123456';
+        // Save OTP first (don't wait for SMS to complete)
         const otpExpires = new Date(Date.now() + 5 * 60 * 1000); // OTP expires in 5 mins
-
         const otpRecord = new OtpModel({
             phone,
             otp,
             expiresAt: otpExpires,
         });
-
         await otpRecord.save();
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: `OTP has been sent to ${phone}` });
+        // Send SMS in background (non-blocking) - don't await, just fire and forget
+        // This ensures response is sent immediately even if SMS service is slow
+        sendSms(phone.replace('+', ''), { var1: req.body.name || 'User', var2: otp })
+            .then((smsSent) => {
+                if (smsSent) {
+                    console.log(`SMS sent successfully to ${phone}`);
+                } else {
+                    console.log(`SMS failed for ${phone}, but OTP is saved`);
+                }
+            })
+            .catch((smsError) => {
+                console.error(`SMS error for ${phone}:`, smsError.message);
+                // OTP is already saved, so user can still use it
+            });
+
+        // Send response immediately without waiting for SMS
+        res.status(status.OK).json({ 
+            status: jsonStatus.OK, 
+            success: true, 
+            message: `OTP has been sent to ${phone}`,
+            // For development/testing, you can include OTP in response (remove in production)
+            // otp: process.env.NODE_ENV === 'development' ? otp : undefined
+        });
     } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        console.error("sendRegisterOtp Error:", error);
+        res.status(status.InternalServerError).json({ 
+            status: jsonStatus.InternalServerError, 
+            success: false, 
+            message: error.message 
+        });
         return catchError('sendRegisterOtp', error, req, res);
     }
 };
@@ -287,39 +323,77 @@ export const sendLoginOtp = async (req, res) => {
         const { phone } = req.body;
 
         if (!phone) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter phone number` });
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: `Please enter phone number` 
+            });
         }
 
         const userRecord = await User.findOne({ phone });
         if (!userRecord) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Mobile number is not exist" });
+            return res.status(status.NotFound).json({ 
+                status: jsonStatus.NotFound, 
+                success: false, 
+                message: "Mobile number is not exist" 
+            });
         }
 
         if (userRecord.role !== 'retailer') {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `${userRecord.role === 'user' ? 'User account' : 'Retailer account'} Already exists with ${phone} mobile number.` });
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: `${userRecord.role === 'user' ? 'User account' : 'Retailer account'} Already exists with ${phone} mobile number.` 
+            });
         }
 
         await OtpModel.deleteMany({ phone });
 
-        // generate OTP login
-        const otp = OTP_GENERATOR.generate(6, { upperCaseAlphabets: false, specialChars: false, lowerCaseAlphabets: false, digits: true });
-        // send OTP using msg91
-        await sendSms(phone.replace('+', ''), { var1: userRecord.name || 'User', var2: otp });
+        // Generate OTP
+        const otp = OTP_GENERATOR.generate(6, { 
+            upperCaseAlphabets: false, 
+            specialChars: false, 
+            lowerCaseAlphabets: false, 
+            digits: true 
+        });
 
-        // const otp = '123456';
+        // Save OTP first (don't wait for SMS to complete)
         const otpExpires = new Date(Date.now() + 5 * 60 * 1000); // OTP expires in 5 mins
-
         const otpRecord = new OtpModel({
             phone,
             otp,
             expiresAt: otpExpires,
         });
-
         await otpRecord.save();
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: `OTP has been sent to ${phone}` });
+        // Send SMS in background (non-blocking) - don't await, just fire and forget
+        // This ensures response is sent immediately even if SMS service is slow
+        sendSms(phone.replace('+', ''), { var1: userRecord.name || 'User', var2: otp })
+            .then((smsSent) => {
+                if (smsSent) {
+                    console.log(`SMS sent successfully to ${phone}`);
+                } else {
+                    console.log(`SMS failed for ${phone}, but OTP is saved`);
+                }
+            })
+            .catch((smsError) => {
+                console.error(`SMS error for ${phone}:`, smsError.message);
+                // OTP is already saved, so user can still use it
+            });
+
+        // Send response immediately without waiting for SMS
+        res.status(status.OK).json({ 
+            status: jsonStatus.OK, 
+            success: true, 
+            message: `OTP has been sent to ${phone}` 
+        });
     } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        console.error("sendLoginOtp Error:", error);
+        res.status(status.InternalServerError).json({ 
+            status: jsonStatus.InternalServerError, 
+            success: false, 
+            message: error.message 
+        });
         return catchError('sendLoginOtp', error, req, res);
     }
 };

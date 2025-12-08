@@ -2395,25 +2395,36 @@ export const sendDeliveryBoyRegisterOtp = async (req, res) => {
             digits: true
         });
 
-        await sendSms(phone.replace("+", ""), { var1: name || "DeliveryBoy", var2: otp });
-
-        // Set expiry to 1 minute
+        // Save OTP first (don't wait for SMS to complete)
         const otpExpires = new Date(Date.now() + 1 * 60 * 1000);
-
         const otpRecord = new OtpModel({
             phone,
             otp,
             expiresAt: otpExpires
         });
-
         await otpRecord.save();
 
+        // Send SMS in background (non-blocking) - don't await, just fire and forget
+        sendSms(phone.replace("+", ""), { var1: name || "DeliveryBoy", var2: otp })
+            .then((smsSent) => {
+                if (smsSent) {
+                    console.log(`SMS sent successfully to ${phone}`);
+                } else {
+                    console.log(`SMS failed for ${phone}, but OTP is saved`);
+                }
+            })
+            .catch((smsError) => {
+                console.error(`SMS error for ${phone}:`, smsError.message);
+            });
+
+        // Send response immediately without waiting for SMS
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
             message: `OTP has been sent to ${phone}`
         });
     } catch (error) {
+        console.error("sendDeliveryBoyRegisterOtp Error:", error);
         res.status(status.InternalServerError).json({
             status: jsonStatus.InternalServerError,
             success: false,
@@ -2471,18 +2482,29 @@ export const sendDeliveryBoyLoginOtp = async (req, res) => {
 
         console.log("Generated OTP for", phone, "is:", otp);
 
-        await sendSms(phone.replace('+', ''), { var1: deliveryBoy.firstName || 'User', var2: otp });
-
+        // Save OTP first (don't wait for SMS to complete)
         const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
-
         const otpRecord = new OtpModel({
             phone,
             otp,
             expiresAt: otpExpires
         });
-
         await otpRecord.save();
 
+        // Send SMS in background (non-blocking) - don't await, just fire and forget
+        sendSms(phone.replace('+', ''), { var1: deliveryBoy.firstName || 'User', var2: otp })
+            .then((smsSent) => {
+                if (smsSent) {
+                    console.log(`SMS sent successfully to ${phone}`);
+                } else {
+                    console.log(`SMS failed for ${phone}, but OTP is saved`);
+                }
+            })
+            .catch((smsError) => {
+                console.error(`SMS error for ${phone}:`, smsError.message);
+            });
+
+        // Send response immediately without waiting for SMS
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
