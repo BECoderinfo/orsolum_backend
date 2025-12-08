@@ -231,6 +231,70 @@ export const adminAuthentication = async (req, res, next) => {
   }
 };
 
+/* ------------------------- SUPERADMIN AUTHENTICATION -------------------- */
+export const superadminAuthentication = async (req, res, next) => {
+  try {
+    const token = extractToken(req);
+    if (!token) {
+      return res.status(status.Unauthorized).json({
+        status: jsonStatus.Unauthorized,
+        success: false,
+        message: "No Token. Authorization Denied",
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (jwtError) {
+      // Provide specific error messages for token issues
+      if (jwtError.name === "TokenExpiredError") {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Token expired",
+        });
+      }
+      if (jwtError.name === "JsonWebTokenError") {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Invalid token",
+        });
+      }
+      return res.status(status.Unauthorized).json({
+        status: jsonStatus.Unauthorized,
+        success: false,
+        message: "Invalid or expired token",
+      });
+    }
+
+    const admin = await Admin.findById(decoded._id);
+    if (!admin) {
+      return res.status(status.Unauthorized).json({
+        status: jsonStatus.Unauthorized,
+        success: false,
+        message: "Authorization Denied",
+      });
+    }
+
+    // Check if admin has superadmin role
+    if (admin.role !== "superadmin") {
+      return res.status(status.Forbidden).json({
+        status: jsonStatus.Forbidden,
+        success: false,
+        message: "Access Denied. Superadmin privileges required.",
+      });
+    }
+
+    req.user = admin;
+    next();
+  } catch (error) {
+    catchError("superadminAuthentication", error, req, res);
+  }
+};
+
+
 /* ------------------------- DELIVERY BOY AUTHENTICATION -------------------- */
 export const deliveryBoyAuthentication = async (req, res, next) => {
   try {

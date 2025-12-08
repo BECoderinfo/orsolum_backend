@@ -28,23 +28,150 @@ import { processGoogleMapsLink } from '../helper/latAndLong.js';
 
 const { ObjectId } = mongoose.Types;
 
-export const createAdmin = async (req, res) => {
-    try {
-        const { email, password } = req.body;
-
-        if (!email || !password) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter Credentials` });
-        }
-
-        let newAdmin = new Admin({ email, password });
-        newAdmin = await newAdmin.save();
-
-        res.status(status.Create).json({ status: jsonStatus.Create, success: true, message: "Admin created successfully" });
-    } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
-        return catchError('createAdmin', error, req, res);
+export const validatePassword = (password) => {
+    let errors = [];
+  
+    if (!password) errors.push("Password is required");
+    if (password.length < 6) errors.push("Minimum 6 characters");
+    if (!/[A-Z]/.test(password)) errors.push("At least one uppercase letter");
+    if (!/[0-9]/.test(password)) errors.push("At least one number");
+  
+    if (errors.length > 0) {
+      return errors.join(", ");
     }
-};
+  
+    return null;
+  };
+  
+  
+  export const createAdmin = async (req, res) => {
+    try {
+      const { email, password } = req.body;
+  
+      if (!email || !password) {
+        return res.status(400).json({
+          success: false,
+          field: "password",
+          message: "Please enter email & password",
+        });
+      }
+  
+      const exists = await Admin.findOne({ email });
+      if (exists) {
+        return res.status(409).json({
+          success: false,
+          field: "email",
+          message: "Admin already exists with this email",
+        });
+      }
+  
+      const errorMessage = validatePassword(password);
+      if (errorMessage) {
+        return res.status(400).json({
+          success: false,
+          field: "password",
+          message: errorMessage,
+        });
+      }
+  
+      await Admin.create({ email, password, role: "admin" });
+  
+      return res.status(201).json({
+        success: true,
+        message: "Admin created successfully",
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  };
+  
+  
+  export const listAdmins = async (req, res) => {
+    try {
+      const admins = await Admin.find({ role: "admin" }).select("-password");
+  
+      return res.status(200).json({
+        success: true,
+        message: "Admins fetched successfully",
+        data: admins,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch admins",
+        error: error.message,
+      });
+    }
+  };
+  
+  
+  export const deleteAdmin = async (req, res) => {
+    try {
+      const adminId = req.params.id;
+  
+      const admin = await Admin.findById(adminId);
+      if (!admin) {
+        return res.status(404).json({
+          success: false,
+          message: "Admin not found",
+        });
+      }
+  
+      await Admin.findByIdAndDelete(adminId);
+  
+      return res.status(200).json({
+        success: true,
+        message: "Admin deleted successfully",
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to delete admin",
+        error: error.message,
+      });
+    }
+  };
+  
+  
+  
+  export const updateAdminPassword = async (req, res) => {
+    try {
+      const { password } = req.body;
+  
+      const errorMessage = validatePassword(password);
+      if (errorMessage) {
+        return res.status(400).json({
+          success: false,
+          field: "password",
+          message: errorMessage,
+        });
+      }
+  
+      const admin = await Admin.findById(req.params.id);
+      if (!admin) {
+        return res.status(404).json({
+          success: false,
+          message: "Admin not found",
+        });
+      }
+  
+      admin.password = password;
+      await admin.save();
+  
+      return res.status(200).json({
+        success: true,
+        message: "Password updated successfully",
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  };
 
 export const loginAdmin = async (req, res) => {
     try {
@@ -556,21 +683,15 @@ export const deleteStore = async (req, res) => {
         const pickupAddresses = await PickupAddress.find({ storeId: id }).lean();
 
         const session = await mongoose.startSession();
-        session.startTransaction();
         try {
-            await Promise.all([
-                Product.deleteMany({ storeId: id }).session(session),
-                StoreOffer.deleteMany({ storeId: id }).session(session),
-                StorePopularProduct.deleteMany({ storeId: id }).session(session),
-                Cart.deleteMany({ storeId: id }).session(session),
-                PickupAddress.deleteMany({ storeId: id }).session(session),
-                Store.deleteOne({ _id: id }).session(session),
-            ]);
-
-            await session.commitTransaction();
-        } catch (err) {
-            await session.abortTransaction();
-            throw err;
+            await session.withTransaction(async () => {
+                await Product.deleteMany({ storeId: id }).session(session);
+                await StoreOffer.deleteMany({ storeId: id }).session(session);
+                await StorePopularProduct.deleteMany({ storeId: id }).session(session);
+                await Cart.deleteMany({ storeId: id }).session(session);
+                await PickupAddress.deleteMany({ storeId: id }).session(session);
+                await Store.deleteOne({ _id: id }).session(session);
+            });
         } finally {
             session.endSession();
         }

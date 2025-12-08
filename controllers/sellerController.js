@@ -17,14 +17,39 @@ import mongoose from 'mongoose';
 // ---------------- Send OTP for Seller Registration ----------------
 export const sendRegisterOtp = async (req, res) => {
   try {
-    const { phone } = req.body;
+    const { phone, email } = req.body;
 
     if (!phone) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
-        message: `Please enter phone number`
+        message: `Please enter phone number`,
       });
+    }
+
+    // 🔐 Block duplicate seller with same phone
+    const existingSellerPhone = await User.findOne({ phone, role: "seller" });
+    if (existingSellerPhone) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: `A seller account already exists with phone ${phone}`,
+      });
+    }
+
+    // 🔐 Block duplicate seller with same email (if email provided)
+    if (email) {
+      const existingSellerEmail = await User.findOne({
+        email: email.toLowerCase(),
+        role: "seller",
+      });
+      if (existingSellerEmail) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: `A seller account already exists with email ${email}`,
+        });
+      }
     }
 
     const userRecord = await User.findOne({ phone });
@@ -32,7 +57,7 @@ export const sendRegisterOtp = async (req, res) => {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
-        message: `Account already exists with ${phone} mobile number.`
+        message: `Account already exists with ${phone} mobile number.`,
       });
     }
 
@@ -40,19 +65,20 @@ export const sendRegisterOtp = async (req, res) => {
       upperCaseAlphabets: false,
       specialChars: false,
       lowerCaseAlphabets: false,
-      digits: true
+      digits: true,
     });
 
-    const smsSent = await sendSms(phone.replace('+', ''), {
-      var1: req.body.name || 'Seller',
-      var2: otp
+    const smsSent = await sendSms(phone.replace("+", ""), {
+      var1: req.body.name || "Seller",
+      var2: otp,
     });
 
     if (!smsSent) {
       return res.status(status.InternalServerError).json({
         status: jsonStatus.InternalServerError,
         success: false,
-        message: "Failed to send OTP. Please contact support or try again later.",
+        message:
+          "Failed to send OTP. Please contact support or try again later.",
       });
     }
 
@@ -64,7 +90,7 @@ export const sendRegisterOtp = async (req, res) => {
     res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
-      message: `OTP has been sent to ${phone}`
+      message: `OTP has been sent to ${phone}`,
     });
   } catch (error) {
     res.status(status.InternalServerError).json({
@@ -283,76 +309,157 @@ export const getSellerProfile = async (req, res) => {
 // ---------------- Seller Login ----------------
 export const loginSeller = async (req, res) => {
   try {
-    const { phone, password } = req.body;
+    const { email, password } = req.body;
 
-    if (!phone || !password) {
+    if (!email || !password) {
       return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
         success: false,
-        message: `Please enter phone and password`
+        message: "Email and password are required",
       });
     }
 
-    const seller = await User.findOne({ phone, role: 'seller' });
+    const seller = await User.findOne({
+      email: email.toLowerCase(),
+      role: "seller",
+    });
     if (!seller) {
       return res.status(status.NotFound).json({
-        status: jsonStatus.NotFound,
         success: false,
-        message: "Seller not found with this phone number"
+        message: "Seller not found with this email",
       });
     }
 
-    if (seller.deleted) {
-      return res.status(status.Forbidden).json({
-        status: jsonStatus.Forbidden,
-        success: false,
-        message: "Your account was deleted!"
-      });
-    }
-
+    // if (seller.deleted) {
+    //   return res.status(status.Forbidden).json({
+    //     success: false,
+    //     message: "Your account was deleted!",
+    //   });
+    // }
+   if (seller.deleted) {
+     return res.status(status.Forbidden).json({
+       success: false,
+       message: "Your account was deleted!",
+     });
+   }
     if (!seller.active) {
       return res.status(status.Unauthorized).json({
-        status: jsonStatus.Unauthorized,
         success: false,
-        message: "Your account is inactive! Please contact admin"
+        message: "Your account is inactive! Contact admin.",
       });
     }
+
+
 
     if (!seller.password) {
       return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
         success: false,
-        message: "Password not set. Please complete your profile setup."
+        message: "Password not set. Please complete your profile setup.",
       });
     }
+
 
     const isMatch = await bcrypt.compare(password, seller.password);
     if (!isMatch) {
       return res.status(status.Unauthorized).json({
-        status: jsonStatus.Unauthorized,
         success: false,
-        message: "Invalid password"
+        message: "Invalid password",
       });
     }
 
-    const token = generateToken(seller._id);
 
+        const store = await Store.findOne({ createdBy: seller._id }).lean();
+
+        let onboardingInfo = {
+          hasStore: false,
+          onboardingCompleted: false,
+          storeStatus: null, // "P" | "A" | "R" | null
+        };
+
+        if (store) {
+          onboardingInfo = {
+            hasStore: true,
+            onboardingCompleted: !!store.onboardingCompleted,
+            storeStatus: store.status || "P",
+          };
+        }
+
+
+
+    const token = generateToken(seller._id);
     const sellerData = seller.toObject();
     delete sellerData.password;
 
     res.status(status.OK).json({
-      status: jsonStatus.OK,
       success: true,
       data: sellerData,
-      token
+      token,
+      onboarding: onboardingInfo,
     });
   } catch (error) {
     res.status(status.InternalServerError).json({
-      status: jsonStatus.InternalServerError,
       success: false,
-      message: error.message
+      message: error.message,
     });
-    return catchError('loginSeller', error, req, res);
+  }
+};
+
+
+export const checkSellerStatus = async (req, res) => {
+  try {
+    const seller = await User.findById(req.user._id);
+
+    const store = await Store.findOne({ createdBy: seller._id });
+
+    let onboarding = {
+      hasStore: !!store,
+      onboardingCompleted: store?.onboardingCompleted || false,
+      storeStatus: store?.status || null,
+    };
+
+    return res.json({
+      success: true,
+      onboarding,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const updateStoreInfo = async (req, res) => {
+  try {
+    const store = await Store.findOne({ createdBy: req.user._id });
+    if (!store) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Store not found" });
+    }
+
+    const { name, category, information, phone, address, email, directMe } =
+      req.body;
+
+    if (req.files?.length > 0) {
+      store.images = req.files.map((f) => f.key);
+      store.coverImage = store.images[0];
+    }
+
+    store.name = name || store.name;
+    store.category = category || store.category;
+    store.information = information || store.information;
+    store.phone = phone || store.phone;
+    store.address = address || store.address;
+    store.email = email || store.email;
+    store.directMe = directMe || store.directMe;
+    store.updatedBy = req.user._id;
+
+    await store.save();
+
+    return res.json({
+      success: true,
+      message: "Store updated successfully",
+      data: store,
+    });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: e.message });
   }
 };
 
@@ -478,7 +585,6 @@ export const verifySellerPassword = async (req, res) => {
     return catchError("verifySellerPassword", error, req, res);
   }
 };
-
 // ==================== SELLER DASHBOARD API ====================
 export const getSellerDashboard = async (req, res) => {
   try {

@@ -1,7 +1,7 @@
 import express from "express";
 import { sellerAuthentication } from "../middlewares/middleware.js";
 import { uploadStoreImagesMulter, uploadUserImage } from "../helper/uploadImage.js";
-import { createSellerStore, updateStoreObjectives, updateStoreLicense, getSellerStoreDetails } from "../controllers/sellerStoreController.js";
+import { createSellerStore, updateStoreObjectives, updateStoreLicense, getSellerStoreDetails, updateSellerStore } from "../controllers/sellerStoreController.js";
 import { listOfCategories } from "../controllers/storeController.js";
 import { 
   sendRegisterOtp,
@@ -14,6 +14,8 @@ import {
   getSellerDashboard,
   getSellerOrderList,
   getSellerOrderDetails,
+  checkSellerStatus,
+  updateStoreInfo,
 } from "../controllers/sellerController.js";
 import { getSellerNotifications, markSellerNotificationRead, clearSellerNotifications } from "../controllers/notificationController.js";
 import { orderChangeStatus } from "../controllers/orderController.js";
@@ -51,6 +53,28 @@ sellerRouter.post(
   sellerAuthentication,
   uploadStoreImagesMulter.array("images", 10),
   createSellerStore
+);
+
+//seller store updation
+
+sellerRouter.put(
+  "/seller/update/store/v1",
+  sellerAuthentication,
+  uploadStoreImagesMulter.array("images", 10),
+  updateSellerStore
+);
+
+sellerRouter.post(
+  "/seller/login/v1/check",
+  sellerAuthentication,
+  checkSellerStatus
+);
+
+sellerRouter.put(
+  "/seller/store/update/info/v1",
+  sellerAuthentication,
+  uploadStoreImagesMulter.array("images", 10),
+  updateStoreInfo
 );
 
 // 📋 Seller store categories

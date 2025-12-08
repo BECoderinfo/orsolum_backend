@@ -80,6 +80,21 @@ export const createSlotBooking = async (req, res) => {
       createdBy: req.user._id,
       storeId,
       productId,
+      // store/product snapshots keep API responses populated even if refs go missing
+      storeDetails: {
+        _id: store._id,
+        name: store.name,
+        phone: store.phone,
+        address: store.address,
+        email: store.email
+      },
+      productDetails: {
+        _id: product._id,
+        productName: product.productName,
+        primaryImage: product.primaryImage,
+        sellingPrice: product.sellingPrice,
+        mrp: product.mrp
+      },
       userName: req.user.name || "User",
       userPhone: req.user.phone,
       userEmail: req.user.email,
@@ -126,10 +141,17 @@ export const getSellerInquiries = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
+    // Ensure product/store data is always present for seller view
+    const normalizedInquiries = inquiries.map((inquiry) => ({
+      ...inquiry,
+      storeId: inquiry.storeId || inquiry.storeDetails || null,
+      productId: inquiry.productId || inquiry.productDetails || null
+    }));
+
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
-      data: inquiries
+      data: normalizedInquiries
     });
   } catch (error) {
     console.error("❌ Error fetching seller inquiries:", error);
@@ -293,10 +315,17 @@ export const getUserSlotBookings = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
+    // Fill null store/product fields with stored snapshots for consistent UI
+    const normalizedBookings = bookings.map((booking) => ({
+      ...booking,
+      storeId: booking.storeId || booking.storeDetails || null,
+      productId: booking.productId || booking.productDetails || null
+    }));
+
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
-      data: bookings
+      data: normalizedBookings
     });
   } catch (error) {
     console.error("❌ Error fetching user slot bookings:", error);

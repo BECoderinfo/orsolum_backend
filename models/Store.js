@@ -96,7 +96,11 @@ const StoreSchema = new mongoose.Schema({
     ratingCount: {
         type: Number,
         default: 0
-    }
+    },
+    onboardingCompleted: {
+        type: Boolean,
+        default: false,
+      },
 
 
 }, { timestamps: true });

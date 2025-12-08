@@ -32,6 +32,7 @@ import sellerRouter from "./routes/sellerRouter.js";
 import pickupAddressRouter from "./routes/pickupAddressRouter.js";
 import { webhookTracking } from "./controllers/shiprocketController.js";
 import { renderSharedProfilePage } from "./controllers/userController.js";
+import superadminRouter from "./routes/superadminRouter.js";
 
 dotEnv.config({ path: './.env' });
 const enableChatSockets = process.env.ENABLE_CHAT_SOCKETS !== "false";
@@ -114,6 +115,7 @@ app.use('/api', retailerRoute);
 console.log('✅ Retailer routes mounted at /api');
 app.use('/api', storeRouter);
 app.use('/api', adminRouter);
+app.use('/api', superadminRouter);
 app.use('/api', productRouter);
  app.use('/api/order', orderRouter); // Keep at /api/order for cart and user order routes
 app.use('/api', onlineStoreRouter);

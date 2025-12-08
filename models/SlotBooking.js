@@ -17,6 +17,22 @@ const SlotBookingSchema = new mongoose.Schema({
         ref: 'product',
         required: true
     },
+    // Snapshot of store details to keep response populated even if refs change
+    storeDetails: {
+        _id: ObjectId,
+        name: String,
+        phone: String,
+        address: String,
+        email: String
+    },
+    // Snapshot of product details to avoid nulls in responses
+    productDetails: {
+        _id: ObjectId,
+        productName: String,
+        primaryImage: String,
+        sellingPrice: Number,
+        mrp: Number
+    },
     userName: {
         type: String,
         required: true

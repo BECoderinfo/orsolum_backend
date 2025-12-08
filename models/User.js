@@ -81,7 +81,16 @@ const UserSchema = new mongoose.Schema({
     },
     cardNumber: {
         type: Number
-    }
+    },
+    profileCompleted: {
+        type: Boolean,
+        default: false,
+    },
+    storeStatus: {
+        type: String,
+        enum: ["draft", "pending", "approved", "rejected"],
+        default: "draft",
+    },
 }, { timestamps: true });
 
 // Hash password before saving (only for sellers)
