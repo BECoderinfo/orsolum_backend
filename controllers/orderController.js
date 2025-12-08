@@ -1511,19 +1511,7 @@ export const deleteAddress = async (req, res) => {
   try {
     const { id } = req.params;
 
-    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Invalid address id",
-      });
-    }
-
-    const address = await Address.findOneAndDelete({
-      _id: id,
-      createdBy: req.user._id,
-    });
-
+    const address = await Address.findOne({ _id: id, createdBy: req.user._id });
     if (!address) {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
@@ -1532,14 +1520,12 @@ export const deleteAddress = async (req, res) => {
       });
     }
 
-    // Fetch remaining addresses for immediate UI refresh
-    const remaining = await Address.find({ createdBy: req.user._id }).lean();
+    await Address.findByIdAndDelete(id);
 
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
       message: "Address deleted successfully",
-      data: remaining,
     });
   } catch (error) {
     res.status(status.InternalServerError).json({
