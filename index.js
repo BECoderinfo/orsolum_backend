@@ -38,13 +38,19 @@ const enableChatSockets = process.env.ENABLE_CHAT_SOCKETS !== "false";
 
 const app = express();
 
+// When behind a reverse proxy (e.g., Nginx/ALB) make sure the real client IP
+// is used by downstream middlewares such as rate-limiter.
+app.set("trust proxy", 1);
+
 // ✅ Global Middlewares
 app.use(cors({ origin: '*' }));
 app.use(helmet());
 
 const limit = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 100,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 1000,              // allow more requests per client to avoid false 429s
+  standardHeaders: true,
+  legacyHeaders: false,
   message: "Too many requests! Please try again later",
 });
 app.use(limit);

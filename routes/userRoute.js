@@ -1,6 +1,7 @@
 import express from "express";
 import { body } from 'express-validator';
 import { uploadProfileImage, loginUser, registerUser, sendLoginOtp, sendRegisterOtp, getMyProfile, updateMyProfile, deleteMyAccount, purchasePremium, reActivateMyAccount, logoutUser, shareMyProfile } from "../controllers/userController.js";
+import { createAddress, editAddress, deleteAddress, getAddress, getAllAddress, getUserAllAddress } from "../controllers/orderController.js";
 import { userAuthentication } from "../middlewares/middleware.js";
 import { uploadUserImage } from "../helper/uploadImage.js";
 import { getUserNotifications, markUserNotificationRead, clearUserNotifications } from "../controllers/notificationController.js";
@@ -37,5 +38,13 @@ userRouter.post('/purchase/premium/v1', userAuthentication, purchasePremium);
 userRouter.get('/user/notifications/v1', userAuthentication, getUserNotifications);
 userRouter.patch('/user/notifications/:id/read/v1', userAuthentication, markUserNotificationRead);
 userRouter.delete('/user/notifications/clear/v1', userAuthentication, clearUserNotifications);
+
+// address aliases (without /order prefix for clients hitting /api/...)
+userRouter.post('/create/address/v1', userAuthentication, createAddress);
+userRouter.put('/edit/address/:id/v1', userAuthentication, editAddress);
+userRouter.delete('/delete/address/:id/v1', userAuthentication, deleteAddress);
+userRouter.get('/get/address/:id/v1', userAuthentication, getAddress);
+userRouter.get('/get/address/v1', userAuthentication, getAllAddress);
+userRouter.get('/get/address/user/list/v1', userAuthentication, getUserAllAddress);
 
 export default userRouter;

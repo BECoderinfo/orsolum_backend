@@ -1086,70 +1086,66 @@ export const getActiveAds = async (req, res) => {
       filter.location = location;
     }
 
-    const ads = await Ad.find(filter)
-      .populate("sellerId", "name phone")
-      .populate("storeId", "name phone images")
-      .populate("productId", "productName primaryImage productImages sellingPrice mrp")
-      .sort({ createdAt: -1 })
-      .lean();
+  const ads = await Ad.find(filter)
+    .populate("sellerId", "name phone")
+    .populate("storeId", "name phone images")
+    .populate("productId", "productName primaryImage productImages sellingPrice mrp")
+    // Prefer the most recently scheduled ads; we'll keep only one per slot
+    .sort({ startDate: -1 })
+    .lean();
 
-    // Group ads by location for easier consumption
-    const adsByLocation = {};
-    ads.forEach((ad) => {
-      if (!adsByLocation[ad.location]) {
-        adsByLocation[ad.location] = [];
+  // Group ads by location, keeping only one ad per location (first from sorted list)
+  const adsByLocation = {};
+  ads.forEach((ad) => {
+    if (adsByLocation[ad.location]) return;
+    
+    // Prepare product images - combine primaryImage and productImages
+    let productImagesArray = [];
+    if (ad.productId) {
+      if (ad.productId.primaryImage) {
+        productImagesArray.push(ad.productId.primaryImage);
       }
-      
-      // Prepare product images - combine primaryImage and productImages
-      let productImagesArray = [];
-      if (ad.productId) {
-        // Add primaryImage first if exists
-        if (ad.productId.primaryImage) {
-          productImagesArray.push(ad.productId.primaryImage);
-        }
-        // Add other productImages (avoid duplicates)
-        if (Array.isArray(ad.productId.productImages) && ad.productId.productImages.length > 0) {
-          ad.productId.productImages.forEach((img) => {
-            if (img && !productImagesArray.includes(img)) {
-              productImagesArray.push(img);
-            }
-          });
-        }
-        // If no images found, use empty array
-        if (productImagesArray.length === 0) {
-          productImagesArray = [];
-        }
+      if (Array.isArray(ad.productId.productImages) && ad.productId.productImages.length > 0) {
+        ad.productId.productImages.forEach((img) => {
+          if (img && !productImagesArray.includes(img)) {
+            productImagesArray.push(img);
+          }
+        });
       }
-      
-      adsByLocation[ad.location].push({
-        _id: ad._id,
-        name: ad.name,
-        description: ad.description,
-        images: ad.images || [],
-        location: ad.location,
-        storeId: ad.storeId
-          ? {
-              _id: ad.storeId._id,
-              name: ad.storeId.name,
-              images: ad.storeId.images || [],
-            }
-          : null,
-        productId: ad.productId
-          ? {
-              _id: ad.productId._id,
-              name: ad.productId.productName || null,
-              images: productImagesArray,
-              price: ad.productId.sellingPrice || null,
-              mrp: ad.productId.mrp || null,
-            }
-          : null,
-        startDate: ad.startDate,
-        endDate: ad.endDate,
-      });
-    });
+      if (productImagesArray.length === 0) {
+        productImagesArray = [];
+      }
+    }
+    
+    adsByLocation[ad.location] = {
+      _id: ad._id,
+      name: ad.name,
+      description: ad.description,
+      images: ad.images || [],
+      location: ad.location,
+      storeId: ad.storeId
+        ? {
+            _id: ad.storeId._id,
+            name: ad.storeId.name,
+            images: ad.storeId.images || [],
+          }
+        : null,
+      productId: ad.productId
+        ? {
+            _id: ad.productId._id,
+            name: ad.productId.productName || null,
+            images: productImagesArray,
+            price: ad.productId.sellingPrice || null,
+            mrp: ad.productId.mrp || null,
+          }
+        : null,
+      startDate: ad.startDate,
+      endDate: ad.endDate,
+    };
+  });
 
     // Format main ads array with proper product images
-    const formattedAds = ads.map((ad) => {
+  const formattedAds = Object.values(adsByLocation).map((ad) => {
       // Prepare product images - combine primaryImage and productImages
       let productImagesArray = [];
       if (ad.productId) {

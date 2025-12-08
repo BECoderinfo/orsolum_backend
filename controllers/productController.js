@@ -1235,6 +1235,38 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     $limit: 8
                 }
             ]);
+        } else {
+            // No coords or city: return a small default set of active stores to avoid empty UI
+            stores = await Store.aggregate([
+                { $match: { status: "A" } },
+                {
+                    $lookup: {
+                        from: "store_categories",
+                        localField: "category",
+                        foreignField: "_id",
+                        as: "category_name"
+                    }
+                },
+                {
+                    $addFields: {
+                        category_name: {
+                            $ifNull: [{ $arrayElemAt: ["$category_name.name", 0] }, null]
+                        }
+                    }
+                },
+                {
+                    $project: {
+                        productImages: 1,
+                        category_name: 1,
+                        name: 1,
+                        address: 1,
+                        images: 1,
+                        location: 1
+                    }
+                },
+                { $sort: { createdAt: -1 } },
+                { $limit: 8 }
+            ]);
         }
 
         if (searchLat !== null && searchLong !== null) {
@@ -1270,6 +1302,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                 estimatedTimeMinutes: null
             }));
         } else {
+            // Default list (no location): keep distance/time null
             stores = stores.map(store => ({
                 ...store,
                 distanceKm: null,
