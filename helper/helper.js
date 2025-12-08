@@ -279,7 +279,7 @@ export const handleOnlineStoreOrderCallback = async (webhookCallRes) => {
                         ...unit.toObject(),
                         mrp: unit.sellingPrice, // Show previous selling price as MRP
                         sellingPrice: discountPrice, // Apply discounted price
-                        offPer: `${percentageOff}% OFF`
+                        offPer: `${percentageOff}`
                     };
                 }
 

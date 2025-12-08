@@ -89,7 +89,7 @@ function calculateDiscount(mrp, sellingPrice) {
         return "Invalid prices";
     }
     let discount = ((mrp - sellingPrice) / mrp) * 100;
-    return discount.toFixed(2) + "% OFF";
+    return discount.toFixed(2); // return numeric string, UI can append "% OFF"
 }
 
 const parseUnitsField = (rawUnits) => {

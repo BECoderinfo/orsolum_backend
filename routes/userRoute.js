@@ -39,7 +39,6 @@ userRouter.get('/user/notifications/v1', userAuthentication, getUserNotification
 userRouter.patch('/user/notifications/:id/read/v1', userAuthentication, markUserNotificationRead);
 userRouter.delete('/user/notifications/clear/v1', userAuthentication, clearUserNotifications);
 
-// address aliases (without /order prefix for clients hitting /api/...)
 userRouter.post('/create/address/v1', userAuthentication, createAddress);
 userRouter.put('/edit/address/:id/v1', userAuthentication, editAddress);
 userRouter.delete('/delete/address/:id/v1', userAuthentication, deleteAddress);

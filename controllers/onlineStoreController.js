@@ -29,7 +29,7 @@ limit = limit ? Number(limit) : 10;
 const calculateOffPer = (mrp, sellingPrice) => {
     const discount = ((mrp - sellingPrice) / mrp) * 100;
     const returnedValue = discount % 1 === 0 ? discount.toFixed(0) : discount.toFixed(2);
-    return `${returnedValue}% OFF`;
+    return `${returnedValue}`; // numeric string; UI can append "% OFF"
 };
 
 export const uploadBrandImage = async (req, res) => {
@@ -669,7 +669,7 @@ export const onlineStoreHomePage = async (req, res) => {
                             ...product.units,
                             mrp: sellingPrice, // Show selling price as MRP
                             sellingPrice: discountPrice, // Apply new discount price
-                            offPer: `${subcategoryPercentage}% OFF` // Update offPer only if percentage > 0
+                            offPer: `${subcategoryPercentage}` // numeric string, append "% OFF" on UI
                         };
                     }
                 }
@@ -769,7 +769,7 @@ export const allTrendingProducts = async (req, res) => {
                             ...product.units,
                             mrp: sellingPrice, // Show selling price as MRP
                             sellingPrice: discountPrice, // Apply new discount price
-                            offPer: `${subcategoryPercentage}% OFF` // Update offPer only if percentage > 0
+                            offPer: `${subcategoryPercentage}` // numeric string, append "% OFF" on UI
                         };
                     }
                 }
@@ -1391,7 +1391,7 @@ export const onlineProductsList = async (req, res) => {
                             ...product.units,
                             mrp: sellingPrice, // Show selling price as MRP
                             sellingPrice: discountPrice, // Apply new discount price
-                            offPer: `${subcategoryPercentage}% OFF` // Show discount percentage only if > 0
+                            offPer: `${subcategoryPercentage}` // numeric string; UI can append "% OFF"
                         };
                     }
                 }
@@ -1526,7 +1526,7 @@ export const onlineProductsDetails = async (req, res) => {
                         ...unit,
                         mrp: unit.sellingPrice, // Show selling price as MRP
                         sellingPrice: discountPrice, // Apply discount
-                        offPer: `${subcategoryPercentage}% OFF` // Update offPer only if percentage > 0
+                        offPer: `${subcategoryPercentage}` // numeric string; UI can append "% OFF"
                     };
                 });
             }
@@ -1604,7 +1604,7 @@ export const onlineProductsDetails = async (req, res) => {
                             ...product.productUnits,
                             mrp: sellingPrice, // Show selling price as MRP
                             sellingPrice: discountPrice, // Apply new discount price
-                            offPer: `${subcategoryPercentage}% OFF` // Show discount only if > 0
+                            offPer: `${subcategoryPercentage}` // numeric string; UI can append "% OFF"
                         };
                     }
                 }
@@ -1864,7 +1864,7 @@ export const onlineStoreCartDetails = async (req, res) => {
                     ...modifiedUnit,
                     mrp: modifiedUnit.sellingPrice, // Show selling price as MRP
                     sellingPrice: discountPrice, // Apply discount
-                    offPer: `${percentageOff}% OFF` // Show discount percentage
+                    offPer: `${percentageOff}` // numeric string; UI can append "% OFF"
                 };
             }
 
