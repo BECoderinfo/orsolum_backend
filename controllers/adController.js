@@ -1267,12 +1267,21 @@ export const getActiveAds = async (req, res) => {
       }
     }
     
+    // Format ad videos (make absolute if stored as S3 key)
+    const formattedVideos = Array.isArray(ad.videos)
+      ? ad.videos.map((v) => {
+          if (!v) return v;
+          if (v.startsWith("http://") || v.startsWith("https://")) return v;
+          return `https://orsolum.s3.ap-south-1.amazonaws.com/${v}`;
+        })
+      : [];
+
     adsByLocation[ad.location] = {
       _id: ad._id,
       name: ad.name,
       description: ad.description,
       images: ad.images || [],
-      videos: ad.videos || [],
+      videos: formattedVideos,
       location: ad.location,
       storeId: ad.storeId
         ? {
@@ -1392,6 +1401,15 @@ export const getRetailerLocalStoreAds = async (req, res) => {
         }
         return `https://orsolum.s3.ap-south-1.amazonaws.com/${img}`;
       });
+
+      // Format videos (S3 keys -> full URL)
+      const adVideosArray = (ad.videos || []).map((vid) => {
+        if (!vid) return vid;
+        if (vid.startsWith('http://') || vid.startsWith('https://')) {
+          return vid;
+        }
+        return `https://orsolum.s3.ap-south-1.amazonaws.com/${vid}`;
+      });
       
       // Format product images with full URL
       const formattedProductImages = productImagesArray.map((img) => {
@@ -1406,7 +1424,7 @@ export const getRetailerLocalStoreAds = async (req, res) => {
         name: ad.name,
         description: ad.description,
         images: adImagesArray,
-        videos: ad.videos || [],
+        videos: adVideosArray,
         location: ad.location,
         storeId: ad.storeId
           ? {
