@@ -1267,6 +1267,126 @@ export const getActiveAds = async (req, res) => {
 };
 
 /**
+ * Get active ads for retailer's local store display
+ * This API returns active ads that should be shown in the local store view
+ */
+export const getRetailerLocalStoreAds = async (req, res) => {
+  try {
+    const { location } = req.query;
+    const now = new Date();
+
+    const filter = {
+      status: "active",
+      startDate: { $lte: now },
+      endDate: { $gte: now },
+      deleted: { $ne: true },
+    };
+
+    // Filter by location if provided
+    if (location && AD_LOCATIONS.includes(location)) {
+      filter.location = location;
+    }
+
+    const ads = await Ad.find(filter)
+      .populate("sellerId", "name phone")
+      .populate("storeId", "name phone images")
+      .populate("productId", "productName primaryImage productImages sellingPrice mrp price name")
+      .sort({ startDate: 1 })
+      .lean();
+
+    // Group ads by location, keeping only one ad per location (first from sorted list)
+    const adsByLocation = {};
+    ads.forEach((ad) => {
+      if (adsByLocation[ad.location]) return;
+      
+      // Prepare product images - combine primaryImage and productImages
+      let productImagesArray = [];
+      if (ad.productId) {
+        if (ad.productId.primaryImage) {
+          productImagesArray.push(ad.productId.primaryImage);
+        }
+        if (Array.isArray(ad.productId.productImages) && ad.productId.productImages.length > 0) {
+          ad.productId.productImages.forEach((img) => {
+            if (img && !productImagesArray.includes(img)) {
+              productImagesArray.push(img);
+            }
+          });
+        }
+      }
+      
+      // Format store images with full URL
+      const storeImagesArray = (ad.storeId?.images || []).map((img) => {
+        if (img.startsWith('http://') || img.startsWith('https://')) {
+          return img;
+        }
+        return `https://orsolum.s3.ap-south-1.amazonaws.com/${img}`;
+      });
+      
+      // Format ad images with full URL
+      const adImagesArray = (ad.images || []).map((img) => {
+        if (img.startsWith('http://') || img.startsWith('https://')) {
+          return img;
+        }
+        return `https://orsolum.s3.ap-south-1.amazonaws.com/${img}`;
+      });
+      
+      // Format product images with full URL
+      const formattedProductImages = productImagesArray.map((img) => {
+        if (img.startsWith('http://') || img.startsWith('https://')) {
+          return img;
+        }
+        return `https://orsolum.s3.ap-south-1.amazonaws.com/${img}`;
+      });
+      
+      adsByLocation[ad.location] = {
+        _id: ad._id,
+        name: ad.name,
+        description: ad.description,
+        images: adImagesArray,
+        location: ad.location,
+        storeId: ad.storeId
+          ? {
+              _id: ad.storeId._id,
+              name: ad.storeId.name,
+              images: storeImagesArray,
+            }
+          : null,
+        productId: ad.productId
+          ? {
+              _id: ad.productId._id,
+              name: ad.productId.productName || ad.productId.name || null,
+              images: formattedProductImages,
+              price: ad.productId.sellingPrice ?? ad.productId.price ?? null,
+              mrp: ad.productId.mrp || null,
+            }
+          : null,
+        startDate: ad.startDate,
+        endDate: ad.endDate,
+      };
+    });
+
+    // Flatten for compatibility
+    const formattedAds = Object.values(adsByLocation);
+
+    return res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      data: {
+        ads: formattedAds,
+        adsByLocation: adsByLocation,
+      },
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("getRetailerLocalStoreAds", error, req, res);
+  }
+};
+
+/**
  * Create payment session for ad payment
  * This API creates a Cashfree payment session for seller to pay for approved ad
  */

@@ -17,6 +17,97 @@ limit = limit ? Number(limit) : 10;
 
 const { ObjectId } = mongoose.Types;
 
+/**
+ * Parse address string to extract city, state, and pincode
+ * Handles formats like: "Address, City, State Pincode" or "Address City State Pincode"
+ */
+const parseAddressFields = (addressString) => {
+  if (!addressString || typeof addressString !== 'string') {
+    return { city: null, state: null, pincode: null };
+  }
+
+  const address = addressString.trim();
+  
+  // Extract pincode (6-digit number, usually at the end)
+  const pincodeMatch = address.match(/\b(\d{6})\b/);
+  const pincode = pincodeMatch ? pincodeMatch[1] : null;
+  
+  // Remove pincode from address for further parsing
+  let addressWithoutPincode = address.replace(/\b\d{6}\b/, '').trim();
+  
+  // Common Indian states (case-insensitive)
+  const indianStates = [
+    'Gujarat', 'Gujrat', 'Maharashtra', 'Rajasthan', 'Punjab', 'Haryana',
+    'Delhi', 'Uttar Pradesh', 'UP', 'Madhya Pradesh', 'MP', 'Bihar',
+    'West Bengal', 'Karnataka', 'Tamil Nadu', 'Kerala', 'Andhra Pradesh',
+    'Telangana', 'Odisha', 'Assam', 'Jharkhand', 'Chhattisgarh',
+    'Himachal Pradesh', 'Uttarakhand', 'Goa', 'Manipur', 'Meghalaya',
+    'Mizoram', 'Nagaland', 'Sikkim', 'Tripura', 'Arunachal Pradesh'
+  ];
+  
+  // Try to find state in address
+  let state = null;
+  let city = null;
+  
+  // Check for state names (case-insensitive)
+  for (const stateName of indianStates) {
+    const stateRegex = new RegExp(`\\b${stateName.replace(/\s+/g, '\\s+')}\\b`, 'i');
+    const stateMatch = addressWithoutPincode.match(stateRegex);
+    if (stateMatch) {
+      state = stateName;
+      // Remove state from address
+      addressWithoutPincode = addressWithoutPincode.replace(stateRegex, '').trim();
+      break;
+    }
+  }
+  
+  // Common Indian cities (case-insensitive)
+  const commonCities = [
+    'Surat', 'Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Kolkata',
+    'Hyderabad', 'Pune', 'Ahmedabad', 'Jaipur', 'Lucknow', 'Kanpur',
+    'Nagpur', 'Indore', 'Thane', 'Bhopal', 'Visakhapatnam', 'Patna',
+    'Vadodara', 'Ghaziabad', 'Ludhiana', 'Agra', 'Nashik', 'Faridabad',
+    'Meerut', 'Rajkot', 'Varanasi', 'Srinagar', 'Amritsar', 'Jodhpur',
+    'Raipur', 'Allahabad', 'Coimbatore', 'Jabalpur', 'Gwalior', 'Vijayawada',
+    'Madurai', 'Guwahati', 'Chandigarh', 'Hubli', 'Mysore', 'Ranchi'
+  ];
+  
+  // Try to find city in address (usually appears before state)
+  for (const cityName of commonCities) {
+    const cityRegex = new RegExp(`\\b${cityName}\\b`, 'i');
+    const cityMatch = addressWithoutPincode.match(cityRegex);
+    if (cityMatch) {
+      city = cityName;
+      // Remove city from address
+      addressWithoutPincode = addressWithoutPincode.replace(cityRegex, '').trim();
+      break;
+    }
+  }
+  
+  // If city not found, try to extract last word before state (common pattern)
+  if (!city && state) {
+    const parts = addressWithoutPincode.split(/[,\s]+/).filter(p => p.trim());
+    if (parts.length > 0) {
+      city = parts[parts.length - 1]; // Last part before state
+    }
+  }
+  
+  // If still no city, try to extract from common patterns
+  if (!city) {
+    // Pattern: "Address, City" or "Address City"
+    const cityMatch = addressWithoutPincode.match(/(?:^|,\s*)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)(?:\s*,|\s*$)/);
+    if (cityMatch) {
+      city = cityMatch[1].trim();
+    }
+  }
+  
+  return {
+    city: city || null,
+    state: state || null,
+    pincode: pincode || null
+  };
+};
+
 const extractFileKeys = (files = []) => {
   if (!Array.isArray(files) || !files.length) return [];
   return files
@@ -81,7 +172,7 @@ export const uploadStoreImage = async (req, res) => {
  */
 export const createStore = async (req, res) => {
   try {
-    const { name, category, information, phone, address, email, location, directMe, city, state, pincode } = req.body;
+    let { name, category, information, phone, address, email, location, directMe, city, state, pincode } = req.body;
 
     // Validate required fields
     if (!name || !category || !information || !phone || !address || !email) {
@@ -92,12 +183,29 @@ export const createStore = async (req, res) => {
       });
     }
 
-    // Validate Shiprocket required fields (city, state, pincode)
+    // If city, state, or pincode are missing, try to parse from address
+    if (!city || !state || !pincode) {
+      if (address) {
+        const parsedFields = parseAddressFields(address);
+        city = city || parsedFields.city;
+        state = state || parsedFields.state;
+        pincode = pincode || parsedFields.pincode;
+        
+        console.log("📝 Parsed address fields:", {
+          originalAddress: address,
+          parsed: parsedFields,
+          final: { city, state, pincode }
+        });
+      }
+    }
+
+    // Validate Shiprocket required fields (city, state, pincode) - after parsing
     if (!city || !state || !pincode) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
-        message: "Please provide city, state, and pincode for Shiprocket pickup address",
+        message: "Please provide city, state, and pincode. You can either provide them separately or include them in the address field (e.g., 'Address, City, State Pincode')",
+        hint: "Address format: 'Street Address, City Name, State Name 123456' (6-digit pincode at end)",
       });
     }
 
@@ -576,6 +684,26 @@ export const editStore = async (req, res) => {
       }
     });
 
+    // If address is being updated and city/state/pincode are missing, try to parse from address
+    if (updateData.address && (!updateData.city || !updateData.state || !updateData.pincode)) {
+      const parsedFields = parseAddressFields(updateData.address);
+      if (!updateData.city && parsedFields.city) {
+        updateData.city = parsedFields.city;
+      }
+      if (!updateData.state && parsedFields.state) {
+        updateData.state = parsedFields.state;
+      }
+      if (!updateData.pincode && parsedFields.pincode) {
+        updateData.pincode = parsedFields.pincode;
+      }
+      
+      console.log("📝 Parsed address fields in editStore:", {
+        originalAddress: updateData.address,
+        parsed: parsedFields,
+        final: { city: updateData.city, state: updateData.state, pincode: updateData.pincode }
+      });
+    }
+
     let geoLocation = null;
 
     if (Object.prototype.hasOwnProperty.call(payload, "location") && payload.location) {
@@ -948,10 +1076,49 @@ export const storeDetails = async (req, res) => {
         })
       );
 
+      // Return single store object (not array) with complete structure
+      const storeData = enrichedStores[0] || null;
+      
+      if (!storeData) {
+        return res.status(status.NotFound).json({
+          success: false,
+          message: "Store not found",
+        });
+      }
+
+      // Format store data to match expected structure
+      const formattedStore = {
+        _id: storeData._id,
+        name: storeData.name,
+        category: storeData.category,
+        category_name: storeData.category_name,
+        information: storeData.information,
+        phone: storeData.phone,
+        address: storeData.address,
+        email: storeData.email,
+        directMe: storeData.directMe,
+        coverImage: storeData.coverImage,
+        images: storeData.images || [],
+        createdBy: storeData.createdBy,
+        updatedBy: storeData.updatedBy,
+        status: storeData.status,
+        location: storeData.location,
+        shiprocket: storeData.shiprocket,
+        createdAt: storeData.createdAt,
+        updatedAt: storeData.updatedAt,
+        storeOffers: storeData.storeOffers || [],
+        popularProducts: (storeData.popularProducts || []).map((pp) => ({
+          _id: pp._id,
+          productId: pp.productId,
+          storeId: pp.storeId,
+          productDetails: pp.productDetails,
+        })),
+      };
+
       return res.status(status.OK).json({
         success: true,
         message: "Store details fetched successfully",
-        data: enrichedStores,
+        data: formattedStore,
       });
     } catch (error) {
       console.error("Error in storeDetails:", error);

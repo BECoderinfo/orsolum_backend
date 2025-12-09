@@ -3,8 +3,8 @@ import { isExist, sendRegisterOtp, sendLoginOtp, registerRetailer, loginRetailer
 import { retailerAuthentication } from "../middlewares/middleware.js";
 import { uploadUserImage, uploadStoreImagesMulter } from "../helper/uploadImage.js";
 import { getRetailerNotifications, markRetailerNotificationRead, clearRetailerNotifications } from "../controllers/notificationController.js";
-import { retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetailsV2, orderChangeStatus, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy, retailerDeliveryBoyDashboard } from "../controllers/orderController.js";
-import { createRetailerAdRequest, deleteRetailerAd, getRetailerAdDetails, getSellerAdsConfig, listRetailerAds } from "../controllers/adController.js";
+import { retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetailsV2, orderChangeStatus, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy, retailerDeliveryBoyDashboard, retailerDeliveryBoyHistory } from "../controllers/orderController.js";
+import { createRetailerAdRequest, deleteRetailerAd, getRetailerAdDetails, getSellerAdsConfig, listRetailerAds, getRetailerLocalStoreAds } from "../controllers/adController.js";
 const retailerRouter = express.Router();
 
 // auth
@@ -41,6 +41,7 @@ retailerRouter.put('/retailer/order/change/status/:id/v1', retailerAuthenticatio
 retailerRouter.get('/retailer/delivery/assigned/list/v1', retailerAuthentication, retailerAssignedDeliveries);
 retailerRouter.get('/retailer/delivery/boys/v1', retailerAuthentication, retailerAvailableDeliveryBoys);
 retailerRouter.get('/retailer/delivery/boys/dashboard/v1', retailerAuthentication, retailerDeliveryBoyDashboard);
+retailerRouter.get('/retailer/delivery/boys/history/v1', retailerAuthentication, retailerDeliveryBoyHistory);
 retailerRouter.post('/retailer/delivery/assign/v1', retailerAuthentication, retailerAssignOrderToDeliveryBoy);
 
 // Retailer ads management (mirrors seller flow)
@@ -49,5 +50,6 @@ retailerRouter.post('/retailer/ads/v1', retailerAuthentication, uploadStoreImage
 retailerRouter.get('/retailer/ads/v1', retailerAuthentication, listRetailerAds);
 retailerRouter.get('/retailer/ads/:id/v1', retailerAuthentication, getRetailerAdDetails);
 retailerRouter.delete('/retailer/ads/:id/v1', retailerAuthentication, deleteRetailerAd);
+retailerRouter.get('/retailer/local/store/ads/v1', retailerAuthentication, getRetailerLocalStoreAds);
 
 export default retailerRouter;

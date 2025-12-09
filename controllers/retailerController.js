@@ -672,10 +672,38 @@ export const retailerHomePageDataV2 = async (req, res) => {
 
         const totalPendingOrders = await Order.countDocuments({ storeId: storeId, status: "Pending" });
 
-        // Respond with the updated data
+        // Get complete store data
+        const storeData = await Store.findById(storeId)
+            .populate("category", "name")
+            .lean();
+
+        // Format store for response
+        const formattedStore = storeData ? {
+            _id: storeData._id,
+            name: storeData.name,
+            category: storeData.category?._id || storeData.category,
+            category_name: storeData.category?.name || null,
+            information: storeData.information,
+            phone: storeData.phone,
+            address: storeData.address,
+            email: storeData.email,
+            directMe: storeData.directMe,
+            coverImage: storeData.coverImage,
+            images: storeData.images || [],
+            createdBy: storeData.createdBy,
+            updatedBy: storeData.updatedBy,
+            status: storeData.status,
+            location: storeData.location,
+            shiprocket: storeData.shiprocket || {},
+            createdAt: storeData.createdAt,
+            updatedAt: storeData.updatedAt,
+        } : null;
+
+        // Respond with the updated data including store
         res.status(200).json({
             success: true,
             data: {
+                store: formattedStore,
                 totalOrders,
                 totalProducts,
                 totalEarnings,

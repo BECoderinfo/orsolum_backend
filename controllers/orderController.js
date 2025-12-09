@@ -3465,6 +3465,169 @@ export const retailerDeliveryBoyDashboard = async (req, res) => {
   }
 };
 
+export const retailerDeliveryBoyHistory = async (req, res) => {
+  try {
+    const { page = 1, limit: limitQuery = 10, deliveryBoyId, status: statusQuery = "Delivered" } = req.query;
+
+    const store = await Store.findOne({ createdBy: req.user._id }).lean();
+    if (!store) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Store not found",
+      });
+    }
+
+    const pageNumber = Number(page) > 0 ? Number(page) : 1;
+    const pageSizeRaw = Number(limitQuery) > 0 ? Number(limitQuery) : 10;
+    const pageSize = pageSizeRaw > 50 ? 50 : pageSizeRaw;
+    const skip = (pageNumber - 1) * pageSize;
+
+    const baseMatch = {
+      storeId: store._id,
+      paymentStatus: "SUCCESS",
+      assignedDeliveryBoy: { $exists: true, $ne: null },
+    };
+
+    if (deliveryBoyId && ObjectId.isValid(deliveryBoyId)) {
+      baseMatch.assignedDeliveryBoy = new ObjectId(deliveryBoyId);
+    }
+
+    if (statusQuery) {
+      baseMatch.status = statusQuery;
+    }
+
+    const [totalOrders, orders] = await Promise.all([
+      Order.countDocuments(baseMatch),
+      Order.find(baseMatch)
+        .populate("assignedDeliveryBoy", "firstName lastName phone availabilityStatus vehicleType totalDeliveries rating")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageSize)
+        .lean(),
+    ]);
+
+    const deliveryHistory = orders.map((order) => {
+      const deliveryBoy = order.assignedDeliveryBoy
+        ? {
+            id: order.assignedDeliveryBoy._id,
+            name: [order.assignedDeliveryBoy.firstName, order.assignedDeliveryBoy.lastName]
+              .filter(Boolean)
+              .join(" ")
+              .trim(),
+            phone: order.assignedDeliveryBoy.phone,
+            vehicleType: order.assignedDeliveryBoy.vehicleType,
+            rating: order.assignedDeliveryBoy.rating,
+            totalDeliveries: order.assignedDeliveryBoy.totalDeliveries,
+          }
+        : null;
+
+      const formattedAddress = [
+        order.address?.flatHouse,
+        order.address?.address_1,
+        order.address?.city,
+        order.address?.pincode,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      return {
+        orderId: order.orderId,
+        orderMongoId: order._id,
+        amount: order.summary?.grandTotal || order.summary?.totalAmount || 0,
+        status: order.status,
+        deliveredAt: order.status === "Delivered" ? order.updatedAt : null,
+        customerName: order.address?.name || "Customer",
+        customerPhone: order.address?.number || null,
+        address: formattedAddress,
+        deliveryBoy,
+        createdAt: order.createdAt,
+      };
+    });
+
+    // Get delivery boys summary (grouped stats)
+    const deliveryBoysSummary = await Order.aggregate([
+      {
+        $match: {
+          storeId: new ObjectId(store._id),
+          paymentStatus: "SUCCESS",
+          assignedDeliveryBoy: { $exists: true, $ne: null },
+          status: "Delivered",
+        },
+      },
+      {
+        $group: {
+          _id: "$assignedDeliveryBoy",
+          totalDeliveries: { $sum: 1 },
+          totalEarnings: { $sum: "$summary.grandTotal" },
+        },
+      },
+      {
+        $lookup: {
+          from: "deliveryboys",
+          localField: "_id",
+          foreignField: "_id",
+          as: "deliveryBoyInfo",
+        },
+      },
+      {
+        $unwind: {
+          path: "$deliveryBoyInfo",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $project: {
+          deliveryBoyId: "$_id",
+          name: {
+            $concat: [
+              { $ifNull: ["$deliveryBoyInfo.firstName", ""] },
+              " ",
+              { $ifNull: ["$deliveryBoyInfo.lastName", ""] },
+            ],
+          },
+          phone: "$deliveryBoyInfo.phone",
+          totalDeliveries: 1,
+          totalEarnings: 1,
+          averageRating: "$deliveryBoyInfo.rating",
+        },
+      },
+      {
+        $sort: { totalDeliveries: -1 },
+      },
+    ]);
+
+    res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      data: {
+        pagination: {
+          page: pageNumber,
+          limit: pageSize,
+          total: totalOrders,
+          totalPages: totalOrders ? Math.ceil(totalOrders / pageSize) : 0,
+        },
+        deliveryHistory,
+        deliveryBoysSummary: deliveryBoysSummary.map((item) => ({
+          deliveryBoyId: item.deliveryBoyId,
+          name: item.name.trim(),
+          phone: item.phone,
+          totalDeliveries: item.totalDeliveries,
+          totalEarnings: item.totalEarnings,
+          averageRating: item.averageRating,
+        })),
+      },
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("retailerDeliveryBoyHistory", error, req, res);
+  }
+};
+
 export const orderChangeStatus = async (req, res) => {
   try {
     const { id } = req.params;
