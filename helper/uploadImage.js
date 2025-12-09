@@ -62,6 +62,23 @@ export const uploadProductImagesMulter = multer({
     }),
 });
 
+// Popular Category image upload (S3)
+export const uploadPopularCategoryImageMulter = multer({
+    storage: multerS3({
+        s3: s3,
+        bucket: bucketCred.bucketName,
+        contentType: multerS3.AUTO_CONTENT_TYPE,
+        metadata: (req, file, cb) => {
+            cb(null, { fieldName: file.fieldname });
+        },
+        key: (req, file, cb) => {
+            const folderName = 'Popular_Category';
+            const fileName = `${Date.now().toString()}_${file.originalname}`;
+            cb(null, `${folderName}/${fileName}`);
+        },
+    }),
+});
+
 export const uploadStoreImagesMulter = multer({
     storage: multerS3({
         s3: s3,

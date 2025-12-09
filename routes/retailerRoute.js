@@ -58,8 +58,16 @@ retailerRouter.post(
   createRetailerAdRequest
 );
 retailerRouter.get('/retailer/ads/v1', retailerAuthentication, listRetailerAds);
-retailerRouter.get('/retailer/ads/:id/v1', retailerAuthentication, getRetailerAdDetails);
-retailerRouter.delete('/retailer/ads/:id/v1', retailerAuthentication, deleteRetailerAd);
+retailerRouter.get(
+  '/retailer/ads/:id([a-fA-F0-9]{24})/v1',
+  retailerAuthentication,
+  getRetailerAdDetails
+);
+retailerRouter.delete(
+  '/retailer/ads/:id([a-fA-F0-9]{24})/v1',
+  retailerAuthentication,
+  deleteRetailerAd
+);
 retailerRouter.post('/retailer/ads/payment/session/v1', retailerAuthentication, createRetailerAdPaymentSession);
 retailerRouter.get('/retailer/local/store/ads/v1', retailerAuthentication, getRetailerLocalStoreAds);
 

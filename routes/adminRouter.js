@@ -1,7 +1,7 @@
 import express from "express";
 import { body } from 'express-validator';
 import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, productDetails, acceptProduct, rejectProduct, deleteLocalProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus, createOffer, listOffers, updateOffer, deleteOffer, getWelcomeImage, uploadWelcomeImage, deleteWelcomeImage, saveStorePopularProducts, updateStoreRating } from "../controllers/adminController.js";
-import { uploadAdMediaAny, uploadAdMediaMulter, uploadStoreImagesMulter } from "../helper/uploadImage.js";
+import { uploadAdMediaAny, uploadAdMediaMulter, uploadStoreImagesMulter, uploadPopularCategoryImageMulter } from "../helper/uploadImage.js";
 import { adminAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { createWorkHours, getAllWorkHours, updateWorkHours, deleteWorkHours } from "../controllers/workHoursController.js";
 import ShiprocketService from '../helper/shiprocketService.js';
@@ -9,6 +9,7 @@ import { processGoogleMapsLink } from '../helper/latAndLong.js';
 import { createNotification, listNotifications, deleteNotification } from "../controllers/notificationController.js";
 import { adminListHelpCenterTickets, adminUpdateHelpCenterTicket, adminDeleteHelpCenterTicket } from "../controllers/helpCenterController.js";
 import { adminListAds, adminGetAdDetails, adminUpdateAdStatus, adminCreateOrsolumAd, adminUpdateOrsolumAd, adminDeleteOrsolumAd, adminGetAdsConfig, adminUpdateAdsConfig, adminDeleteAd } from "../controllers/adController.js";
+import { createPopularCategory, editPopularCategory, uploadPopularCategoryImage, deletePopularCategory, listPopularCategory } from "../controllers/PopularCategoryController.js";
 const adminRouter = express.Router();
 
 // Admin
@@ -25,6 +26,40 @@ adminRouter.post('/admin/create/store/category/v1', adminAuthentication, createS
 adminRouter.put('/admin/edit/store/category/:id/v1', adminAuthentication, editStoreCategory);
 adminRouter.delete('/admin/delete/store/category/:id/v1', adminAuthentication, deleteStoreCategory);
 adminRouter.get('/admin/list/store/category/v1', adminAuthentication, listStoreCategory);
+
+//Popular Category
+
+adminRouter.post(
+  "/admin/upload/popular/category/image/v1",
+  adminAuthentication,
+  uploadPopularCategoryImage
+);
+
+adminRouter.post(
+  "/admin/create/popular/category/v1",
+  adminAuthentication,
+  uploadPopularCategoryImageMulter.single("image"),
+  createPopularCategory
+);
+
+adminRouter.put(
+  "/admin/edit/popular/category/:id/v1",
+  adminAuthentication,
+  uploadPopularCategoryImageMulter.single("image"),
+  editPopularCategory
+);
+
+adminRouter.delete(
+  "/admin/delete/popular/category/:id/v1",
+  adminAuthentication,
+  deletePopularCategory
+);
+
+adminRouter.get(
+  "/admin/list/popular/category/v1",
+  adminAuthentication,
+  listPopularCategory
+);
 
 // store
 adminRouter.get('/admin/list/store/v1', adminAuthentication, listStores);

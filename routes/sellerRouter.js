@@ -108,9 +108,21 @@ sellerRouter.post(
   createSellerAdRequest
 );
 sellerRouter.get("/seller/ads/v1", sellerAuthentication, listSellerAds);
-sellerRouter.get("/seller/ads/:id/v1", sellerAuthentication, getSellerAdDetails);
-sellerRouter.post("/seller/ads/:id/renew/v1", sellerAuthentication, renewSellerAd);
-sellerRouter.delete("/seller/ads/:id/v1", sellerAuthentication, deleteSellerAd);
+sellerRouter.get(
+  "/seller/ads/:id([a-fA-F0-9]{24})/v1",
+  sellerAuthentication,
+  getSellerAdDetails
+);
+sellerRouter.post(
+  "/seller/ads/:id([a-fA-F0-9]{24})/renew/v1",
+  sellerAuthentication,
+  renewSellerAd
+);
+sellerRouter.delete(
+  "/seller/ads/:id([a-fA-F0-9]{24})/v1",
+  sellerAuthentication,
+  deleteSellerAd
+);
 sellerRouter.post("/seller/ads/payment/session/v1", sellerAuthentication, createAdPaymentSession);
 
 export default sellerRouter;
