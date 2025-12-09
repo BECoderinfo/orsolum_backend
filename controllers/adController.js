@@ -1387,6 +1387,193 @@ export const getRetailerLocalStoreAds = async (req, res) => {
 };
 
 /**
+ * Create payment session for retailer ad payment
+ * This API creates a Cashfree payment session for retailer to pay for approved ad
+ */
+export const createRetailerAdPaymentSession = async (req, res) => {
+  try {
+    const retailerId = req.user._id;
+    const { adId, scheduledStartDate } = req.body;
+
+    if (!adId) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Ad ID is required",
+      });
+    }
+
+    if (!ObjectId.isValid(adId)) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid ad ID",
+      });
+    }
+
+    const ad = await Ad.findOne({
+      _id: new ObjectId(adId),
+      sellerId: new ObjectId(retailerId), // Retailer ads use sellerId field
+    });
+
+    if (!ad) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Ad not found",
+      });
+    }
+
+    if (ad.status !== "approved") {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Ad must be approved before payment",
+      });
+    }
+
+    if (ad.paymentStatus === "paid") {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Ad payment already completed",
+      });
+    }
+
+    if (!ad.amount || ad.amount <= 0) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid ad amount",
+      });
+    }
+
+    // Create Cashfree payment session
+    const orderTags = {
+      forPayment: "Ad",
+      adId: adId,
+      retailerId: retailerId.toString(),
+      location: ad.location,
+      totalRunDays: ad.totalRunDays.toString(),
+    };
+    
+    // Add scheduledStartDate if provided
+    if (scheduledStartDate) {
+      const scheduledDate = new Date(scheduledStartDate);
+      if (scheduledDate > new Date()) {
+        orderTags.scheduledStartDate = scheduledDate.toISOString();
+      }
+    }
+    
+    const paymentData = {
+      order_currency: "INR",
+      order_amount: ad.amount,
+      order_tags: orderTags,
+      customer_details: {
+        customer_id: retailerId.toString(),
+        customer_phone: req.user.phone?.replace("+91", "") || "9999999999",
+        customer_name: req.user.name || "Retailer",
+        customer_email: req.user.email || `${req.user.phone}@orsolum.com`,
+      },
+    };
+
+    const headers = {
+      "x-api-version": process.env.CF_API_VERSION || "2022-09-01",
+      "x-client-id": process.env.CF_CLIENT_ID,
+      "x-client-secret": process.env.CF_CLIENT_SECRET,
+      "Content-Type": "application/json",
+    };
+
+    let cashFreeSession;
+    try {
+      console.log("Creating Cashfree payment session for retailer:", {
+        url: process.env.CF_CREATE_PRODUCT_URL,
+        amount: ad.amount,
+        adId: ad._id,
+        retailerId: retailerId,
+      });
+      
+      cashFreeSession = await axios.post(
+        process.env.CF_CREATE_PRODUCT_URL,
+        paymentData,
+        { headers }
+      );
+      
+      console.log("Cashfree API Response:", {
+        status: cashFreeSession.status,
+        hasOrderId: !!cashFreeSession.data?.order_id,
+        hasPaymentSessionId: !!cashFreeSession.data?.payment_session_id,
+      });
+    } catch (error) {
+      console.error("Cashfree API Error Details:", {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+      });
+      
+      const errorMessage = error.response?.data?.message 
+        || error.response?.data?.error?.message
+        || error.response?.data?.error
+        || error.message 
+        || "Failed to create payment session. Please check your Cashfree credentials and try again.";
+      
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: errorMessage,
+        error: process.env.NODE_ENV === 'development' ? {
+          details: error.response?.data,
+          status: error.response?.status,
+        } : undefined,
+      });
+    }
+
+    // Validate response
+    if (!cashFreeSession?.data?.payment_session_id) {
+      console.error("Invalid Cashfree response:", {
+        status: cashFreeSession?.status,
+        data: cashFreeSession?.data,
+      });
+      return res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: cashFreeSession?.data?.message || "Invalid response from payment gateway. Please try again.",
+      });
+    }
+    
+    console.log("Payment session created successfully for retailer:", {
+      orderId: cashFreeSession.data.order_id,
+      paymentSessionId: cashFreeSession.data.payment_session_id,
+      adId: ad._id
+    });
+
+    // Update ad with payment reference
+    ad.paymentReference = cashFreeSession.data.order_id;
+    await ad.save();
+
+    return res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      message: "Payment session created successfully",
+      data: {
+        paymentSessionId: cashFreeSession.data.payment_session_id,
+        cf_order_id: cashFreeSession.data.order_id,
+        adId: ad._id,
+        amount: ad.amount,
+      },
+    });
+  } catch (error) {
+    console.error("createRetailerAdPaymentSession error:", error);
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message || "Failed to create payment session",
+    });
+    return catchError("createRetailerAdPaymentSession", error, req, res);
+  }
+};
+
+/**
  * Create payment session for ad payment
  * This API creates a Cashfree payment session for seller to pay for approved ad
  */

@@ -23,6 +23,7 @@ import {
 } from "../helper/helper.js";
 import Payment from "../models/Payment.js";
 import { notifyLowStock } from "../helper/notificationHelper.js";
+import User from "../models/User.js";
 // import { image } from "pdfkit";
 
 
@@ -306,7 +307,7 @@ export const addProductToCart = async (req, res) => {
       });
     }
 
-    const productDetails = await Product.findById(productId);
+    const productDetails = await Product.findById(productId).populate("storeId");
     if (!productDetails) {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
@@ -320,6 +321,24 @@ export const addProductToCart = async (req, res) => {
         status: jsonStatus.NotFound,
         success: false,
         message: "You can't add deleted product in to the Cart",
+      });
+    }
+
+    // ✅ Validate product status (must be Accepted)
+    if (productDetails.status !== "A") {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Product is not available for purchase",
+      });
+    }
+
+    // ✅ Validate product belongs to the specified store
+    if (!productDetails.storeId || productDetails.storeId._id.toString() !== storeId.toString()) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Product does not belong to the specified store",
       });
     }
 
@@ -4131,6 +4150,319 @@ export const processPaymentAndUpdateShiprocket = async (req, res) => {
       status: jsonStatus.InternalServerError,
       success: false,
       message: error.message
+    });
+  }
+};
+
+/**
+ * Create Order by Retailer
+ * Allows retailer to create orders for customers (walk-in, phone orders, etc.)
+ */
+export const retailerCreateOrder = async (req, res) => {
+  try {
+    const {
+      customerName,
+      customerPhone,
+      customerEmail,
+      address,
+      products, // Array of { productId, quantity, freeQuantity? }
+      coupon,
+      donate = 0,
+      paymentType = "COD",
+      paymentStatus = "SUCCESS", // For retailer-created orders, usually COD or already paid
+      estimatedDate,
+      notes,
+    } = req.body;
+
+    // ✅ Validate required fields
+    if (!customerName || !customerPhone) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Customer name and phone are required",
+      });
+    }
+
+    if (!address || !address.address_1 || !address.pincode) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Complete address is required (address_1, pincode, city, state)",
+      });
+    }
+
+    if (!products || !Array.isArray(products) || products.length === 0) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "At least one product is required",
+      });
+    }
+
+    // ✅ Get retailer's store
+    const store = await Store.findOne({ createdBy: req.user._id });
+    if (!store) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Store not found. Please create a store first.",
+      });
+    }
+
+    // ✅ Find or create customer user
+    let customerUser = await User.findOne({ phone: customerPhone, role: "user" });
+    if (!customerUser) {
+      // Create a guest user for the customer
+      customerUser = new User({
+        name: customerName,
+        phone: customerPhone,
+        email: customerEmail || `${customerPhone}@guest.orsolum.com`,
+        role: "user",
+        state: address.state || "",
+        city: address.city || "",
+      });
+      await customerUser.save();
+    } else {
+      // Update customer name if provided
+      if (customerName && customerUser.name !== customerName) {
+        customerUser.name = customerName;
+        await customerUser.save();
+      }
+    }
+
+    // ✅ Validate and process products
+    let storeTotal = 0;
+    let storeDiscountAmount = 0;
+    const productDetails = [];
+    const stockUpdates = [];
+
+    const storeOffers = await StoreOffer.find({ storeId: store._id, deleted: false });
+
+    for (const item of products) {
+      const { productId, quantity, freeQuantity = 0 } = item;
+
+      if (!productId || !quantity || quantity <= 0) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Invalid product data. Each product must have productId and quantity > 0",
+        });
+      }
+
+      const product = await Product.findById(productId);
+      if (!product) {
+        return res.status(status.NotFound).json({
+          status: jsonStatus.NotFound,
+          success: false,
+          message: `Product with ID ${productId} not found`,
+        });
+      }
+
+      // Verify product belongs to retailer's store
+      if (product.storeId?.toString() !== store._id.toString()) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: `Product ${product.productName} does not belong to your store`,
+        });
+      }
+
+      // Check stock
+      const currentStock = typeof product.stock === "number" ? product.stock : null;
+      if (currentStock !== null && quantity > currentStock) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: `Only ${currentStock} unit(s) of ${product.productName} available`,
+        });
+      }
+
+      const productPrice = product.sellingPrice;
+      const mrp = product.mrp || productPrice;
+      let appliedOffers = [];
+      let calculatedFreeQuantity = freeQuantity;
+
+      // Apply store offers (BOGO, etc.)
+      storeOffers.forEach((offer) => {
+        if (
+          offer.offerType === "buy_one_get_one" &&
+          offer.selectedProducts.includes(productId.toString())
+        ) {
+          calculatedFreeQuantity = quantity;
+          appliedOffers.push({
+            type: "buy_one_get_one",
+            description: offer.offer || "Buy 1 Get 1 Free",
+          });
+        }
+      });
+
+      storeTotal += productPrice * quantity;
+
+      productDetails.push({
+        productId: product._id,
+        productPrice,
+        mrp,
+        quantity,
+        freeQuantity: calculatedFreeQuantity,
+        appliedOffers,
+      });
+
+      // Track stock updates
+      if (currentStock !== null) {
+        stockUpdates.push({
+          productId: product._id,
+          retailerId: product.createdBy,
+          product,
+          newStock: currentStock - quantity,
+          lowStockThreshold:
+            typeof product.lowStockThreshold === "number" ? product.lowStockThreshold : 0,
+        });
+      }
+    }
+
+    // ✅ Coupon Logic
+    let couponCodeDiscount = 0;
+    if (coupon) {
+      const couponCode = await CouponCode.findById(coupon);
+      if (!couponCode || couponCode.deleted) {
+        return res.status(status.NotFound).json({
+          status: jsonStatus.NotFound,
+          success: false,
+          message: "Coupon not found or deleted",
+        });
+      }
+
+      const rawDiscount = (storeTotal * couponCode.discount) / 100;
+      couponCodeDiscount = couponCode.upto
+        ? Math.min(rawDiscount, couponCode.upto)
+        : rawDiscount;
+    }
+
+    // ✅ Shipping Fee
+    const storeShippingFee = storeTotal > 500 ? 0 : 50;
+
+    // ✅ Grand Total
+    const donateValue = Number(donate || 0);
+    const grandTotal =
+      storeTotal - storeDiscountAmount - couponCodeDiscount + storeShippingFee + donateValue;
+
+    // ✅ Prepare address object
+    const orderAddress = {
+      name: customerName,
+      number: customerPhone,
+      flatHouse: address.flatHouse || "",
+      address_1: address.address_1,
+      city: address.city || "",
+      state: address.state || "",
+      pincode: address.pincode,
+      landmark: address.landmark || "",
+      lat: address.lat || "0",
+      long: address.long || "0",
+      mapLink: address.mapLink || "",
+      type: address.type || "Home",
+    };
+
+    // ✅ Create order
+    const orderId = `ORD_${Date.now()}_${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+
+    const newOrder = new Order({
+      createdBy: customerUser._id,
+      storeId: store._id,
+      orderId,
+      paymentStatus: paymentStatus.toUpperCase(),
+      paymentType: paymentType.toUpperCase(),
+      address: orderAddress,
+      summary: {
+        totalAmount: storeTotal,
+        discountAmount: storeDiscountAmount + couponCodeDiscount,
+        shippingFee: storeShippingFee,
+        donate: donateValue,
+        grandTotal,
+      },
+      productDetails,
+      status: "Pending",
+      estimatedDate: estimatedDate ? new Date(estimatedDate) : null,
+      deliveryNotes: notes || "",
+      shiprocket: store?.shiprocket?.pickup_addresses
+        ? {
+            pickup_addresses: store.shiprocket.pickup_addresses || [],
+            default_pickup_address: store.shiprocket.default_pickup_address || null,
+          }
+        : {},
+    });
+
+    await newOrder.save();
+
+    // ✅ Update stock
+    if (stockUpdates.length) {
+      await Promise.all(
+        stockUpdates.map(async (update) => {
+          await Product.findByIdAndUpdate(
+            update.productId,
+            {
+              $set: { stock: update.newStock, totalStock: update.newStock },
+              updatedBy: update.retailerId,
+            },
+            { new: true }
+          );
+
+          if (
+            update.product &&
+            update.lowStockThreshold > 0 &&
+            update.newStock <= update.lowStockThreshold
+          ) {
+            try {
+              update.product.stock = update.newStock;
+              await notifyLowStock(update.retailerId, update.product, update.newStock);
+            } catch (notifyErr) {
+              console.warn("Low stock notification failed:", notifyErr.message);
+            }
+          }
+        })
+      );
+    }
+
+    // ✅ Populate order details for response
+    const populatedOrder = await Order.findById(newOrder._id)
+      .populate("createdBy", "name phone email")
+      .populate("storeId", "name phone address")
+      .populate("productDetails.productId", "productName productImages sellingPrice mrp")
+      .lean();
+
+    return res.status(status.Created).json({
+      status: jsonStatus.Created,
+      success: true,
+      message: "Order created successfully",
+      data: {
+        _id: newOrder._id,
+        orderId: newOrder.orderId,
+        status: newOrder.status,
+        paymentStatus: newOrder.paymentStatus,
+        customer: {
+          name: customerUser.name,
+          phone: customerUser.phone,
+          email: customerUser.email,
+        },
+        address: orderAddress,
+        summary: newOrder.summary,
+        productDetails: productDetails.map((pd) => ({
+          productId: pd.productId,
+          quantity: pd.quantity,
+          freeQuantity: pd.freeQuantity,
+          productPrice: pd.productPrice,
+          mrp: pd.mrp,
+          appliedOffers: pd.appliedOffers,
+        })),
+        createdAt: newOrder.createdAt,
+        estimatedDate: newOrder.estimatedDate,
+      },
+    });
+  } catch (error) {
+    console.error("Error in retailerCreateOrder:", error);
+    return res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
     });
   }
 };
