@@ -79,6 +79,7 @@ export const createSellerAdRequest = async (req, res) => {
       inquiry,
       storeId,
       productId,
+      videos,
     } = req.body;
 
     if (!name || !location || !totalRunDays) {
@@ -111,6 +112,19 @@ export const createSellerAdRequest = async (req, res) => {
           .filter(Boolean);
       } else if (Array.isArray(req.body.images)) {
         images = req.body.images;
+      }
+    }
+
+    // Videos (URLs, mp4/gif) - optional
+    let videoUrls = [];
+    if (videos) {
+      if (typeof videos === "string") {
+        videoUrls = videos
+          .split(",")
+          .map((v) => v.trim())
+          .filter(Boolean);
+      } else if (Array.isArray(videos)) {
+        videoUrls = videos.filter(Boolean);
       }
     }
 
@@ -167,6 +181,7 @@ export const createSellerAdRequest = async (req, res) => {
       description: description?.trim(),
       location,
       images,
+      videos: videoUrls,
       totalRunDays: Number(totalRunDays),
       inquiry: inquiry?.trim(),
       status: "pending",
@@ -533,6 +548,10 @@ export const adminUpdateAdStatus = async (req, res) => {
     }
     if (paymentReference !== undefined) {
       ad.paymentReference = paymentReference;
+      // If admin provides a reference but no explicit paymentStatus, auto-mark paid
+      if (!paymentStatus && ad.paymentStatus !== "paid") {
+        ad.paymentStatus = "paid";
+      }
     }
     // Allow admin to update amount during approval
     if (req.body.amount !== undefined && Number(req.body.amount) >= 0) {
@@ -1253,6 +1272,7 @@ export const getActiveAds = async (req, res) => {
       name: ad.name,
       description: ad.description,
       images: ad.images || [],
+      videos: ad.videos || [],
       location: ad.location,
       storeId: ad.storeId
         ? {
@@ -1386,6 +1406,7 @@ export const getRetailerLocalStoreAds = async (req, res) => {
         name: ad.name,
         description: ad.description,
         images: adImagesArray,
+        videos: ad.videos || [],
         location: ad.location,
         storeId: ad.storeId
           ? {

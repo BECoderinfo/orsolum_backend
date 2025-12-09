@@ -17,7 +17,7 @@ import {
   checkSellerStatus,
   updateStoreInfo,
 } from "../controllers/sellerController.js";
-import { getSellerNotifications, markSellerNotificationRead, clearSellerNotifications } from "../controllers/notificationController.js";
+import { getSellerNotifications, markSellerNotificationRead, clearSellerNotifications, dismissSellerNotification } from "../controllers/notificationController.js";
 import { orderChangeStatus } from "../controllers/orderController.js";
 import { getSellerInquiries, updateInquiryStatus, deleteInquiry } from "../controllers/slotBookingController.js";
 import { createHelpCenterTicket, getSellerHelpTickets } from "../controllers/helpCenterController.js";
@@ -45,6 +45,7 @@ sellerRouter.put("/seller/order/change/status/:id/v1", sellerAuthentication, ord
 // 🔔 Seller Notifications
 sellerRouter.get("/seller/notifications/v1", sellerAuthentication, getSellerNotifications);
 sellerRouter.patch("/seller/notifications/:id/read/v1", sellerAuthentication, markSellerNotificationRead);
+sellerRouter.delete("/seller/notifications/:id/v1", sellerAuthentication, dismissSellerNotification);
 sellerRouter.delete("/seller/notifications/clear/v1", sellerAuthentication, clearSellerNotifications);
 
 // 🏪 Seller store creation

@@ -34,7 +34,11 @@ retailerRouter.delete('/retailer/notifications/clear/v1', retailerAuthentication
 // retailer order routes (mounted at /api, so accessible at /api/retailer/order/...)
 retailerRouter.post('/retailer/create/order/v1', retailerAuthentication, retailerCreateOrder);
 retailerRouter.get('/retailer/pending/order/list/v2', retailerAuthentication, retailerPendingOrderList);
+// Backward-compat alias for older app versions still calling v1
+retailerRouter.get('/retailer/pending/order/list/v1', retailerAuthentication, retailerPendingOrderList);
 retailerRouter.get('/retailer/order/history/list/v2', retailerAuthentication, retailerOrderHistoryList);
+// Backward-compat alias for older app versions still calling v1
+retailerRouter.get('/retailer/order/history/list/v1', retailerAuthentication, retailerOrderHistoryList);
 retailerRouter.get('/retailer/order/details/:id/v2', retailerAuthentication, retailerOrderDetailsV2);
 retailerRouter.put('/retailer/order/change/status/:id/v1', retailerAuthentication, orderChangeStatus);
 

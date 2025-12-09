@@ -89,6 +89,32 @@ const buildRoleNotificationFilter = (roleKey, userId) => {
   };
 };
 
+// For clear-all we must NOT exclude already-dismissed docs; we want to mark every applicable one
+const buildRoleNotificationFilterForClear = (roleKey, userId) => {
+  const allowedRoles = roleTargets[roleKey] || [roleKey];
+  return {
+    $and: [
+      {
+        $or: [
+          { targetRoles: { $exists: false } },
+          { targetRoles: { $size: 0 } },
+          { targetRoles: { $in: allowedRoles } },
+        ],
+      },
+      {
+        $or: [
+          { targetUserIds: { $exists: false } },
+          { targetUserIds: { $size: 0 } },
+          { targetUserIds: userId },
+        ],
+      },
+      {
+        $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+      },
+    ],
+  };
+};
+
 const mapNotificationResponse = (notifications, userId) =>
   notifications.map((notification) => {
     const readBy = notification.readBy || [];
@@ -178,10 +204,63 @@ const markNotificationReadForRole = (roleKey) => async (req, res) => {
   }
 };
 
+const dismissNotificationForRole = (roleKey) => async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = new ObjectId(req.user._id);
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid notification id",
+      });
+    }
+
+    const filter = {
+      _id: id,
+      ...buildRoleNotificationFilter(roleKey, userId),
+    };
+
+    const notification = await Notification.findOne(filter);
+
+    if (!notification) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Notification not found",
+      });
+    }
+
+    const alreadyDismissed = (notification.dismissedByUserIds || []).some(
+      (entry) => entry?.toString() === userId.toString()
+    );
+
+    if (!alreadyDismissed) {
+      notification.dismissedByUserIds.push(userId);
+      await notification.save();
+    }
+
+    return res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      message: "Notification dismissed",
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError(`dismiss${roleKey}Notification`, error, req, res);
+  }
+};
+
 const clearNotificationsForRole = (roleKey) => async (req, res) => {
   try {
     const userId = new ObjectId(req.user._id);
-    const filter = buildRoleNotificationFilter(roleKey, userId);
+    // Use clear-specific filter so we can mark ALL applicable notifications, even if already dismissed
+    const filter = buildRoleNotificationFilterForClear(roleKey, userId);
 
     const result = await Notification.updateMany(filter, {
       $addToSet: { dismissedByUserIds: userId },
@@ -367,5 +446,6 @@ export const clearDeliveryNotifications =
 export const getSellerNotifications = (req, res) =>
   listNotificationsForRole(req, res, "seller");
 export const markSellerNotificationRead = markNotificationReadForRole("seller");
+export const dismissSellerNotification = dismissNotificationForRole("seller");
 export const clearSellerNotifications = clearNotificationsForRole("seller");
 

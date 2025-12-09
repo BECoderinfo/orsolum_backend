@@ -2691,6 +2691,15 @@ export const retailerOrderHistoryList = async (req, res) => {
       });
     }
 
+    // If store is not accepted yet, return clear message (avoids 500 on client)
+    if (findStore.status !== "A") {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Store is not accepted yet. Please contact admin.",
+      });
+    }
+
     // Match condition for past orders (excluding pending)
     let matchObj = {
       storeId: new mongoose.Types.ObjectId(findStore._id),
