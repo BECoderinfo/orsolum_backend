@@ -209,15 +209,6 @@ export const createStore = async (req, res) => {
       });
     }
 
-    // Validate phone format (should start with +)
-    if (!phone.startsWith('+')) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Phone number must include country code (e.g., +918780654545)",
-      });
-    }
-
     // Prevent multiple stores for one retailer
     const existingStore = await Store.findOne({ createdBy: req.user._id });
     if (existingStore) {
