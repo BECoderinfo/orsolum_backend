@@ -1091,13 +1091,20 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
         let searchLat = Number.isFinite(parsedLat) ? parsedLat : null;
         let searchLong = Number.isFinite(parsedLong) ? parsedLong : null;
 
+        // ✅ Optimize location handling - update asynchronously to avoid blocking response
         if (Number.isFinite(parsedLat) && Number.isFinite(parsedLong)) {
-            // Update user location when a fresh coordinate is provided
-            await User.findByIdAndUpdate(
+            // Use fresh coordinates immediately
+            searchLat = parsedLat;
+            searchLong = parsedLong;
+            
+            // Update user location asynchronously (non-blocking)
+            User.findByIdAndUpdate(
                 req.user._id,
                 { lat: parsedLat, long: parsedLong },
                 { new: true, runValidators: true }
-            );
+            ).catch(err => {
+                console.warn("Failed to update user location:", err.message);
+            });
         } else if (userDetails?.lat && userDetails?.long) {
             const savedLat = parseFloat(userDetails.lat);
             const savedLong = parseFloat(userDetails.long);

@@ -334,11 +334,24 @@ export const addProductToCart = async (req, res) => {
     }
 
     // ✅ Validate product belongs to the specified store
-    if (!productDetails.storeId || productDetails.storeId._id.toString() !== storeId.toString()) {
+    // Handle both populated and non-populated storeId
+    const productStoreId = productDetails.storeId?._id 
+      ? productDetails.storeId._id.toString() 
+      : productDetails.storeId?.toString() 
+      ? productDetails.storeId.toString() 
+      : null;
+
+    if (!productStoreId || productStoreId !== storeId.toString()) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
         message: "Product does not belong to the specified store",
+        debug: process.env.NODE_ENV === 'development' ? {
+          productStoreId,
+          requestedStoreId: storeId.toString(),
+          storeIdType: typeof productDetails.storeId,
+          isPopulated: !!productDetails.storeId?._id
+        } : undefined
       });
     }
 

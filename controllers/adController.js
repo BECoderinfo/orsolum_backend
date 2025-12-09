@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Ad from "../models/Ad.js";
 import Store from "../models/Store.js";
 import Product from "../models/Product.js";
+import User from "../models/User.js";
 import { jsonStatus, status } from "../helper/api.responses.js";
 import { catchError } from "../helper/service.js";
 import Notification from "../models/Notification.js";
@@ -11,8 +12,9 @@ import axios from "axios";
 const { ObjectId } = mongoose.Types;
 
 const AD_LOCATIONS = ["banner", "popup", "offer_bar", "crazy_deals", "trending_items", "popular_categories", "stores_near_me", "promotional_banner"];
-// Allow only one ad per location per date range. If you ever want more concurrent
-// ads per slot, bump this value.
+// Allow only one ad per location per store per date range.
+// Different stores can have ads in the same location simultaneously.
+// If you ever want more concurrent ads per slot per store, bump this value.
 const MAX_CONCURRENT_ADS_PER_LOCATION = 1;
 
 const getAdsConfig = async () => {
@@ -23,12 +25,14 @@ const getAdsConfig = async () => {
 /**
  * Check for overlapping ads for a given location and date range.
  * It looks at active ads and paid/approved ads that are already scheduled.
+ * IMPORTANT: Only checks ads for the SAME STORE - different stores can have ads in the same location.
  */
 const findOverlappingAds = async ({
   location,
   projectedStart,
   projectedEnd,
   excludeAdId,
+  storeId, // ✅ Filter by storeId - same location, different stores = OK
 }) => {
   if (!projectedStart || !projectedEnd) {
     return { count: 0, conflicts: [] };
@@ -38,6 +42,14 @@ const findOverlappingAds = async ({
     location,
     deleted: { $ne: true },
     _id: excludeAdId ? { $ne: excludeAdId } : { $exists: true },
+    // ✅ Only check ads for the same store - different stores can have ads in same location
+    // If storeId is provided, only check conflicts for that specific store
+    ...(storeId && ObjectId.isValid(storeId) 
+      ? { storeId: new ObjectId(storeId) }
+      : storeId 
+      ? { storeId: storeId } // Already an ObjectId or string
+      : {} // No storeId filter (for Orsolum ads - they check separately)
+    ),
     // Consider active ads, or approved ads that are already paid/scheduled
     $or: [
       { status: "active" },
@@ -48,7 +60,7 @@ const findOverlappingAds = async ({
   };
 
   const conflicts = await Ad.find(query)
-    .select("name startDate endDate sellerId")
+    .select("name startDate endDate sellerId storeId")
     .lean();
 
   return { count: conflicts.length, conflicts };
@@ -544,16 +556,23 @@ export const adminUpdateAdStatus = async (req, res) => {
     return { start, end };
   };
 
-  // Prevent overlapping ads for the same location (active or scheduled/paid)
+  // Prevent overlapping ads for the same location AND same store (active or scheduled/paid)
+  // ✅ Different stores can have ads in the same location simultaneously
   const ensureNoActiveConflict = async (projectedStart) => {
     const projectedEnd = new Date(projectedStart);
     projectedEnd.setDate(projectedEnd.getDate() + (ad.totalRunDays || 1));
+
+    // Convert storeId to string if it's an ObjectId
+    const storeIdForCheck = ad.storeId 
+      ? (ad.storeId.toString ? ad.storeId.toString() : ad.storeId)
+      : null;
 
     const { count, conflicts } = await findOverlappingAds({
       location: ad.location,
       projectedStart,
       projectedEnd,
       excludeAdId: ad._id,
+      storeId: storeIdForCheck, // ✅ Only check conflicts for the same store
     });
 
     if (count >= MAX_CONCURRENT_ADS_PER_LOCATION) {
@@ -562,7 +581,7 @@ export const adminUpdateAdStatus = async (req, res) => {
       const conflictEnd = c?.endDate?.toISOString?.() || "";
       return {
         conflict: true,
-        message: `Ad slot already booked for ${ad.location} between ${conflictStart} and ${conflictEnd}. Please choose different dates.`,
+        message: `Ad slot already booked for ${ad.location} in your store between ${conflictStart} and ${conflictEnd}. Please choose different dates.`,
       };
     }
     return { conflict: false };
@@ -1167,8 +1186,9 @@ export const getSellerAdsConfig = async (req, res) => {
 // ===================== PUBLIC APIs (For User App) =====================
 
 /**
- * Get active ads for display on user app
- * This API is public and returns only active ads that are currently running
+ * Get active ads for display on user app (ONLINE STORE)
+ * This API is public and returns only active ads from SELLER stores
+ * ✅ Seller ads → Online store me show hongi
  */
 export const getActiveAds = async (req, res) => {
   try {
@@ -1179,7 +1199,8 @@ export const getActiveAds = async (req, res) => {
       status: "active",
       startDate: { $lte: now },
       endDate: { $gte: now },
-      deleted: { $ne: true }, // Don't show deleted ads
+      deleted: { $ne: true },
+      sellerId: { $exists: true }, // ✅ Only ads with sellerId (seller ads)
     };
 
     // Filter by location if provided
@@ -1187,17 +1208,26 @@ export const getActiveAds = async (req, res) => {
       filter.location = location;
     }
 
+  // ✅ Use aggregation to filter by seller role
+  // First, get all seller user IDs
+  const sellerUsers = await User.find({ role: "seller" }).select("_id").lean();
+  const sellerIds = sellerUsers.map(u => u._id);
+
+  // Filter ads by sellerIds
+  filter.sellerId = { $in: sellerIds };
+
   const ads = await Ad.find(filter)
-    .populate("sellerId", "name phone")
+    .populate("sellerId", "name phone role")
     .populate("storeId", "name phone images")
     .populate("productId", "productName primaryImage productImages sellingPrice mrp")
-    // Prefer the earliest active ad to avoid newer ones replacing it
     .sort({ startDate: 1 })
     .lean();
 
   // Group ads by location, keeping only one ad per location (first from sorted list)
   const adsByLocation = {};
   ads.forEach((ad) => {
+    // Double check - ensure sellerId exists and role is seller
+    if (!ad.sellerId || ad.sellerId.role !== "seller") return;
     if (adsByLocation[ad.location]) return;
     
     // Prepare product images - combine primaryImage and productImages
@@ -1251,6 +1281,7 @@ export const getActiveAds = async (req, res) => {
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
+      message: "Active ads for online store (seller ads only)",
       data: {
         ads: formattedAds,
         adsByLocation: adsByLocation,
@@ -1267,8 +1298,9 @@ export const getActiveAds = async (req, res) => {
 };
 
 /**
- * Get active ads for retailer's local store display
- * This API returns active ads that should be shown in the local store view
+ * Get active ads for retailer's local store display (LOCAL STORE)
+ * This API returns active ads from RETAILER stores only
+ * ✅ Retailer ads → Local store me show hongi
  */
 export const getRetailerLocalStoreAds = async (req, res) => {
   try {
@@ -1280,6 +1312,7 @@ export const getRetailerLocalStoreAds = async (req, res) => {
       startDate: { $lte: now },
       endDate: { $gte: now },
       deleted: { $ne: true },
+      sellerId: { $exists: true }, // ✅ Only ads with sellerId (retailer ads use sellerId field)
     };
 
     // Filter by location if provided
@@ -1287,8 +1320,16 @@ export const getRetailerLocalStoreAds = async (req, res) => {
       filter.location = location;
     }
 
+    // ✅ Use aggregation to filter by retailer role
+    // First, get all retailer user IDs
+    const retailerUsers = await User.find({ role: "retailer" }).select("_id").lean();
+    const retailerIds = retailerUsers.map(u => u._id);
+
+    // Filter ads by retailerIds
+    filter.sellerId = { $in: retailerIds };
+
     const ads = await Ad.find(filter)
-      .populate("sellerId", "name phone")
+      .populate("sellerId", "name phone role")
       .populate("storeId", "name phone images")
       .populate("productId", "productName primaryImage productImages sellingPrice mrp price name")
       .sort({ startDate: 1 })
@@ -1297,6 +1338,8 @@ export const getRetailerLocalStoreAds = async (req, res) => {
     // Group ads by location, keeping only one ad per location (first from sorted list)
     const adsByLocation = {};
     ads.forEach((ad) => {
+      // Double check - ensure sellerId exists and role is retailer
+      if (!ad.sellerId || ad.sellerId.role !== "retailer") return;
       if (adsByLocation[ad.location]) return;
       
       // Prepare product images - combine primaryImage and productImages
@@ -1371,6 +1414,7 @@ export const getRetailerLocalStoreAds = async (req, res) => {
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
+      message: "Active ads for local store (retailer ads only)",
       data: {
         ads: formattedAds,
         adsByLocation: adsByLocation,
