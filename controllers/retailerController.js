@@ -9,6 +9,7 @@ import Store from '../models/Store.js';
 import mongoose from 'mongoose';
 import OTP_GENERATOR from "otp-generator";
 import { sendSms } from '../helper/sendSms.js';
+import { fetchTrendingProducts } from "../helper/trendingHelper.js";
 
 
 const { ObjectId } = mongoose.Types;
@@ -699,6 +700,11 @@ export const retailerHomePageDataV2 = async (req, res) => {
             updatedAt: storeData.updatedAt,
         } : null;
 
+        const trendingProducts = await fetchTrendingProducts({
+            storeIds: [storeId],
+            limit: 5
+        });
+
         // Respond with the updated data including store
         res.status(200).json({
             success: true,
@@ -708,7 +714,8 @@ export const retailerHomePageDataV2 = async (req, res) => {
                 totalProducts,
                 totalEarnings,
                 totalPendingOrders,
-                last5PendingOrders
+                last5PendingOrders,
+                trendingProducts
             }
         });
     } catch (error) {

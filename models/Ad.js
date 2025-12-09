@@ -38,13 +38,6 @@ const AdSchema = new mongoose.Schema(
         type: String,
       },
     ],
-    // Optional videos (mp4) or GIFs
-    videos: [
-      {
-        type: String,
-      },
-    ],
-    // Optional videos (mp4) or GIFs (can also be in images, but this is explicit)
     videos: [
       {
         type: String,

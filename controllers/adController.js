@@ -12,6 +12,33 @@ import axios from "axios";
 const { ObjectId } = mongoose.Types;
 
 const AD_LOCATIONS = ["banner", "popup", "offer_bar", "crazy_deals", "trending_items", "popular_categories", "stores_near_me", "promotional_banner"];
+const S3_BASE_URL = "https://orsolum.s3.ap-south-1.amazonaws.com/";
+
+const ensureAbsoluteMediaUrl = (value) => {
+  if (!value || typeof value !== "string") return value;
+  if (value.startsWith("http://") || value.startsWith("https://")) return value;
+  return `${S3_BASE_URL}${value}`;
+};
+
+const normalizeMediaArray = (list = []) =>
+  Array.isArray(list) ? list.filter(Boolean).map(ensureAbsoluteMediaUrl) : [];
+
+const buildMediaPayload = (images = [], videos = []) => {
+  const formattedImages = normalizeMediaArray(images);
+  const formattedVideos = normalizeMediaArray(videos);
+  const mediaAssets = [
+    ...formattedImages.map((url) => ({ type: "image", url })),
+    ...formattedVideos.map((url) => ({ type: "video", url })),
+  ];
+
+  return {
+    formattedImages,
+    formattedVideos,
+    primaryImage: formattedImages[0] || null,
+    primaryVideo: formattedVideos[0] || null,
+    mediaAssets,
+  };
+};
 // Allow only one ad per location per store per date range.
 // Different stores can have ads in the same location simultaneously.
 // If you ever want more concurrent ads per slot per store, bump this value.
@@ -1294,22 +1321,23 @@ export const getActiveAds = async (req, res) => {
         productImagesArray = [];
       }
     }
-    
-    // Format ad videos (make absolute if stored as S3 key)
-    const formattedVideos = Array.isArray(ad.videos)
-      ? ad.videos.map((v) => {
-          if (!v) return v;
-          if (v.startsWith("http://") || v.startsWith("https://")) return v;
-          return `https://orsolum.s3.ap-south-1.amazonaws.com/${v}`;
-        })
-      : [];
+    const {
+      formattedImages,
+      formattedVideos,
+      primaryImage,
+      primaryVideo,
+      mediaAssets,
+    } = buildMediaPayload(ad.images, ad.videos);
 
     adsByLocation[ad.location] = {
       _id: ad._id,
       name: ad.name,
       description: ad.description,
-      images: ad.images || [],
+      images: formattedImages,
       videos: formattedVideos,
+      primaryImage,
+      primaryVideo,
+      mediaAssets,
       location: ad.location,
       storeId: ad.storeId
         ? {
@@ -1354,24 +1382,26 @@ export const getActiveAds = async (req, res) => {
       .lean();
 
     const fallbackByLocation = {};
-    fallbackAds.forEach((ad) => {
+      fallbackAds.forEach((ad) => {
       if (fallbackByLocation[ad.location]) return;
 
-      // Format videos
-      const formattedVideos = Array.isArray(ad.videos)
-        ? ad.videos.map((v) => {
-            if (!v) return v;
-            if (v.startsWith("http://") || v.startsWith("https://")) return v;
-            return `https://orsolum.s3.ap-south-1.amazonaws.com/${v}`;
-          })
-        : [];
+      const {
+        formattedImages,
+        formattedVideos,
+        primaryImage,
+        primaryVideo,
+        mediaAssets,
+      } = buildMediaPayload(ad.images, ad.videos);
 
       fallbackByLocation[ad.location] = {
         _id: ad._id,
         name: ad.name,
         description: ad.description,
-        images: ad.images || [],
+        images: formattedImages,
         videos: formattedVideos,
+        primaryImage,
+        primaryVideo,
+        mediaAssets,
         location: ad.location,
         storeId: null,
         productId: null,
@@ -1462,30 +1492,14 @@ export const getRetailerLocalStoreAds = async (req, res) => {
         }
       }
       
-      // Format store images with full URL
-      const storeImagesArray = (ad.storeId?.images || []).map((img) => {
-        if (img.startsWith('http://') || img.startsWith('https://')) {
-          return img;
-        }
-        return `https://orsolum.s3.ap-south-1.amazonaws.com/${img}`;
-      });
-      
-      // Format ad images with full URL
-      const adImagesArray = (ad.images || []).map((img) => {
-        if (img.startsWith('http://') || img.startsWith('https://')) {
-          return img;
-        }
-        return `https://orsolum.s3.ap-south-1.amazonaws.com/${img}`;
-      });
-
-      // Format videos (S3 keys -> full URL)
-      const adVideosArray = (ad.videos || []).map((vid) => {
-        if (!vid) return vid;
-        if (vid.startsWith('http://') || vid.startsWith('https://')) {
-          return vid;
-        }
-        return `https://orsolum.s3.ap-south-1.amazonaws.com/${vid}`;
-      });
+      const storeImagesArray = normalizeMediaArray(ad.storeId?.images || []);
+      const {
+        formattedImages: adImagesArray,
+        formattedVideos: adVideosArray,
+        primaryImage,
+        primaryVideo,
+        mediaAssets,
+      } = buildMediaPayload(ad.images, ad.videos);
       
       // Format product images with full URL
       const formattedProductImages = productImagesArray.map((img) => {
@@ -1501,6 +1515,9 @@ export const getRetailerLocalStoreAds = async (req, res) => {
         description: ad.description,
         images: adImagesArray,
         videos: adVideosArray,
+        primaryImage,
+        primaryVideo,
+        mediaAssets,
         location: ad.location,
         storeId: ad.storeId
           ? {
@@ -1548,22 +1565,13 @@ export const getRetailerLocalStoreAds = async (req, res) => {
       fallbackAds.forEach((ad) => {
         if (fallbackByLocation[ad.location]) return;
 
-        // Format images with full URL
-        const adImagesArray = (ad.images || []).map((img) => {
-          if (img.startsWith('http://') || img.startsWith('https://')) {
-            return img;
-          }
-          return `https://orsolum.s3.ap-south-1.amazonaws.com/${img}`;
-        });
-
-        // Format videos with full URL
-        const adVideosArray = (ad.videos || []).map((vid) => {
-          if (!vid) return vid;
-          if (vid.startsWith('http://') || vid.startsWith('https://')) {
-            return vid;
-          }
-          return `https://orsolum.s3.ap-south-1.amazonaws.com/${vid}`;
-        });
+        const {
+          formattedImages: adImagesArray,
+          formattedVideos: adVideosArray,
+          primaryImage,
+          primaryVideo,
+          mediaAssets,
+        } = buildMediaPayload(ad.images, ad.videos);
 
         fallbackByLocation[ad.location] = {
           _id: ad._id,
@@ -1571,6 +1579,9 @@ export const getRetailerLocalStoreAds = async (req, res) => {
           description: ad.description,
           images: adImagesArray,
           videos: adVideosArray,
+          primaryImage,
+          primaryVideo,
+          mediaAssets,
           location: ad.location,
           storeId: null,
           productId: null,

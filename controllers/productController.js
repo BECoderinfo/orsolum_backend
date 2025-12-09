@@ -8,6 +8,7 @@ import StoreCategory from '../models/StoreCategory.js';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
 import { getDistance } from "geolib";
+import { fetchTrendingProducts } from "../helper/trendingHelper.js";
 
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
@@ -1082,7 +1083,9 @@ export const getLocalStoreHomePageData = async (req, res) => {
 
 export const getLocalStoreHomePageDataV2 = async (req, res) => {
     try {
-        const { lat, long, city } = req.body;
+        const lat = req.body?.lat ?? req.query?.lat;
+        const long = req.body?.long ?? req.query?.long;
+        const city = req.body?.city ?? req.query?.city;
         const userDetails = await User.findById(req.user._id).select("lat long city state");
 
         const parsedLat = lat !== undefined && lat !== null && lat !== "" ? parseFloat(lat) : null;
@@ -1176,6 +1179,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                 },
                 {
                     $project: {
+                        _id: 1,
                         productImages: 1,
                         category_name: 1,
                         name: 1,
@@ -1225,6 +1229,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                 },
                 {
                     $project: {
+                        _id: 1,
                         productImages: 1,
                         category_name: 1,
                         name: 1,
@@ -1263,6 +1268,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                 },
                 {
                     $project: {
+                        _id: 1,
                         productImages: 1,
                         category_name: 1,
                         name: 1,
@@ -1334,12 +1340,19 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             city: searchCity || null
         };
 
+        const nearbyStoreIds = stores.map(store => store._id).filter(Boolean);
+        const trendingProducts = await fetchTrendingProducts({
+            storeIds: nearbyStoreIds,
+            limit: 8
+        });
+
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
             data: {
                 categories,
                 stores,
+                trendingProducts,
                 totalCartCount,
                 location: resolvedLocation
             }
