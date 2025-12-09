@@ -1,7 +1,7 @@
 import express from "express";
 import { body } from 'express-validator';
 import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, productDetails, acceptProduct, rejectProduct, deleteLocalProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus, createOffer, listOffers, updateOffer, deleteOffer, getWelcomeImage, uploadWelcomeImage, deleteWelcomeImage, saveStorePopularProducts, updateStoreRating } from "../controllers/adminController.js";
-import { uploadStoreImagesMulter } from "../helper/uploadImage.js";
+import { uploadAdMediaAny, uploadAdMediaMulter, uploadStoreImagesMulter } from "../helper/uploadImage.js";
 import { adminAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { createWorkHours, getAllWorkHours, updateWorkHours, deleteWorkHours } from "../controllers/workHoursController.js";
 import ShiprocketService from '../helper/shiprocketService.js';
@@ -112,8 +112,18 @@ adminRouter.put('/admin/ads/:id/status/v1', adminAuthentication, adminUpdateAdSt
 adminRouter.delete('/admin/ads/:id/v1', adminAuthentication, adminDeleteAd);
 
 // Orsolum own ads CRUD
-adminRouter.post('/admin/orsolum/ads/v1', adminAuthentication, uploadStoreImagesMulter.array("images", 10), adminCreateOrsolumAd);
-adminRouter.put('/admin/orsolum/ads/:id/v1', adminAuthentication, adminUpdateOrsolumAd);
+adminRouter.post(
+  '/admin/orsolum/ads/v1',
+  adminAuthentication,
+  uploadAdMediaAny,
+  adminCreateOrsolumAd
+);
+adminRouter.put(
+  '/admin/orsolum/ads/:id/v1',
+  adminAuthentication,
+  uploadAdMediaAny,
+  adminUpdateOrsolumAd
+);
 adminRouter.delete('/admin/orsolum/ads/:id/v1', adminAuthentication, adminDeleteOrsolumAd);
 
 // Ads configuration (rates + bank details)

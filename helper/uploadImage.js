@@ -78,6 +78,29 @@ export const uploadStoreImagesMulter = multer({
     }),
 });
 
+// Ads media (images + videos) uploader
+export const uploadAdMediaMulter = multer({
+    storage: multerS3({
+        s3: s3,
+        bucket: bucketCred.bucketName,
+        contentType: multerS3.AUTO_CONTENT_TYPE,
+        metadata: (req, file, cb) => {
+            cb(null, { fieldName: file.fieldname });
+        },
+        key: (req, file, cb) => {
+            const folderName = 'Ads';
+            const fileName = `${Date.now().toString()}_${file.originalname}`;
+            cb(null, `${folderName}/${fileName}`);
+        },
+    }),
+    limits: {
+        fileSize: 200 * 1024 * 1024, // 200MB cap to allow video uploads
+    },
+});
+
+// Flexible middleware to accept any ad media field names (images/videos)
+export const uploadAdMediaAny = uploadAdMediaMulter.any();
+
 export const uploadDeliveryBoyImage = multer({
     storage: multerS3({
         s3: s3,

@@ -23,6 +23,24 @@ const ensureAbsoluteMediaUrl = (value) => {
 const normalizeMediaArray = (list = []) =>
   Array.isArray(list) ? list.filter(Boolean).map(ensureAbsoluteMediaUrl) : [];
 
+const extractUploadedUrls = (files = []) =>
+  Array.isArray(files) ? files.map((file) => file.location || file.key).filter(Boolean) : [];
+
+// Group files when multer.any() is used
+const groupAnyUploadedMedia = (files = []) => {
+  if (!Array.isArray(files)) return { images: [], videos: [] };
+  const images = [];
+  const videos = [];
+  files.forEach((file) => {
+    if (file?.mimetype?.startsWith("image/") || ["images", "image", "banner"].includes(file.fieldname)) {
+      images.push(file);
+    } else if (file?.mimetype?.startsWith("video/") || ["videos", "video"].includes(file.fieldname)) {
+      videos.push(file);
+    }
+  });
+  return { images, videos };
+};
+
 const buildMediaPayload = (images = [], videos = []) => {
   const formattedImages = normalizeMediaArray(images);
   const formattedVideos = normalizeMediaArray(videos);
@@ -125,35 +143,48 @@ export const createSellerAdRequest = async (req, res) => {
       });
     }
 
-    // Handle uploaded images from multer
+    // Handle uploaded images from multer + manual URLs
     let images = [];
-    if (req.files && req.files.length > 0) {
-      // Images uploaded via multer - get S3 URLs
-      images = req.files.map((file) => file.location || file.key);
-    } else if (req.body.images) {
+    const { images: anyImages, videos: anyVideos } = groupAnyUploadedMedia(req.files);
+    const uploadedImages = req.files?.images || anyImages || (Array.isArray(req.files) ? req.files : []);
+    if (uploadedImages?.length) {
+      images.push(...extractUploadedUrls(uploadedImages));
+    }
+    if (req.body.images) {
       // Fallback: comma-separated image URLs from body
       if (typeof req.body.images === "string") {
-        images = req.body.images
-          .split(",")
-          .map((img) => img.trim())
-          .filter(Boolean);
+        images.push(
+          ...req.body.images
+            .split(",")
+            .map((img) => img.trim())
+            .filter(Boolean)
+        );
       } else if (Array.isArray(req.body.images)) {
-        images = req.body.images;
+        images.push(...req.body.images.filter(Boolean));
       }
     }
+    // Deduplicate images
+    images = [...new Set(images)];
 
-    // Videos (URLs, mp4/gif) - optional
+    // Videos (uploaded files or URLs)
     let videoUrls = [];
+    const uploadedVideos = req.files?.videos || anyVideos || [];
+    if (uploadedVideos?.length) {
+      videoUrls.push(...extractUploadedUrls(uploadedVideos));
+    }
     if (videos) {
       if (typeof videos === "string") {
-        videoUrls = videos
-          .split(",")
-          .map((v) => v.trim())
-          .filter(Boolean);
+        videoUrls.push(
+          ...videos
+            .split(",")
+            .map((v) => v.trim())
+            .filter(Boolean)
+        );
       } else if (Array.isArray(videos)) {
-        videoUrls = videos.filter(Boolean);
+        videoUrls.push(...videos.filter(Boolean));
       }
     }
+    videoUrls = [...new Set(videoUrls)];
 
     // Ensure seller has a store (if not explicitly provided)
     let finalStoreId = storeId;
@@ -413,6 +444,7 @@ export const renewSellerAd = async (req, res) => {
       description: ad.description,
       location: ad.location,
       images: ad.images,
+      videos: ad.videos,
       totalRunDays: Number(additionalRunDays),
       inquiry:
         req.body.inquiry ||
@@ -750,35 +782,46 @@ export const adminCreateOrsolumAd = async (req, res) => {
       });
     }
 
-    // Handle uploaded images from multer
+    // Handle uploaded images from multer + manual URLs
     let images = [];
-    if (req.files && req.files.length > 0) {
-      // Images uploaded via multer - get S3 URLs
-      images = req.files.map((file) => file.location || file.key);
-    } else if (req.body.images) {
-      // Fallback: comma-separated image URLs from body
+    const { images: anyImages, videos: anyVideos } = groupAnyUploadedMedia(req.files);
+    const uploadedImages = req.files?.images || anyImages || (Array.isArray(req.files) ? req.files : []);
+    if (uploadedImages?.length) {
+      images.push(...extractUploadedUrls(uploadedImages));
+    }
+    if (req.body.images) {
       if (typeof req.body.images === "string") {
-        images = req.body.images
-          .split(",")
-          .map((img) => img.trim())
-          .filter(Boolean);
+        images.push(
+          ...req.body.images
+            .split(",")
+            .map((img) => img.trim())
+            .filter(Boolean)
+        );
       } else if (Array.isArray(req.body.images)) {
-        images = req.body.images;
+        images.push(...req.body.images.filter(Boolean));
       }
     }
+    images = [...new Set(images)];
 
-    // Videos (URLs, mp4/gif) - optional
+    // Videos (uploaded files or URLs)
     let videoUrls = [];
+    const uploadedVideos = req.files?.videos || anyVideos || [];
+    if (uploadedVideos?.length) {
+      videoUrls.push(...extractUploadedUrls(uploadedVideos));
+    }
     if (videos) {
       if (typeof videos === "string") {
-        videoUrls = videos
-          .split(",")
-          .map((v) => v.trim())
-          .filter(Boolean);
+        videoUrls.push(
+          ...videos
+            .split(",")
+            .map((v) => v.trim())
+            .filter(Boolean)
+        );
       } else if (Array.isArray(videos)) {
-        videoUrls = videos.filter(Boolean);
+        videoUrls.push(...videos.filter(Boolean));
       }
     }
+    videoUrls = [...new Set(videoUrls)];
 
     // Handle scheduled date if provided
     let start, end, adStatus;
@@ -879,21 +922,43 @@ export const adminUpdateOrsolumAd = async (req, res) => {
       });
     }
 
+    const { images: anyImages, videos: anyVideos } = groupAnyUploadedMedia(req.files);
+    const uploadedImages = extractUploadedUrls(req.files?.images || anyImages);
+    const uploadedVideos = extractUploadedUrls(req.files?.videos || anyVideos);
+
     if (name !== undefined) ad.name = name;
     if (description !== undefined) ad.description = description;
     if (location && AD_LOCATIONS.includes(location)) ad.location = location;
-    if (Array.isArray(images)) ad.images = images;
+    
+    let imagesToSet = null;
+    if (Array.isArray(images)) {
+      imagesToSet = images.filter(Boolean);
+    }
+    if (uploadedImages.length) {
+      imagesToSet = [...(imagesToSet ?? ad.images ?? []), ...uploadedImages];
+    }
+    if (imagesToSet !== null) {
+      ad.images = [...new Set(imagesToSet)];
+    }
+
+    let videosToSet = null;
     if (videos !== undefined) {
       if (typeof videos === "string") {
-        ad.videos = videos
+        videosToSet = videos
           .split(",")
           .map((v) => v.trim())
           .filter(Boolean);
       } else if (Array.isArray(videos)) {
-        ad.videos = videos.filter(Boolean);
+        videosToSet = videos.filter(Boolean);
       } else {
-        ad.videos = [];
+        videosToSet = [];
       }
+    }
+    if (uploadedVideos.length) {
+      videosToSet = [...(videosToSet ?? ad.videos ?? []), ...uploadedVideos];
+    }
+    if (videosToSet !== null) {
+      ad.videos = [...new Set(videosToSet)];
     }
     if (totalRunDays !== undefined) ad.totalRunDays = Number(totalRunDays) || ad.totalRunDays;
     if (inquiry !== undefined) ad.inquiry = inquiry;

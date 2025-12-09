@@ -1,6 +1,6 @@
 import express from "express";
 import { sellerAuthentication } from "../middlewares/middleware.js";
-import { uploadStoreImagesMulter, uploadUserImage } from "../helper/uploadImage.js";
+import { uploadAdMediaAny, uploadAdMediaMulter, uploadStoreImagesMulter, uploadUserImage } from "../helper/uploadImage.js";
 import { createSellerStore, updateStoreObjectives, updateStoreLicense, getSellerStoreDetails, updateSellerStore } from "../controllers/sellerStoreController.js";
 import { listOfCategories } from "../controllers/storeController.js";
 import { 
@@ -101,7 +101,12 @@ sellerRouter.post("/seller/help-center/tickets/v1", sellerAuthentication, create
 
 // 📣 Seller Ads Management
 sellerRouter.get("/seller/ads/config/v1", sellerAuthentication, getSellerAdsConfig);
-sellerRouter.post("/seller/ads/v1", sellerAuthentication, uploadStoreImagesMulter.array("images", 10), createSellerAdRequest);
+sellerRouter.post(
+  "/seller/ads/v1",
+  sellerAuthentication,
+  uploadAdMediaAny,
+  createSellerAdRequest
+);
 sellerRouter.get("/seller/ads/v1", sellerAuthentication, listSellerAds);
 sellerRouter.get("/seller/ads/:id/v1", sellerAuthentication, getSellerAdDetails);
 sellerRouter.post("/seller/ads/:id/renew/v1", sellerAuthentication, renewSellerAd);
