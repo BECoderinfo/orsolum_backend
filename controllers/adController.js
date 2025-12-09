@@ -704,6 +704,7 @@ export const adminCreateOrsolumAd = async (req, res) => {
       inquiry,
       startDate,
       scheduledStartDate,
+      videos,
     } = req.body;
 
     if (!name || !location || !totalRunDays) {
@@ -736,6 +737,19 @@ export const adminCreateOrsolumAd = async (req, res) => {
           .filter(Boolean);
       } else if (Array.isArray(req.body.images)) {
         images = req.body.images;
+      }
+    }
+
+    // Videos (URLs, mp4/gif) - optional
+    let videoUrls = [];
+    if (videos) {
+      if (typeof videos === "string") {
+        videoUrls = videos
+          .split(",")
+          .map((v) => v.trim())
+          .filter(Boolean);
+      } else if (Array.isArray(videos)) {
+        videoUrls = videos.filter(Boolean);
       }
     }
 
@@ -775,6 +789,7 @@ export const adminCreateOrsolumAd = async (req, res) => {
       description: description?.trim(),
       location,
       images,
+      videos: videoUrls,
       totalRunDays: Number(totalRunDays),
       inquiry: inquiry?.trim(),
       status: adStatus,
@@ -813,6 +828,7 @@ export const adminUpdateOrsolumAd = async (req, res) => {
       description,
       location,
       images,
+      videos,
       totalRunDays,
       inquiry,
       status: newStatus,
@@ -840,6 +856,18 @@ export const adminUpdateOrsolumAd = async (req, res) => {
     if (description !== undefined) ad.description = description;
     if (location && AD_LOCATIONS.includes(location)) ad.location = location;
     if (Array.isArray(images)) ad.images = images;
+    if (videos !== undefined) {
+      if (typeof videos === "string") {
+        ad.videos = videos
+          .split(",")
+          .map((v) => v.trim())
+          .filter(Boolean);
+      } else if (Array.isArray(videos)) {
+        ad.videos = videos.filter(Boolean);
+      } else {
+        ad.videos = [];
+      }
+    }
     if (totalRunDays !== undefined) ad.totalRunDays = Number(totalRunDays) || ad.totalRunDays;
     if (inquiry !== undefined) ad.inquiry = inquiry;
 
@@ -1307,6 +1335,54 @@ export const getActiveAds = async (req, res) => {
   // Flatten for compatibility
   const formattedAds = Object.values(adsByLocation);
 
+  // Fallback: if no seller ads, show Orsolum (admin) ads
+  if (formattedAds.length === 0) {
+    const nowFallback = new Date();
+    const fallbackFilter = {
+      status: "active",
+      startDate: { $lte: nowFallback },
+      endDate: { $gte: nowFallback },
+      deleted: { $ne: true },
+      sellerId: { $exists: false }, // Admin (Orsolum) ads
+    };
+    if (location && AD_LOCATIONS.includes(location)) {
+      fallbackFilter.location = location;
+    }
+
+    const fallbackAds = await Ad.find(fallbackFilter)
+      .sort({ startDate: 1 })
+      .lean();
+
+    const fallbackByLocation = {};
+    fallbackAds.forEach((ad) => {
+      if (fallbackByLocation[ad.location]) return;
+
+      // Format videos
+      const formattedVideos = Array.isArray(ad.videos)
+        ? ad.videos.map((v) => {
+            if (!v) return v;
+            if (v.startsWith("http://") || v.startsWith("https://")) return v;
+            return `https://orsolum.s3.ap-south-1.amazonaws.com/${v}`;
+          })
+        : [];
+
+      fallbackByLocation[ad.location] = {
+        _id: ad._id,
+        name: ad.name,
+        description: ad.description,
+        images: ad.images || [],
+        videos: formattedVideos,
+        location: ad.location,
+        storeId: null,
+        productId: null,
+        startDate: ad.startDate,
+        endDate: ad.endDate,
+      };
+    });
+
+    formattedAds.push(...Object.values(fallbackByLocation));
+  }
+
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
@@ -1449,6 +1525,62 @@ export const getRetailerLocalStoreAds = async (req, res) => {
 
     // Flatten for compatibility
     const formattedAds = Object.values(adsByLocation);
+
+    // Fallback: if no retailer ads, show Orsolum (admin) ads
+    if (formattedAds.length === 0) {
+      const nowFallback = new Date();
+      const fallbackFilter = {
+        status: "active",
+        startDate: { $lte: nowFallback },
+        endDate: { $gte: nowFallback },
+        deleted: { $ne: true },
+        sellerId: { $exists: false }, // Admin (Orsolum) ads
+      };
+      if (location && AD_LOCATIONS.includes(location)) {
+        fallbackFilter.location = location;
+      }
+
+      const fallbackAds = await Ad.find(fallbackFilter)
+        .sort({ startDate: 1 })
+        .lean();
+
+      const fallbackByLocation = {};
+      fallbackAds.forEach((ad) => {
+        if (fallbackByLocation[ad.location]) return;
+
+        // Format images with full URL
+        const adImagesArray = (ad.images || []).map((img) => {
+          if (img.startsWith('http://') || img.startsWith('https://')) {
+            return img;
+          }
+          return `https://orsolum.s3.ap-south-1.amazonaws.com/${img}`;
+        });
+
+        // Format videos with full URL
+        const adVideosArray = (ad.videos || []).map((vid) => {
+          if (!vid) return vid;
+          if (vid.startsWith('http://') || vid.startsWith('https://')) {
+            return vid;
+          }
+          return `https://orsolum.s3.ap-south-1.amazonaws.com/${vid}`;
+        });
+
+        fallbackByLocation[ad.location] = {
+          _id: ad._id,
+          name: ad.name,
+          description: ad.description,
+          images: adImagesArray,
+          videos: adVideosArray,
+          location: ad.location,
+          storeId: null,
+          productId: null,
+          startDate: ad.startDate,
+          endDate: ad.endDate,
+        };
+      });
+
+      formattedAds.push(...Object.values(fallbackByLocation));
+    }
 
     return res.status(status.OK).json({
       status: jsonStatus.OK,
