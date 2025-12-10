@@ -26,9 +26,6 @@ const { ObjectId } = mongoose.Types;
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
 
-// Admin-created online products must stay hidden from user-facing flows
-const HIDE_ADMIN_ONLINE_PRODUCTS = true;
-
 // Calculate Offer Percentage
 const calculateOffPer = (mrp, sellingPrice) => {
     const discount = ((mrp - sellingPrice) / mrp) * 100;
@@ -629,24 +626,8 @@ export const onlineStoreHomePage = async (req, res) => {
             { $limit: 8 }
         ]);
 
-        // Hide admin-created online products from user-facing home page
-        if (HIDE_ADMIN_ONLINE_PRODUCTS) {
-            return res.status(status.OK).json({
-                status: jsonStatus.OK,
-                success: true,
-                data: {
-                    subCategories,
-                    categories,
-                    popularCategories,
-                    brands,
-                    trendingProducts: [],
-                    totalCartCount: 0
-                }
-            });
-        }
-
-        // Fetch trending products (limit 5)
-        const trendingProducts = await OnlineProduct.aggregate([
+        // Fetch trending admin online products (limit 5)
+        const trendingAdminProducts = await OnlineProduct.aggregate([
             { $match: { deleted: false, trending: true } },
             {
                 $lookup: {
@@ -654,7 +635,7 @@ export const onlineStoreHomePage = async (req, res) => {
                     localField: "_id",
                     foreignField: "parentProduct",
                     as: "units",
-                    pipeline: [{ $match: { deleted: false } }]
+                    pipeline: [{ $match: { deleted: false } }, { $limit: 1 }]
                 }
             },
             {
@@ -668,7 +649,8 @@ export const onlineStoreHomePage = async (req, res) => {
             {
                 $addFields: {
                     units: { $ifNull: [{ $arrayElemAt: ["$units", 0] }, null] },
-                    subCategory: { $arrayElemAt: ["$subCategory", 0] }
+                    subCategory: { $arrayElemAt: ["$subCategory", 0] },
+                    source: { $literal: "admin" }
                 }
             },
             { $limit: 5 },
@@ -677,15 +659,43 @@ export const onlineStoreHomePage = async (req, res) => {
                     units: 1,
                     images: 1,
                     name: 1,
-                    subCategoryPercentageOff: "$subCategory.percentageOff"
+                    subCategoryPercentageOff: "$subCategory.percentageOff",
+                    source: 1
                 }
             }
         ]);
 
+        // Fetch seller products (latest) as trending fallback/demo (limit 5)
+        const trendingSellerProducts = await Product.aggregate([
+            {
+                $match: {
+                    deleted: false,
+                    status: "A"
+                }
+            },
+            { $sort: { createdAt: -1 } },
+            { $limit: 5 },
+            {
+                $project: {
+                    _id: 1,
+                    name: "$productName",
+                    images: "$productImages",
+                    units: {
+                        mrp: "$mrp",
+                        sellingPrice: "$sellingPrice",
+                        offPer: "$offPer"
+                    },
+                    source: { $literal: "seller" }
+                }
+            }
+        ]);
+
+        const trendingProducts = [...trendingAdminProducts, ...trendingSellerProducts];
+
         // Modify unit details if user is premium and percentageOff > 0
         if (req.user.isPremium) {
             trendingProducts.forEach(product => {
-                if (product.units) {
+                if (product.units && product.source === "admin") {
                     const { sellingPrice, mrp } = product.units;
                     const subcategoryPercentage = product.subCategoryPercentageOff || 0;
 
@@ -740,17 +750,6 @@ export const onlineStoreHomePage = async (req, res) => {
 
 export const allTrendingProducts = async (req, res) => {
     try {
-        if (HIDE_ADMIN_ONLINE_PRODUCTS) {
-            return res.status(status.OK).json({
-                status: jsonStatus.OK,
-                success: true,
-                data: {
-                    products: [],
-                    totalCount: 0,
-                    totalCartCount: 0
-                }
-            });
-        }
         const search = req.query.search?.trim() || '';
         const page = parseInt(req.query.skip) || 1;
         const skip = (page - 1) * limit;
@@ -763,7 +762,7 @@ export const allTrendingProducts = async (req, res) => {
             matchConditions.name = { $regex: search, $options: 'i' };
         }
 
-        const trendingProducts = await OnlineProduct.aggregate([
+        const trendingAdminProducts = await OnlineProduct.aggregate([
             { $match: matchConditions },
             {
                 $lookup: {
@@ -793,17 +792,46 @@ export const allTrendingProducts = async (req, res) => {
                     units: 1,
                     images: 1,
                     name: 1,
-                    subCategoryPercentageOff: "$subCategory.percentageOff"
+                    subCategoryPercentageOff: "$subCategory.percentageOff",
+                    source: { $literal: "admin" }
                 }
             },
             { $skip: skip },
             { $limit: limit }
         ]);
 
+        const sellerProducts = await Product.aggregate([
+            {
+                $match: {
+                    deleted: false,
+                    status: "A",
+                    ...(search ? { productName: { $regex: search, $options: "i" } } : {})
+                }
+            },
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $project: {
+                    _id: 1,
+                    name: "$productName",
+                    images: "$productImages",
+                    units: {
+                        mrp: "$mrp",
+                        sellingPrice: "$sellingPrice",
+                        offPer: "$offPer"
+                    },
+                    source: { $literal: "seller" }
+                }
+            }
+        ]);
+
+        const trendingProducts = [...trendingAdminProducts, ...sellerProducts];
+
         // Modify unit details if user is premium and percentageOff > 0
         if (req.user.isPremium) {
             trendingProducts.forEach(product => {
-                if (product.units) {
+                if (product.units && product.source === "admin") {
                     const { sellingPrice, mrp } = product.units;
                     const subcategoryPercentage = product.subCategoryPercentageOff || 0;
 
@@ -821,13 +849,14 @@ export const allTrendingProducts = async (req, res) => {
             });
         }
 
-        // Build count match conditions (same as main query)
-        const countMatchConditions = { deleted: false, trending: true };
-        if (search) {
-            countMatchConditions.name = { $regex: search, $options: 'i' };
-        }
-
-        const totalCount = await OnlineProduct.countDocuments(countMatchConditions);
+        // Count for admin and seller combined (rough: sum of both counts)
+        const adminCountConditions = { deleted: false, trending: true, ...(search ? { name: { $regex: search, $options: 'i' } } : {}) };
+        const sellerCountConditions = { deleted: false, status: "A", ...(search ? { productName: { $regex: search, $options: 'i' } } : {}) };
+        const [adminCount, sellerCount] = await Promise.all([
+            OnlineProduct.countDocuments(adminCountConditions),
+            Product.countDocuments(sellerCountConditions)
+        ]);
+        const totalCount = adminCount + sellerCount;
 
         // Fetch cart items
         let totalCartCount = 0;
