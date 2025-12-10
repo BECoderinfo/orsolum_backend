@@ -1055,8 +1055,9 @@ export const getLocalStoreHomePageData = async (req, res) => {
                 }
             },
             {
+                // Show only seller-owned stores to hide retailer inventory
                 $match: {
-                    ownerRole: "retailer"
+                    ownerRole: "seller"
                 }
             },
             {
@@ -1297,8 +1298,9 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     }
                 },
                 {
+                    // Show only seller-owned stores to hide retailer inventory
                     $match: {
-                        ownerRole: "retailer"
+                        ownerRole: "seller"
                     }
                 },
                 {
@@ -1379,8 +1381,9 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     }
                 },
                 {
+                    // Show only seller-owned stores to hide retailer inventory
                     $match: {
-                        ownerRole: "retailer"
+                        ownerRole: "seller"
                     }
                 },
                 {
@@ -1440,8 +1443,9 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     }
                 },
                 {
+                    // Show only seller-owned stores to hide retailer inventory
                     $match: {
-                        ownerRole: "retailer"
+                        ownerRole: "seller"
                     }
                 },
                 {

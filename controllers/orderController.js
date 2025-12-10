@@ -715,7 +715,18 @@ export const cartDetails = async (req, res) => {
 
     donate = donate ? Number(donate) : 0;
 
-    const findStore = await Store.findById(id);
+    // Guard against invalid/missing store IDs to avoid CastErrors
+    if (!ObjectId.isValid(id)) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid store id",
+      });
+    }
+
+    const storeObjectId = new ObjectId(id);
+
+    const findStore = await Store.findById(storeObjectId);
     if (!findStore) {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
@@ -727,7 +738,7 @@ export const cartDetails = async (req, res) => {
     const list = await Store.aggregate([
       {
         $match: {
-          _id: new ObjectId(id),
+          _id: storeObjectId,
         },
       },
       {
@@ -799,7 +810,10 @@ export const cartDetails = async (req, res) => {
     let appliedOffers = []; // Store applied offers
 
     // Fetch store offers
-    const storeOffers = await StoreOffer.find({ storeId: id, deleted: false });
+    const storeOffers = await StoreOffer.find({
+      storeId: storeObjectId,
+      deleted: false,
+    });
 
     const enhancedList = list.map((store) => {
       let storeTotalAmount = 0;
