@@ -483,6 +483,39 @@ export const createProduct = async (req, res) => {
         savedProduct.toObject ? savedProduct.toObject() : savedProduct
       );
   
+      // ✅ Sync to online store when created by seller role (so seller products appear in online store)
+      try {
+        if (req.user?.role === "seller") {
+          // Create OnlineProduct
+          const onlineProductPayload = {
+            name: productName,
+            information,
+            manufacturer: companyName,
+            images: productImages,
+            details: parsedDetails,
+            categoryId: categoryParse.value,
+            subCategoryId: subCategoryParse.value,
+            createdBy: req.user._id, // although schema ref is admin, keep creator for trace
+            updatedBy: req.user._id,
+          };
+
+          const onlineProduct = await OnlineProduct.create(onlineProductPayload);
+
+          // Create primary unit for online product (using primaryUnit or base prices)
+          const primaryUnitPayload = {
+            qty: primaryUnit?.qty || "1",
+            mrp: parsedMrp,
+            sellingPrice: parsedSellingPrice,
+            offPer: offPer,
+            parentProduct: onlineProduct._id,
+          };
+          await ProductUnitOnline.create(primaryUnitPayload);
+        }
+      } catch (syncErr) {
+        console.warn("⚠️ Online product sync failed:", syncErr.message);
+        // Do not block retailer product creation on sync failure
+      }
+
       // ✅ Success response
       res.status(status.Create).json({
         status: jsonStatus.Create,
@@ -980,6 +1013,10 @@ export const productList = async (req, res) => {
 
 export const getLocalStoreHomePageData = async (req, res) => {
     try {
+        const lat = req.body?.lat ?? req.query?.lat;
+        const long = req.body?.long ?? req.query?.long;
+        const parsedLat = Number.isFinite(parseFloat(lat)) ? parseFloat(lat) : null;
+        const parsedLong = Number.isFinite(parseFloat(long)) ? parseFloat(long) : null;
 
         const categories = await StoreCategory.aggregate([
             {
@@ -997,10 +1034,29 @@ export const getLocalStoreHomePageData = async (req, res) => {
             }
         ]);
 
-        const stores = await Store.aggregate([
+        const basePipeline = [
             {
                 $match: {
                     status: "A"
+                }
+            },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "owner",
+                    pipeline: [{ $project: { role: 1 } }]
+                }
+            },
+            {
+                $addFields: {
+                    ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+                }
+            },
+            {
+                $match: {
+                    ownerRole: "retailer"
                 }
             },
             {
@@ -1026,7 +1082,9 @@ export const getLocalStoreHomePageData = async (req, res) => {
                     productImages: 1,
                     category_name: 1,
                     name: 1,
-                    address: 1
+                    address: 1,
+                    location: 1,
+                    distance: 1
                 }
             },
             {
@@ -1037,10 +1095,23 @@ export const getLocalStoreHomePageData = async (req, res) => {
             {
                 $limit: 5
             }
-        ]);
+        ];
 
-        if (lat && long) {
-            const userLocation = { latitude: parseFloat(lat), longitude: parseFloat(long) };
+        if (parsedLat !== null && parsedLong !== null) {
+            basePipeline.unshift({
+                $geoNear: {
+                    near: { type: "Point", coordinates: [parsedLong, parsedLat] },
+                    distanceField: "distance",
+                    maxDistance: 5000, // 5 km radius
+                    spherical: true
+                }
+            });
+        }
+
+        let stores = await Store.aggregate(basePipeline);
+
+        if (parsedLat !== null && parsedLong !== null) {
+            const userLocation = { latitude: parsedLat, longitude: parsedLong };
             const speedKmPerHour = 30; // Adjust for travel mode
 
             stores = stores.map(store => {
@@ -1050,7 +1121,7 @@ export const getLocalStoreHomePageData = async (req, res) => {
                         longitude: store.location.coordinates[0]
                     };
 
-                    const distance = getDistance(userLocation, storeLocation) / 1000; // Convert to km
+                    const distance = store.distance ? store.distance / 1000 : getDistance(userLocation, storeLocation) / 1000; // Convert to km
                     const estimatedTime = (distance / speedKmPerHour) * 60; // Convert to minutes
 
                     return {
@@ -1195,8 +1266,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                 matchConditions.address = { $regex: areaRegex };
             }
 
-            // Fetch stores within 5-7 km radius (using 6km as average)
-            // If area filtering is applied, this ensures stores are both in the area AND nearby
+            // Fetch stores within 5 km radius (retailer-owned only)
             stores = await Store.aggregate([
                 {
                     $geoNear: {
@@ -1205,12 +1275,31 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                             coordinates: [searchLong, searchLat] // Longitude first, then latitude
                         },
                         distanceField: "distance",
-                        maxDistance: 6000, // 6 km (average of 5-7 km range) - always use this for location-based search
+                        maxDistance: 5000, // strict 5 km radius
                         spherical: true
                     }
                 },
                 {
                     $match: matchConditions
+                },
+                {
+                    $lookup: {
+                        from: "users",
+                        localField: "createdBy",
+                        foreignField: "_id",
+                        as: "owner",
+                        pipeline: [{ $project: { role: 1 } }]
+                    }
+                },
+                {
+                    $addFields: {
+                        ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+                    }
+                },
+                {
+                    $match: {
+                        ownerRole: "retailer"
+                    }
                 },
                 {
                     $lookup: {
@@ -1238,7 +1327,8 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                         name: 1,
                         address: 1,
                         images: 1,
-                        location: 1
+                        location: 1,
+                        distance: 1
                     }
                 },
                 {
@@ -1273,6 +1363,25 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             stores = await Store.aggregate([
                 {
                     $match: matchConditions
+                },
+                {
+                    $lookup: {
+                        from: "users",
+                        localField: "createdBy",
+                        foreignField: "_id",
+                        as: "owner",
+                        pipeline: [{ $project: { role: 1 } }]
+                    }
+                },
+                {
+                    $addFields: {
+                        ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+                    }
+                },
+                {
+                    $match: {
+                        ownerRole: "retailer"
+                    }
                 },
                 {
                     $lookup: {
@@ -1318,6 +1427,25 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                 { $match: { status: "A" } },
                 {
                     $lookup: {
+                        from: "users",
+                        localField: "createdBy",
+                        foreignField: "_id",
+                        as: "owner",
+                        pipeline: [{ $project: { role: 1 } }]
+                    }
+                },
+                {
+                    $addFields: {
+                        ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+                    }
+                },
+                {
+                    $match: {
+                        ownerRole: "retailer"
+                    }
+                },
+                {
+                    $lookup: {
                         from: "store_categories",
                         localField: "category",
                         foreignField: "_id",
@@ -1358,7 +1486,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                         longitude: store.location.coordinates[0]
                     };
 
-                    const distance = getDistance(userLocation, storeLocation) / 1000; // Convert to km
+                    const distance = store.distance ? store.distance / 1000 : getDistance(userLocation, storeLocation) / 1000; // Convert to km
                     const estimatedTime = (distance / speedKmPerHour) * 60; // Convert to minutes
 
                     return {
@@ -1487,7 +1615,7 @@ export const getAllStores = async (req, res) => {
                         coordinates: [parseFloat(long), parseFloat(lat)]
                     },
                     distanceField: "distance",
-                    maxDistance: 6000, // 6 km (average of 5-7 km range)
+                    maxDistance: 5000, // 5 km radius as requested
                     spherical: true
                 }
             });
@@ -1496,7 +1624,7 @@ export const getAllStores = async (req, res) => {
                 ...matchObj,
                 location: {
                     $geoWithin: {
-                        $centerSphere: [[parseFloat(long), parseFloat(lat)], 6000 / 6378.1] // 6 km radius
+                        $centerSphere: [[parseFloat(long), parseFloat(lat)], 5000 / 6378.1] // 5 km radius
                     }
                 }
             };
@@ -1505,6 +1633,25 @@ export const getAllStores = async (req, res) => {
         aggregationPipeline.push(
             {
                 $match: matchObj
+            },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "creator",
+                    pipeline: [{ $project: { role: 1 } }]
+                }
+            },
+            {
+                $addFields: {
+                    creatorRole: { $ifNull: [{ $arrayElemAt: ["$creator.role", 0] }, null] }
+                }
+            },
+            {
+                $match: {
+                    creatorRole: "retailer"
+                }
             },
             {
                 $lookup: {

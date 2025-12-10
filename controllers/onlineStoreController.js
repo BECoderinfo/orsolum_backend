@@ -19,13 +19,15 @@ import CoinHistory from '../models/CoinHistory.js';
 import User from '../models/User.js';
 import ProductSubCategory from '../models/OnlineStore/SubCategory.js';
 import CouponHistory from '../models/CouponHistory.js';
-import StoreCategory from '../models/StoreCategory.js';
 import PopularCategory from '../models/PopularCategory.js';
 
 const { ObjectId } = mongoose.Types;
 
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
+
+// Admin-created online products must stay hidden from user-facing flows
+const HIDE_ADMIN_ONLINE_PRODUCTS = true;
 
 // Calculate Offer Percentage
 const calculateOffPer = (mrp, sellingPrice) => {
@@ -608,20 +610,13 @@ export const onlineStoreHomePage = async (req, res) => {
         // Normalize subcategories to ensure icon field is properly included
         const subCategories = subCategoriesRaw.map(normalizeSubCategory);
 
-        // Fetch categories (limit 8)
+        // Fetch categories (limit 8) - only online store categories
         const categories = await Category.aggregate([
             { $match: { deleted: false } },
             { $limit: 8 }
         ]);
 
-        // Fetch local store categories (StoreCategory) - limit 8
-        const storeCategories = await StoreCategory.aggregate([
-            { $match: { deleted: false } },
-            { $sort: { createdAt: -1 } },
-            { $limit: 8 }
-        ]);
-
-        // Fetch popular categories (PopularCategory) - limit 8
+        // Fetch popular categories (PopularCategory) - limit 8 (admin-managed)
         const popularCategories = await PopularCategory.aggregate([
             { $match: { deleted: false } },
             { $sort: { createdAt: -1 } },
@@ -633,6 +628,22 @@ export const onlineStoreHomePage = async (req, res) => {
             { $match: { deleted: false } },
             { $limit: 8 }
         ]);
+
+        // Hide admin-created online products from user-facing home page
+        if (HIDE_ADMIN_ONLINE_PRODUCTS) {
+            return res.status(status.OK).json({
+                status: jsonStatus.OK,
+                success: true,
+                data: {
+                    subCategories,
+                    categories,
+                    popularCategories,
+                    brands,
+                    trendingProducts: [],
+                    totalCartCount: 0
+                }
+            });
+        }
 
         // Fetch trending products (limit 5)
         const trendingProducts = await OnlineProduct.aggregate([
@@ -715,7 +726,6 @@ export const onlineStoreHomePage = async (req, res) => {
             data: { 
                 subCategories, 
                 categories, 
-                storeCategories, // Local store categories
                 popularCategories, // Popular categories from admin
                 brands, 
                 trendingProducts, 
@@ -730,6 +740,17 @@ export const onlineStoreHomePage = async (req, res) => {
 
 export const allTrendingProducts = async (req, res) => {
     try {
+        if (HIDE_ADMIN_ONLINE_PRODUCTS) {
+            return res.status(status.OK).json({
+                status: jsonStatus.OK,
+                success: true,
+                data: {
+                    products: [],
+                    totalCount: 0,
+                    totalCartCount: 0
+                }
+            });
+        }
         const search = req.query.search?.trim() || '';
         const page = parseInt(req.query.skip) || 1;
         const skip = (page - 1) * limit;
@@ -1339,6 +1360,14 @@ export const onlineStorePopularBrands = async (req, res) => {
 
 export const onlineProductsList = async (req, res) => {
     try {
+        if (HIDE_ADMIN_ONLINE_PRODUCTS) {
+            return res.status(status.OK).json({
+                status: jsonStatus.OK,
+                success: true,
+                data: [],
+                total: 0
+            });
+        }
 
         const { category, subcategory, brand, search, skip } = req.query;
 

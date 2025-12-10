@@ -11,7 +11,8 @@ import axios from "axios";
 
 const { ObjectId } = mongoose.Types;
 
-const AD_LOCATIONS = ["banner", "popup", "offer_bar", "crazy_deals", "trending_items", "popular_categories", "stores_near_me", "promotional_banner"];
+// Allowed ad placements across Admin, Seller, and Retailer
+const AD_LOCATIONS = ["crazy_deals", "trending_items", "popular_categories", "stores_near_me", "promotional_banner"];
 const S3_BASE_URL = "https://orsolum.s3.ap-south-1.amazonaws.com/";
 
 const ensureAbsoluteMediaUrl = (value) => {
@@ -200,7 +201,7 @@ export const createSellerAdRequest = async (req, res) => {
       finalStoreId = store._id;
     }
 
-    // Validate productId if provided
+    // Validate productId if provided (bound to the same store to avoid cross-owner issues)
     let finalProductId = null;
     if (productId) {
       if (!ObjectId.isValid(productId)) {
@@ -210,19 +211,21 @@ export const createSellerAdRequest = async (req, res) => {
           message: "Invalid product ID",
         });
       }
-      // Verify product belongs to seller
+
+      // Ensure the product is from the same store and not deleted.
       const product = await Product.findOne({
         _id: new ObjectId(productId),
-        createdBy: sellerId,
+        storeId: finalStoreId,
         deleted: false,
       });
       if (!product) {
         return res.status(status.BadRequest).json({
           status: jsonStatus.BadRequest,
           success: false,
-          message: "Product not found or does not belong to you",
+          message: "Product not found for this store or not accessible",
         });
       }
+
       finalProductId = new ObjectId(productId);
     }
 
