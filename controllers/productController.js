@@ -1081,12 +1081,45 @@ export const getLocalStoreHomePageData = async (req, res) => {
     }
 };
 
+// Helper function to extract area from address
+const extractAreaFromAddress = (address) => {
+    if (!address || typeof address !== 'string') return null;
+    
+    const addressLower = address.toLowerCase().trim();
+    
+    // Common Surat areas with their variations - normalized to standard names
+    const areaMappings = [
+        { patterns: ['mota varachcha', 'mota varachha', 'mota-varachcha', 'mota-varachha', 'mota varachha'], normalized: 'mota varachcha' },
+        { patterns: ['katargam', 'katargam'], normalized: 'katargam' },
+        { patterns: ['vesu'], normalized: 'vesu' },
+        { patterns: ['adajan'], normalized: 'adajan' },
+        { patterns: ['pal'], normalized: 'pal' },
+        { patterns: ['varachha', 'varachha'], normalized: 'varachha' },
+        { patterns: ['udhna'], normalized: 'udhna' },
+        { patterns: ['piplod'], normalized: 'piplod' },
+        { patterns: ['althan'], normalized: 'althan' },
+        { patterns: ['sarthana'], normalized: 'sarthana' }
+    ];
+    
+    // Check each area mapping
+    for (const mapping of areaMappings) {
+        for (const pattern of mapping.patterns) {
+            if (addressLower.includes(pattern)) {
+                return mapping.normalized;
+            }
+        }
+    }
+    
+    return null;
+};
+
 export const getLocalStoreHomePageDataV2 = async (req, res) => {
     try {
         const lat = req.body?.lat ?? req.query?.lat;
         const long = req.body?.long ?? req.query?.long;
         const city = req.body?.city ?? req.query?.city;
-        const userDetails = await User.findById(req.user._id).select("lat long city state");
+        const area = req.body?.area ?? req.query?.area; // New area parameter
+        const userDetails = await User.findById(req.user._id).select("lat long city state address");
 
         const parsedLat = lat !== undefined && lat !== null && lat !== "" ? parseFloat(lat) : null;
         const parsedLong = long !== undefined && long !== null && long !== "" ? parseFloat(long) : null;
@@ -1121,6 +1154,14 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             (city && city.trim()) ||
             (userDetails?.city ? userDetails.city.trim() : "");
 
+        // Extract area from parameter, user address, or detect from coordinates
+        let searchArea = null;
+        if (area && area.trim()) {
+            searchArea = area.trim().toLowerCase();
+        } else if (userDetails?.address) {
+            searchArea = extractAreaFromAddress(userDetails.address);
+        }
+
         // Fetch categories (unchanged from original code)
         const categories = await StoreCategory.aggregate([
             {
@@ -1141,7 +1182,21 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
         let stores = [];
 
         if (searchLat !== null && searchLong !== null) {
-            // Fetch stores within 15 km radius
+            // Build match conditions
+            let matchConditions = {
+                status: "A"
+            };
+
+            // ✅ Area-based filtering: If area is detected, filter stores by area name in address
+            if (searchArea) {
+                // Create regex pattern for area matching (case-insensitive)
+                const areaPattern = searchArea.replace(/\s+/g, '[\\s-]*'); // Handle spaces and hyphens
+                const areaRegex = new RegExp(areaPattern, 'i');
+                matchConditions.address = { $regex: areaRegex };
+            }
+
+            // Fetch stores within 5 km radius (reduced from 15km for better area-specific results)
+            // If area filtering is applied, this ensures stores are both in the area AND nearby
             stores = await Store.aggregate([
                 {
                     $geoNear: {
@@ -1150,14 +1205,12 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                             coordinates: [searchLong, searchLat] // Longitude first, then latitude
                         },
                         distanceField: "distance",
-                        maxDistance: 15000, // 15 km in meters
+                        maxDistance: searchArea ? 5000 : 15000, // 5 km if area specified, else 15 km
                         spherical: true
                     }
                 },
                 {
-                    $match: {
-                        status: "A"
-                    }
+                    $match: matchConditions
                 },
                 {
                     $lookup: {
@@ -1197,17 +1250,29 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     $limit: 5
                 }
             ]);
-        } else if (searchCity) {
-            const regex = new RegExp(searchCity, "i");
+        } else if (searchCity || searchArea) {
+            // Build match conditions for city/area-based search
+            let matchConditions = {
+                status: "A"
+            };
+
+            if (searchArea) {
+                // Area-based filtering
+                const areaPattern = searchArea.replace(/\s+/g, '[\\s-]*');
+                const areaRegex = new RegExp(areaPattern, 'i');
+                matchConditions.address = { $regex: areaRegex };
+            } else if (searchCity) {
+                // City-based filtering
+                const cityRegex = new RegExp(searchCity, "i");
+                matchConditions.$or = [
+                    { address: { $regex: cityRegex } },
+                    { "shiprocket.pickup_location.city": { $regex: cityRegex } }
+                ];
+            }
+
             stores = await Store.aggregate([
                 {
-                    $match: {
-                        status: "A",
-                        $or: [
-                            { address: { $regex: regex } },
-                            { "shiprocket.pickup_location.city": { $regex: regex } }
-                        ]
-                    }
+                    $match: matchConditions
                 },
                 {
                     $lookup: {
@@ -1337,7 +1402,8 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
         const resolvedLocation = {
             lat: searchLat,
             long: searchLong,
-            city: searchCity || null
+            city: searchCity || null,
+            area: searchArea || null
         };
 
         const nearbyStoreIds = stores.map(store => store._id).filter(Boolean);
