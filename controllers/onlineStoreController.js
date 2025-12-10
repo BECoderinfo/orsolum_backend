@@ -849,14 +849,13 @@ export const allTrendingProducts = async (req, res) => {
             });
         }
 
-        // Count for admin and seller combined (rough: sum of both counts)
-        const adminCountConditions = { deleted: false, trending: true, ...(search ? { name: { $regex: search, $options: 'i' } } : {}) };
-        const sellerCountConditions = { deleted: false, status: "A", ...(search ? { productName: { $regex: search, $options: 'i' } } : {}) };
-        const [adminCount, sellerCount] = await Promise.all([
-            OnlineProduct.countDocuments(adminCountConditions),
-            Product.countDocuments(sellerCountConditions)
-        ]);
-        const totalCount = adminCount + sellerCount;
+        // Build count match conditions (same as main query)
+        const countMatchConditions = { deleted: false, trending: true };
+        if (search) {
+            countMatchConditions.name = { $regex: search, $options: 'i' };
+        }
+
+        const totalCount = await OnlineProduct.countDocuments(countMatchConditions);
 
         // Fetch cart items
         let totalCartCount = 0;
