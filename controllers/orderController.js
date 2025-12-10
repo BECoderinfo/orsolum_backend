@@ -715,13 +715,9 @@ export const cartDetails = async (req, res) => {
 
     donate = donate ? Number(donate) : 0;
 
-    // Guard against invalid/missing store IDs to avoid CastErrors
-    if (!ObjectId.isValid(id)) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Invalid store id",
-      });
+    // If store id is missing/invalid, gracefully fallback to full cart details
+    if (!id || !ObjectId.isValid(id)) {
+      return await allCartDetails(req, res);
     }
 
     const storeObjectId = new ObjectId(id);
