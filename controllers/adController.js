@@ -1428,58 +1428,50 @@ export const getActiveAds = async (req, res) => {
     };
   });
 
-  // Flatten for compatibility
-  const formattedAds = Object.values(adsByLocation);
-
-  // Fallback: if no seller ads, show Orsolum (admin) ads
-  if (formattedAds.length === 0) {
-    const nowFallback = new Date();
-    const fallbackFilter = {
-      status: "active",
-      startDate: { $lte: nowFallback },
-      endDate: { $gte: nowFallback },
-      deleted: { $ne: true },
-      sellerId: { $exists: false }, // Admin (Orsolum) ads
-    };
-    if (location && AD_LOCATIONS.includes(location)) {
-      fallbackFilter.location = location;
-    }
-
-    const fallbackAds = await Ad.find(fallbackFilter)
-      .sort({ startDate: 1 })
-      .lean();
-
-    const fallbackByLocation = {};
-      fallbackAds.forEach((ad) => {
-      if (fallbackByLocation[ad.location]) return;
-
-      const {
-        formattedImages,
-        formattedVideos,
-        primaryImage,
-        primaryVideo,
-        mediaAssets,
-      } = buildMediaPayload(ad.images, ad.videos);
-
-      fallbackByLocation[ad.location] = {
-        _id: ad._id,
-        name: ad.name,
-        description: ad.description,
-        images: formattedImages,
-        videos: formattedVideos,
-        primaryImage,
-        primaryVideo,
-        mediaAssets,
-        location: ad.location,
-        storeId: null,
-        productId: null,
-        startDate: ad.startDate,
-        endDate: ad.endDate,
-      };
-    });
-
-    formattedAds.push(...Object.values(fallbackByLocation));
+  // Fill missing slots per location with admin ads (Orsolum) while keeping seller priority
+  const nowFallback = new Date();
+  const fallbackFilter = {
+    status: "active",
+    startDate: { $lte: nowFallback },
+    endDate: { $gte: nowFallback },
+    deleted: { $ne: true },
+    sellerId: { $exists: false }, // Admin (Orsolum) ads
+  };
+  if (location && AD_LOCATIONS.includes(location)) {
+    fallbackFilter.location = location;
   }
+
+  const fallbackAds = await Ad.find(fallbackFilter).sort({ startDate: 1 }).lean();
+
+  fallbackAds.forEach((ad) => {
+    if (adsByLocation[ad.location]) return; // seller ad already occupies slot
+
+    const {
+      formattedImages,
+      formattedVideos,
+      primaryImage,
+      primaryVideo,
+      mediaAssets,
+    } = buildMediaPayload(ad.images, ad.videos);
+
+    adsByLocation[ad.location] = {
+      _id: ad._id,
+      name: ad.name,
+      description: ad.description,
+      images: formattedImages,
+      videos: formattedVideos,
+      primaryImage,
+      primaryVideo,
+      mediaAssets,
+      location: ad.location,
+      storeId: null,
+      productId: null,
+      startDate: ad.startDate,
+      endDate: ad.endDate,
+    };
+  });
+
+  const formattedAds = Object.values(adsByLocation);
 
     return res.status(status.OK).json({
       status: jsonStatus.OK,
@@ -1608,58 +1600,52 @@ export const getRetailerLocalStoreAds = async (req, res) => {
       };
     });
 
-    // Flatten for compatibility
-    const formattedAds = Object.values(adsByLocation);
+  // Fill missing slots per location with admin ads (Orsolum) while keeping retailer priority
+  const nowFallback = new Date();
+  const fallbackFilter = {
+    status: "active",
+    startDate: { $lte: nowFallback },
+    endDate: { $gte: nowFallback },
+    deleted: { $ne: true },
+    sellerId: { $exists: false }, // Admin (Orsolum) ads
+  };
+  if (location && AD_LOCATIONS.includes(location)) {
+    fallbackFilter.location = location;
+  }
 
-    // Fallback: if no retailer ads, show Orsolum (admin) ads
-    if (formattedAds.length === 0) {
-      const nowFallback = new Date();
-      const fallbackFilter = {
-        status: "active",
-        startDate: { $lte: nowFallback },
-        endDate: { $gte: nowFallback },
-        deleted: { $ne: true },
-        sellerId: { $exists: false }, // Admin (Orsolum) ads
-      };
-      if (location && AD_LOCATIONS.includes(location)) {
-        fallbackFilter.location = location;
-      }
+  const fallbackAds = await Ad.find(fallbackFilter)
+    .sort({ startDate: 1 })
+    .lean();
 
-      const fallbackAds = await Ad.find(fallbackFilter)
-        .sort({ startDate: 1 })
-        .lean();
+  fallbackAds.forEach((ad) => {
+    if (adsByLocation[ad.location]) return; // retailer ad already occupies slot
 
-      const fallbackByLocation = {};
-      fallbackAds.forEach((ad) => {
-        if (fallbackByLocation[ad.location]) return;
+    const {
+      formattedImages: adImagesArray,
+      formattedVideos: adVideosArray,
+      primaryImage,
+      primaryVideo,
+      mediaAssets,
+    } = buildMediaPayload(ad.images, ad.videos);
 
-        const {
-          formattedImages: adImagesArray,
-          formattedVideos: adVideosArray,
-          primaryImage,
-          primaryVideo,
-          mediaAssets,
-        } = buildMediaPayload(ad.images, ad.videos);
+    adsByLocation[ad.location] = {
+      _id: ad._id,
+      name: ad.name,
+      description: ad.description,
+      images: adImagesArray,
+      videos: adVideosArray,
+      primaryImage,
+      primaryVideo,
+      mediaAssets,
+      location: ad.location,
+      storeId: null,
+      productId: null,
+      startDate: ad.startDate,
+      endDate: ad.endDate,
+    };
+  });
 
-        fallbackByLocation[ad.location] = {
-          _id: ad._id,
-          name: ad.name,
-          description: ad.description,
-          images: adImagesArray,
-          videos: adVideosArray,
-          primaryImage,
-          primaryVideo,
-          mediaAssets,
-          location: ad.location,
-          storeId: null,
-          productId: null,
-          startDate: ad.startDate,
-          endDate: ad.endDate,
-        };
-      });
-
-      formattedAds.push(...Object.values(fallbackByLocation));
-    }
+  const formattedAds = Object.values(adsByLocation);
 
     return res.status(status.OK).json({
       status: jsonStatus.OK,
