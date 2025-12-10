@@ -217,6 +217,22 @@ export const adminAuthentication = async (req, res, next) => {
 
     const admin = await Admin.findById(decoded._id);
     if (!admin) {
+      // Check if it's a user token trying to access admin endpoint
+      const user = await User.findById(decoded._id);
+      if (user) {
+        // Provide helpful error message for wrong endpoint usage
+        const endpoint = req.path || req.originalUrl || '';
+        if (endpoint.includes('/admin/')) {
+          return res.status(status.Unauthorized).json({
+            status: jsonStatus.Unauthorized,
+            success: false,
+            message: "Unauthorized: Admin endpoint requires admin token. Use user endpoint instead.",
+            hint: endpoint.includes('popular/category') 
+              ? "For popular categories, use: /api/online/store/popular/categories/v1 or /api/ads/active/v1?location=popular_categories"
+              : "This is an admin-only endpoint. Please use the appropriate user endpoint."
+          });
+        }
+      }
       return res.status(status.Unauthorized).json({
         status: jsonStatus.Unauthorized,
         success: false,

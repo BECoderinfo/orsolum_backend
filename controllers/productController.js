@@ -1195,7 +1195,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                 matchConditions.address = { $regex: areaRegex };
             }
 
-            // Fetch stores within 5 km radius (reduced from 15km for better area-specific results)
+            // Fetch stores within 5-7 km radius (using 6km as average)
             // If area filtering is applied, this ensures stores are both in the area AND nearby
             stores = await Store.aggregate([
                 {
@@ -1205,7 +1205,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                             coordinates: [searchLong, searchLat] // Longitude first, then latitude
                         },
                         distanceField: "distance",
-                        maxDistance: searchArea ? 5000 : 15000, // 5 km if area specified, else 15 km
+                        maxDistance: 6000, // 6 km (average of 5-7 km range) - always use this for location-based search
                         spherical: true
                     }
                 },
@@ -1487,7 +1487,7 @@ export const getAllStores = async (req, res) => {
                         coordinates: [parseFloat(long), parseFloat(lat)]
                     },
                     distanceField: "distance",
-                    maxDistance: 15000, // 15 km
+                    maxDistance: 6000, // 6 km (average of 5-7 km range)
                     spherical: true
                 }
             });
@@ -1496,7 +1496,7 @@ export const getAllStores = async (req, res) => {
                 ...matchObj,
                 location: {
                     $geoWithin: {
-                        $centerSphere: [[parseFloat(long), parseFloat(lat)], 15000 / 6378.1]
+                        $centerSphere: [[parseFloat(long), parseFloat(lat)], 6000 / 6378.1] // 6 km radius
                     }
                 }
             };

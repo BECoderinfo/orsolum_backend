@@ -1630,6 +1630,41 @@ export const createOrderV2 = async (req, res) => {
       });
     }
 
+    // ✅ Validate all products exist and are available
+    const validCarts = [];
+    const invalidProducts = [];
+    
+    for (const cart of carts) {
+      if (!cart.productId) {
+        invalidProducts.push(`Product ID: ${cart.productId || 'Unknown'}`);
+        continue;
+      }
+      
+      // Check if product is deleted or not active
+      if (cart.productId.deleted || cart.productId.status !== "A") {
+        invalidProducts.push(cart.productId.productName || 'Unknown Product');
+        continue;
+      }
+      
+      // Validate required fields
+      if (typeof cart.productId.sellingPrice !== 'number' || cart.productId.sellingPrice <= 0) {
+        invalidProducts.push(`${cart.productId.productName || 'Product'}: Invalid price`);
+        continue;
+      }
+      
+      validCarts.push(cart);
+    }
+
+    if (validCarts.length < 1) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: invalidProducts.length > 0 
+          ? `Some products are no longer available: ${invalidProducts.join(', ')}`
+          : "No valid products found in cart",
+      });
+    }
+
     // ✅ Calculate totals
     let storeTotal = 0;
     let storeDiscountAmount = 0;
@@ -1638,10 +1673,16 @@ export const createOrderV2 = async (req, res) => {
     const storeOffers = await StoreOffer.find({ storeId, deleted: false });
 
     const stockUpdates = [];
-    for (const cart of carts) {
-      const productPrice = cart.productId.sellingPrice;
-      const mrp = cart.productId.mrp;
-      const quantity = cart.quantity;
+    for (const cart of validCarts) {
+      // ✅ Safe access with validation
+      if (!cart.productId || !cart.productId._id) {
+        console.warn(`Skipping cart item with invalid product: ${cart._id}`);
+        continue;
+      }
+
+      const productPrice = cart.productId.sellingPrice || 0;
+      const mrp = cart.productId.mrp || productPrice;
+      const quantity = cart.quantity || 1;
       let freeQuantity = 0;
       let appliedOffers = [];
 
@@ -1738,51 +1779,115 @@ export const createOrderV2 = async (req, res) => {
       },
     };
 
+    // ✅ Validate Cashfree environment variables
+    if (!process.env.CF_CREATE_PRODUCT_URL || !process.env.CF_CLIENT_ID || !process.env.CF_CLIENT_SECRET) {
+      return res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: "Payment gateway configuration is missing. Please contact support.",
+      });
+    }
+
     const headers = {
-      "x-api-version": process.env.CF_API_VERSION,
+      "x-api-version": process.env.CF_API_VERSION || "2022-09-01",
       "x-client-id": process.env.CF_CLIENT_ID,
       "x-client-secret": process.env.CF_CLIENT_SECRET,
       "Content-Type": "application/json",
     };
 
-    const cashFreeSession = await axios.post(
-      process.env.CF_CREATE_PRODUCT_URL,
-      paymentRequestData,
-      { headers }
-    );
+    // ✅ Create Cashfree payment session with error handling
+    let cashFreeSession;
+    let cf_order_id;
+    let paymentSessionId;
+    
+    try {
+      cashFreeSession = await axios.post(
+        process.env.CF_CREATE_PRODUCT_URL,
+        paymentRequestData,
+        { headers, timeout: 30000 } // 30 second timeout
+      );
 
-    const cf_order_id = cashFreeSession.data.order_id;
-    const paymentSessionId = cashFreeSession.data.payment_session_id;
+      if (!cashFreeSession.data || !cashFreeSession.data.order_id) {
+        throw new Error("Invalid response from payment gateway");
+      }
 
-    // Get store to copy pickup_addresses
+      cf_order_id = cashFreeSession.data.order_id;
+      paymentSessionId = cashFreeSession.data.payment_session_id;
+    } catch (cashfreeError) {
+      console.error("Cashfree API Error:", cashfreeError.response?.data || cashfreeError.message);
+      return res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: cashfreeError.response?.data?.message || "Failed to initialize payment. Please try again.",
+        error: process.env.NODE_ENV === 'development' ? cashfreeError.message : undefined,
+      });
+    }
+
+    // ✅ Get store to copy pickup_addresses
     const store = await Store.findById(storeId);
+    if (!store) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Store not found",
+      });
+    }
+
+    // ✅ Validate address object
+    if (!address || !address.address_1) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid delivery address. Please update your address.",
+      });
+    }
+
+    // ✅ Validate grandTotal is positive
+    if (grandTotal <= 0) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Order total must be greater than zero",
+      });
+    }
 
     // ✅ Save the Order in MongoDB before sending response
-    const newOrder = new Order({
-      createdBy: req.user._id,
-      storeId,
-      orderId: `ORD_${Date.now()}`,
-      cf_order_id,
-      paymentSessionId,
-      paymentStatus: "PENDING",
-      paymentType: paymentType || "CARD",
-      address,
-      summary: {
-        totalAmount: storeTotal,
-        discountAmount: storeDiscountAmount + couponCodeDiscount,
-        shippingFee: storeShippingFee,
-        donate,
-        grandTotal,
-      },
-      productDetails,
-      status: "Pending",
-      shiprocket: store?.shiprocket?.pickup_addresses ? {
-        pickup_addresses: store.shiprocket.pickup_addresses || [],
-        default_pickup_address: store.shiprocket.default_pickup_address || null
-      } : {}
-    });
+    let newOrder;
+    try {
+      newOrder = new Order({
+        createdBy: req.user._id,
+        storeId,
+        orderId: `ORD_${Date.now()}`,
+        cf_order_id,
+        paymentSessionId,
+        paymentStatus: "PENDING",
+        paymentType: paymentType || "CARD",
+        address: address.toObject ? address.toObject() : address,
+        summary: {
+          totalAmount: storeTotal,
+          discountAmount: storeDiscountAmount + couponCodeDiscount,
+          shippingFee: storeShippingFee,
+          donate: donateValue,
+          grandTotal,
+        },
+        productDetails,
+        status: "Pending",
+        shiprocket: store?.shiprocket?.pickup_addresses ? {
+          pickup_addresses: store.shiprocket.pickup_addresses || [],
+          default_pickup_address: store.shiprocket.default_pickup_address || null
+        } : {}
+      });
 
-    await newOrder.save();
+      await newOrder.save();
+    } catch (saveError) {
+      console.error("Error saving order:", saveError);
+      return res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: "Failed to save order. Please try again.",
+        error: process.env.NODE_ENV === 'development' ? saveError.message : undefined,
+      });
+    }
 
     // ✅ Send notification to retailer about new order
     try {
@@ -1847,10 +1952,28 @@ export const createOrderV2 = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in createOrderV2:", error);
+    console.error("Error stack:", error.stack);
+    
+    // ✅ Provide more descriptive error messages
+    let errorMessage = "Failed to create order. Please try again.";
+    
+    if (error.name === 'ValidationError') {
+      errorMessage = "Invalid order data. Please check your cart and address.";
+    } else if (error.name === 'CastError') {
+      errorMessage = "Invalid data format. Please refresh and try again.";
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+    
     return res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
-      message: error.message,
+      message: errorMessage,
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      } : undefined,
     });
   }
 };
@@ -2146,15 +2269,35 @@ export const orderListV2 = async (req, res) => {
       // Add additional fields including totalAmount for products
       {
         $addFields: {
-          "productDetails.productName": "$productInfo.productName",
-          "productDetails.productImages": "$productInfo.productImages",
-          "productDetails.companyName": "$productInfo.companyName",
-          "productDetails.qty": "$productInfo.qty",
+          "productDetails.productName": {
+            $ifNull: ["$productInfo.productName", null]
+          },
+          "productDetails.productImages": {
+            $ifNull: ["$productInfo.productImages", []]
+          },
+          "productDetails.companyName": {
+            $ifNull: ["$productInfo.companyName", null]
+          },
+          "productDetails.qty": {
+            $ifNull: ["$productInfo.qty", null]
+          },
           "productDetails.totalAmount": {
-            $multiply: [
-              "$productDetails.productPrice",
-              "$productDetails.quantity",
-            ],
+            $cond: {
+              if: {
+                $and: [
+                  { $ne: ["$productDetails", null] },
+                  { $ne: ["$productDetails.productPrice", null] },
+                  { $ne: ["$productDetails.quantity", null] }
+                ]
+              },
+              then: {
+                $multiply: [
+                  "$productDetails.productPrice",
+                  "$productDetails.quantity",
+                ],
+              },
+              else: 0
+            }
           },
         },
       },
@@ -2188,31 +2331,31 @@ export const orderListV2 = async (req, res) => {
     // Format response as per UI requirements
     const formattedResponse = list.map((order) => ({
       _id: order._id,
-      storeId: order.storeDetails._id,
-      store: {
-        name: order.storeDetails.name,
-        address: order.storeDetails.address,
-        contact: order.storeDetails.contact,
-      },
+      storeId: order.storeDetails?._id || null,
+      store: order.storeDetails ? {
+        name: order.storeDetails.name || null,
+        address: order.storeDetails.address || null,
+        contact: order.storeDetails.contact || null,
+      } : null,
       orderId: order.orderId,
       status: order.status,
       paymentStatus: order.paymentStatus || "PENDING", // Include payment status
-      totalPrice: order.summary.grandTotal,
-      discountAmount: order.summary.discountAmount,
-      shippingFee: order.summary.shippingFee,
+      totalPrice: order.summary?.grandTotal || 0,
+      discountAmount: order.summary?.discountAmount || 0,
+      shippingFee: order.summary?.shippingFee || 0,
       createdAt: order.createdAt,
-      totalQuantity: order.totalQuantity, // ✅ Aggregated total quantity
-      totalFreeQuantity: order.totalFreeQuantity, // ✅ Aggregated total free quantity
-      products: order.productDetails.map((product) => ({
-        productName: product.productName,
-        companyName: product.companyName,
+      totalQuantity: order.totalQuantity || 0, // ✅ Aggregated total quantity
+      totalFreeQuantity: order.totalFreeQuantity || 0, // ✅ Aggregated total free quantity
+      products: (order.productDetails || []).filter(p => p !== null && p !== undefined).map((product) => ({
+        productName: product.productName || null,
+        companyName: product.companyName || null,
         qty: product.qty || null,
-        productImages: product.productImages,
-        price: product.productPrice,
+        productImages: product.productImages || [],
+        price: product.productPrice || 0,
         mrp: product.mrp || null,
-        quantity: product.quantity,
-        freeQuantity: product.freeQuantity,
-        totalAmount: product.totalAmount,
+        quantity: product.quantity || 0,
+        freeQuantity: product.freeQuantity || 0,
+        totalAmount: product.totalAmount || 0,
         appliedOffers: product.appliedOffers || [],
         status: order.status,
       })),

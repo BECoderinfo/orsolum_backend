@@ -19,6 +19,8 @@ import CoinHistory from '../models/CoinHistory.js';
 import User from '../models/User.js';
 import ProductSubCategory from '../models/OnlineStore/SubCategory.js';
 import CouponHistory from '../models/CouponHistory.js';
+import StoreCategory from '../models/StoreCategory.js';
+import PopularCategory from '../models/PopularCategory.js';
 
 const { ObjectId } = mongoose.Types;
 
@@ -612,6 +614,20 @@ export const onlineStoreHomePage = async (req, res) => {
             { $limit: 8 }
         ]);
 
+        // Fetch local store categories (StoreCategory) - limit 8
+        const storeCategories = await StoreCategory.aggregate([
+            { $match: { deleted: false } },
+            { $sort: { createdAt: -1 } },
+            { $limit: 8 }
+        ]);
+
+        // Fetch popular categories (PopularCategory) - limit 8
+        const popularCategories = await PopularCategory.aggregate([
+            { $match: { deleted: false } },
+            { $sort: { createdAt: -1 } },
+            { $limit: 8 }
+        ]);
+
         // Fetch brands (limit 8)
         const brands = await Brand.aggregate([
             { $match: { deleted: false } },
@@ -696,7 +712,15 @@ export const onlineStoreHomePage = async (req, res) => {
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
-            data: { subCategories, categories, brands, trendingProducts, totalCartCount }
+            data: { 
+                subCategories, 
+                categories, 
+                storeCategories, // Local store categories
+                popularCategories, // Popular categories from admin
+                brands, 
+                trendingProducts, 
+                totalCartCount 
+            }
         });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
@@ -1214,15 +1238,35 @@ export const onlineStorePopularCategories = async (req, res) => {
         const match = buildMatchStage(search);
         const skip = (page - 1) * pageSize;
 
-        const [items, total] = await Promise.all([
+        // Fetch both regular categories and popular categories from admin
+        const [categoryItems, popularCategoryItems, categoryTotal, popularCategoryTotal] = await Promise.all([
             Category.aggregate([
                 { $match: match },
                 { $sort: { createdAt: -1 } },
                 { $skip: skip },
                 { $limit: pageSize }
             ]),
-            Category.countDocuments(match)
+            PopularCategory.aggregate([
+                { 
+                    $match: { 
+                        deleted: false,
+                        ...(search && { name: { $regex: search, $options: 'i' } })
+                    } 
+                },
+                { $sort: { createdAt: -1 } },
+                { $skip: skip },
+                { $limit: pageSize }
+            ]),
+            Category.countDocuments(match),
+            PopularCategory.countDocuments({ 
+                deleted: false,
+                ...(search && { name: { $regex: search, $options: 'i' } })
+            })
         ]);
+
+        // Combine both types of categories, prioritizing PopularCategory
+        const combinedItems = [...popularCategoryItems, ...categoryItems];
+        const total = popularCategoryTotal + categoryTotal;
 
         const totalCartCount = await fetchUserCartCount(req.user._id);
 
@@ -1235,7 +1279,7 @@ export const onlineStorePopularCategories = async (req, res) => {
                     key: "popularCategories",
                     title: "Popular Categories",
                     description: "Top categories users are browsing right now",
-                    items,
+                    items: combinedItems,
                     total,
                     page,
                     pageSize,
