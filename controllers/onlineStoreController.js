@@ -666,7 +666,7 @@ export const onlineStoreHomePage = async (req, res) => {
             }
         ]);
 
-        // Fetch seller products (latest) as trending fallback/demo (limit 5)
+        // Fetch seller products (latest) as trending fallback/demo (limit 5) - only seller role
         const trendingSellerProducts = await Product.aggregate([
             {
                 $match: {
@@ -674,6 +674,21 @@ export const onlineStoreHomePage = async (req, res) => {
                     status: "A"
                 }
             },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "creator",
+                    pipeline: [{ $project: { role: 1 } }]
+                }
+            },
+            {
+                $addFields: {
+                    creatorRole: { $arrayElemAt: ["$creator.role", 0] }
+                }
+            },
+            { $match: { creatorRole: "seller" } },
             { $sort: { createdAt: -1 } },
             { $limit: 5 },
             {
@@ -809,6 +824,21 @@ export const allTrendingProducts = async (req, res) => {
                     ...(search ? { productName: { $regex: search, $options: "i" } } : {})
                 }
             },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "creator",
+                    pipeline: [{ $project: { role: 1 } }]
+                }
+            },
+            {
+                $addFields: {
+                    creatorRole: { $arrayElemAt: ["$creator.role", 0] }
+                }
+            },
+            { $match: { creatorRole: "seller" } },
             { $sort: { createdAt: -1 } },
             { $skip: skip },
             { $limit: limit },
@@ -1456,6 +1486,21 @@ export const onlineProductsList = async (req, res) => {
 
         const sellerProducts = await Product.aggregate([
             { $match: sellerQuery },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "creator",
+                    pipeline: [{ $project: { role: 1 } }]
+                }
+            },
+            {
+                $addFields: {
+                    creatorRole: { $arrayElemAt: ["$creator.role", 0] }
+                }
+            },
+            { $match: { creatorRole: "seller" } },
             { $sort: { createdAt: -1 } },
             { $skip: offset },
             { $limit: limit },
