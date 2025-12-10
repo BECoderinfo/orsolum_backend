@@ -2229,12 +2229,57 @@ export const orderListV2 = async (req, res) => {
           // Show all orders regardless of payment status
         },
       },
-      // Lookup for store details
+      // Add stage to normalize storeId - convert invalid values to null to prevent ObjectId cast errors
+      {
+        $addFields: {
+          normalizedStoreId: {
+            $cond: {
+              if: {
+                $and: [
+                  { $ne: ["$storeId", null] },
+                  { $ne: [{ $toString: "$storeId" }, ""] },
+                  { $ne: [{ $toString: "$storeId" }, "0"] },
+                  { $or: [
+                    { $eq: [{ $type: "$storeId" }, "objectId"] },
+                    {
+                      $and: [
+                        { $eq: [{ $type: "$storeId" }, "string"] },
+                        { $eq: [{ $strLenCP: { $toString: "$storeId" } }, 24] },
+                        { $regexMatch: { input: { $toString: "$storeId" }, regex: /^[0-9a-fA-F]{24}$/ } }
+                      ]
+                    }
+                  ]}
+                ]
+              },
+              then: {
+                $cond: {
+                  if: { $eq: [{ $type: "$storeId" }, "string"] },
+                  then: { $toObjectId: "$storeId" },
+                  else: "$storeId"
+                }
+              },
+              else: null
+            }
+          }
+        }
+      },
+      // Lookup for store details using normalized storeId - only matches valid ObjectIds
       {
         $lookup: {
           from: "stores",
-          localField: "storeId",
-          foreignField: "_id",
+          let: { storeId: "$normalizedStoreId" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $ne: ["$$storeId", null] },
+                    { $eq: ["$_id", "$$storeId"] }
+                  ]
+                }
+              }
+            }
+          ],
           as: "storeDetails",
         },
       },
@@ -2251,12 +2296,57 @@ export const orderListV2 = async (req, res) => {
           preserveNullAndEmptyArrays: true,
         },
       },
-      // Lookup for product details
+      // Normalize productId before lookup to prevent ObjectId cast errors
+      {
+        $addFields: {
+          "productDetails.normalizedProductId": {
+            $cond: {
+              if: {
+                $and: [
+                  { $ne: ["$productDetails.productId", null] },
+                  { $ne: [{ $toString: "$productDetails.productId" }, ""] },
+                  { $ne: [{ $toString: "$productDetails.productId" }, "0"] },
+                  { $or: [
+                    { $eq: [{ $type: "$productDetails.productId" }, "objectId"] },
+                    {
+                      $and: [
+                        { $eq: [{ $type: "$productDetails.productId" }, "string"] },
+                        { $eq: [{ $strLenCP: { $toString: "$productDetails.productId" } }, 24] },
+                        { $regexMatch: { input: { $toString: "$productDetails.productId" }, regex: /^[0-9a-fA-F]{24}$/ } }
+                      ]
+                    }
+                  ]}
+                ]
+              },
+              then: {
+                $cond: {
+                  if: { $eq: [{ $type: "$productDetails.productId" }, "string"] },
+                  then: { $toObjectId: "$productDetails.productId" },
+                  else: "$productDetails.productId"
+                }
+              },
+              else: null
+            }
+          }
+        }
+      },
+      // Lookup for product details using normalized productId
       {
         $lookup: {
           from: "products",
-          localField: "productDetails.productId",
-          foreignField: "_id",
+          let: { productId: "$productDetails.normalizedProductId" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $ne: ["$$productId", null] },
+                    { $eq: ["$_id", "$$productId"] }
+                  ]
+                }
+              }
+            }
+          ],
           as: "productInfo",
         },
       },
