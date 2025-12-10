@@ -529,7 +529,71 @@ export const adminProductDetails = async (req, res) => {
             }
         ]);
         if (!details[0]) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product not found with this ID" });
+            // Fallback: try seller product details
+            const sellerDetails = await Product.aggregate([
+                { $match: { _id: new ObjectId(id), deleted: false, status: "A" } },
+                {
+                    $lookup: {
+                        from: "users",
+                        localField: "createdBy",
+                        foreignField: "_id",
+                        as: "creator",
+                        pipeline: [{ $project: { role: 1 } }]
+                    }
+                },
+                {
+                    $addFields: {
+                        creatorRole: { $arrayElemAt: ["$creator.role", 0] }
+                    }
+                },
+                { $match: { creatorRole: "seller" } },
+                {
+                    $project: {
+                        _id: 1,
+                        name: "$productName",
+                        productName: "$productName",
+                        companyName: "$companyName",
+                        information: "$information",
+                        description: "$information",
+                        categoryId: 1,
+                        subCategoryId: 1,
+                        images: "$productImages",
+                        primaryImage: { $arrayElemAt: ["$productImages", 0] },
+                        units: {
+                            mrp: "$mrp",
+                            sellingPrice: "$sellingPrice",
+                            offPer: "$offPer",
+                            qty: "$qty"
+                        },
+                        subCategoryPercentageOff: { $literal: 0 },
+                        source: { $literal: "seller" }
+                    }
+                }
+            ]);
+
+            if (!sellerDetails || !sellerDetails[0]) {
+                return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product not found with this ID" });
+            }
+
+            // Cart counts for seller product
+            let totalCartCount = 0;
+            const cartItems = await OnlineStoreCart.find({ deleted: false, createdBy: req.user._id });
+            const cartCountMap = new Map();
+            cartItems.forEach(cart => {
+                totalCartCount += cart.quantity;
+                cartCountMap.set(`${cart.productId}_${cart.unitId}`, cart.quantity);
+            });
+
+            const sellerProduct = sellerDetails[0];
+            sellerProduct.units = sellerProduct.units
+                ? { ...sellerProduct.units, cartCount: cartCountMap.get(`${sellerProduct._id}_${sellerProduct.units._id || "na"}`) || 0 }
+                : null;
+
+            return res.status(status.OK).json({
+                status: jsonStatus.OK,
+                success: true,
+                data: { ...sellerProduct, similarProducts: [], totalCartCount }
+            });
         }
 
         res.status(status.OK).json({
@@ -1508,12 +1572,21 @@ export const onlineProductsList = async (req, res) => {
                 $project: {
                     _id: 1,
                     name: "$productName",
+                    productName: "$productName",
+                    companyName: "$companyName",
+                    categoryId: 1,
+                    subCategoryId: 1,
+                    primaryImage: { $arrayElemAt: ["$productImages", 0] },
                     images: "$productImages",
                     units: {
                         mrp: "$mrp",
                         sellingPrice: "$sellingPrice",
                         offPer: "$offPer"
                     },
+                    price: "$sellingPrice",
+                    mrpValue: "$mrp",
+                    information: "$information",
+                    description: "$information",
                     source: { $literal: "seller" }
                 }
             }
