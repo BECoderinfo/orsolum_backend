@@ -5,6 +5,7 @@ import Brand from '../models/OnlineStore/Brand.js';
 import Category from '../models/OnlineStore/Category.js';
 import SubCategory from '../models/OnlineStore/SubCategory.js';
 import OnlineProduct from '../models/OnlineStore/OnlineProduct.js';
+import Product from '../models/Product.js';
 import ProductUnit from '../models/OnlineStore/ProductUnit.js';
 import OnlineStoreCart from '../models/OnlineStore/OnlineStoreCart.js';
 import Address from '../models/Address.js';
@@ -849,13 +850,14 @@ export const allTrendingProducts = async (req, res) => {
             });
         }
 
-        // Build count match conditions (same as main query)
-        const countMatchConditions = { deleted: false, trending: true };
-        if (search) {
-            countMatchConditions.name = { $regex: search, $options: 'i' };
-        }
-
-        const totalCount = await OnlineProduct.countDocuments(countMatchConditions);
+        // Count admin + seller entries
+        const adminCountConditions = { deleted: false, trending: true, ...(search ? { name: { $regex: search, $options: 'i' } } : {}) };
+        const sellerCountConditions = { deleted: false, status: "A", ...(search ? { productName: { $regex: search, $options: "i" } } : {}) };
+        const [adminCount, sellerCount] = await Promise.all([
+            OnlineProduct.countDocuments(adminCountConditions),
+            Product.countDocuments(sellerCountConditions)
+        ]);
+        const totalCount = adminCount + sellerCount;
 
         // Fetch cart items
         let totalCartCount = 0;
@@ -1388,52 +1390,32 @@ export const onlineStorePopularBrands = async (req, res) => {
 
 export const onlineProductsList = async (req, res) => {
     try {
-        if (HIDE_ADMIN_ONLINE_PRODUCTS) {
-            return res.status(status.OK).json({
-                status: jsonStatus.OK,
-                success: true,
-                data: [],
-                total: 0
-            });
-        }
 
         const { category, subcategory, brand, search, skip } = req.query;
 
         const page = parseInt(skip) || 1; // Default to page 1 if not provided
         const offset = (page - 1) * limit; // Calculate the skip value
 
-        // Build the query conditions
-        const query = { deleted: false };
-
-        // Apply category, subcategory, and brand filters if provided
-        if (category) query.categoryId = new ObjectId(category);
-        if (subcategory) query.subCategoryId = new ObjectId(subcategory);
-        if (brand) query.brandId = new ObjectId(brand);
-
-        // Apply search filter on the name field using regex
+        // Admin products query
+        const adminQuery = { deleted: false };
+        if (category) adminQuery.categoryId = new ObjectId(category);
+        if (subcategory) adminQuery.subCategoryId = new ObjectId(subcategory);
+        if (brand) adminQuery.brandId = new ObjectId(brand);
         if (search) {
-            query.name = { $regex: search, $options: 'i' };
+            adminQuery.name = { $regex: search, $options: 'i' };
         }
 
-        // Fetch products with applied filters and pagination
-        const products = await OnlineProduct.aggregate([
+        const adminProducts = await OnlineProduct.aggregate([
             {
-                $match: query
+                $match: adminQuery
             },
             {
                 $lookup: {
-                    from: "product_brands",
-                    localField: "brandId",
-                    foreignField: "_id",
-                    as: "brand"
-                }
-            },
-            {
-                $lookup: {
-                    from: "product_categories",
-                    localField: "categoryId",
-                    foreignField: "_id",
-                    as: "category"
+                    from: "product_units",
+                    localField: "_id",
+                    foreignField: "parentProduct",
+                    as: "units",
+                    pipeline: [{ $match: { deleted: false } }, { $limit: 1 }]
                 }
             },
             {
@@ -1445,24 +1427,10 @@ export const onlineProductsList = async (req, res) => {
                 }
             },
             {
-                $lookup: {
-                    from: "product_units",
-                    localField: "_id",
-                    foreignField: "parentProduct",
-                    as: "units",
-                    pipeline: [
-                        {
-                            $match: {
-                                deleted: false
-                            }
-                        }
-                    ]
-                }
-            },
-            {
                 $addFields: {
                     units: { $ifNull: [{ $arrayElemAt: ["$units", 0] }, null] },
-                    subCategory: { $arrayElemAt: ["$subCategory", 0] }
+                    subCategory: { $arrayElemAt: ["$subCategory", 0] },
+                    source: { $literal: "admin" }
                 }
             },
             {
@@ -1471,17 +1439,47 @@ export const onlineProductsList = async (req, res) => {
                     images: 1,
                     name: 1,
                     manufacturer: 1,
-                    subCategoryPercentageOff: "$subCategory.percentageOff"
+                    subCategoryPercentageOff: "$subCategory.percentageOff",
+                    source: 1
                 }
             },
             { $skip: offset },
             { $limit: limit }
         ]);
 
-        // Modify unit details if user is premium and percentageOff > 0
+        // Seller products query
+        const sellerQuery = {
+            deleted: false,
+            status: "A",
+            ...(search ? { productName: { $regex: search, $options: "i" } } : {})
+        };
+
+        const sellerProducts = await Product.aggregate([
+            { $match: sellerQuery },
+            { $sort: { createdAt: -1 } },
+            { $skip: offset },
+            { $limit: limit },
+            {
+                $project: {
+                    _id: 1,
+                    name: "$productName",
+                    images: "$productImages",
+                    units: {
+                        mrp: "$mrp",
+                        sellingPrice: "$sellingPrice",
+                        offPer: "$offPer"
+                    },
+                    source: { $literal: "seller" }
+                }
+            }
+        ]);
+
+        const products = [...adminProducts, ...sellerProducts];
+
+        // Modify unit details if user is premium and percentageOff > 0 (admin products only)
         if (req.user.isPremium) {
             products.forEach(product => {
-                if (product.units) {
+                if (product.units && product.source === "admin") {
                     const { sellingPrice, mrp } = product.units;
                     const subcategoryPercentage = product.subCategoryPercentageOff || 0;
 
@@ -1506,7 +1504,7 @@ export const onlineProductsList = async (req, res) => {
             deleted: false,
             createdBy: req.user._id,
             productId: { $in: productIds },
-            unitId: { $in: unitIds }
+            ...(unitIds.length ? { unitId: { $in: unitIds } } : {})
         });
 
         let totalCartCount = 0;
@@ -1514,7 +1512,7 @@ export const onlineProductsList = async (req, res) => {
 
         cartItems.forEach(cart => {
             totalCartCount += cart.quantity;
-            cartCountMap.set(`${cart.productId}_${cart.unitId}`, cart.quantity);
+            cartCountMap.set(`${cart.productId}_${cart.unitId || "na"}`, cart.quantity);
         });
 
         products.forEach(product => {
@@ -1523,7 +1521,11 @@ export const onlineProductsList = async (req, res) => {
             }
         });
 
-        const totalCount = await OnlineProduct.countDocuments(query);
+        const [adminCount, sellerCount] = await Promise.all([
+            OnlineProduct.countDocuments(adminQuery),
+            Product.countDocuments(sellerQuery)
+        ]);
+        const totalCount = adminCount + sellerCount;
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
