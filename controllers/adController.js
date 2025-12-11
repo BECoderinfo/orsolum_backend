@@ -8,12 +8,22 @@ import { catchError } from "../helper/service.js";
 import Notification from "../models/Notification.js";
 import AdConfig from "../models/AdConfig.js";
 import axios from "axios";
+import crypto from "crypto";
 
 const { ObjectId } = mongoose.Types;
 
 // Allowed ad placements across Admin, Seller, and Retailer
 const AD_LOCATIONS = ["crazy_deals", "trending_items", "popular_categories", "stores_near_me", "promotional_banner"];
 const S3_BASE_URL = "https://orsolum.s3.ap-south-1.amazonaws.com/";
+const BANK_SECRET = process.env.ADS_BANK_SECRET || process.env.BANK_SECRET || "";
+
+const normalizeLocation = (loc) =>
+  (loc || "")
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/-+/g, "_");
 
 const ensureAbsoluteMediaUrl = (value) => {
   if (!value || typeof value !== "string") return value;
@@ -26,6 +36,31 @@ const normalizeMediaArray = (list = []) =>
 
 const extractUploadedUrls = (files = []) =>
   Array.isArray(files) ? files.map((file) => file.location || file.key).filter(Boolean) : [];
+
+const encryptValue = (value) => {
+  if (!BANK_SECRET || !value) return value;
+  const key = crypto.createHash("sha256").update(BANK_SECRET).digest();
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
+  let encrypted = cipher.update(value, "utf8", "base64");
+  encrypted += cipher.final("base64");
+  return `${iv.toString("base64")}:${encrypted}`;
+};
+
+const decryptValue = (value) => {
+  if (!BANK_SECRET || !value || !value.includes(":")) return value;
+  try {
+    const [ivStr, enc] = value.split(":");
+    const key = crypto.createHash("sha256").update(BANK_SECRET).digest();
+    const iv = Buffer.from(ivStr, "base64");
+    const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
+    let decrypted = decipher.update(enc, "base64", "utf8");
+    decrypted += decipher.final("utf8");
+    return decrypted;
+  } catch (e) {
+    return value;
+  }
+};
 
 // Group files when multer.any() is used
 const groupAnyUploadedMedia = (files = []) => {
@@ -128,7 +163,9 @@ export const createSellerAdRequest = async (req, res) => {
       videos,
     } = req.body;
 
-    if (!name || !location || !totalRunDays) {
+    const normalizedLocation = normalizeLocation(location);
+
+    if (!name || !normalizedLocation || !totalRunDays) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
@@ -136,7 +173,7 @@ export const createSellerAdRequest = async (req, res) => {
       });
     }
 
-    if (!AD_LOCATIONS.includes(location)) {
+    if (!AD_LOCATIONS.includes(normalizedLocation)) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
@@ -231,7 +268,7 @@ export const createSellerAdRequest = async (req, res) => {
 
     // Calculate amount based on config (per-day rate * days)
     const config = await getAdsConfig();
-    const perDayRate = config?.locationRates?.[location] || 0;
+    const perDayRate = config?.locationRates?.[normalizedLocation] || 0;
     const totalAmount = perDayRate * Number(totalRunDays || 0);
 
     const ad = new Ad({
@@ -240,7 +277,7 @@ export const createSellerAdRequest = async (req, res) => {
       productId: finalProductId,
       name: name.trim(),
       description: description?.trim(),
-      location,
+      location: normalizedLocation,
       images,
       videos: videoUrls,
       totalRunDays: Number(totalRunDays),
@@ -769,7 +806,9 @@ export const adminCreateOrsolumAd = async (req, res) => {
       videos,
     } = req.body;
 
-    if (!name || !location || !totalRunDays) {
+    const normalizedLocation = normalizeLocation(location);
+
+    if (!name || !normalizedLocation || !totalRunDays) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
@@ -777,7 +816,7 @@ export const adminCreateOrsolumAd = async (req, res) => {
       });
     }
 
-    if (!AD_LOCATIONS.includes(location)) {
+    if (!AD_LOCATIONS.includes(normalizedLocation)) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
@@ -1220,10 +1259,17 @@ export const checkAdsExpiryAndNotify = async () => {
 export const adminGetAdsConfig = async (req, res) => {
   try {
     const config = await getAdsConfig();
+    // Decrypt bank details for admin view
+    const decryptedBank = {
+      ...config.bankDetails,
+      accountNumber: decryptValue(config.bankDetails?.accountNumber || ""),
+      ifsc: decryptValue(config.bankDetails?.ifsc || ""),
+      upiId: decryptValue(config.bankDetails?.upiId || ""),
+    };
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
-      data: config,
+      data: { ...config, bankDetails: decryptedBank },
     });
   } catch (error) {
     res.status(status.InternalServerError).json({
@@ -1278,9 +1324,14 @@ export const adminUpdateAdsConfig = async (req, res) => {
     }
 
     if (req.body.bankDetails) {
+      // Encrypt sensitive fields
+      const incoming = req.body.bankDetails;
       update.bankDetails = {
         ...existing.bankDetails,
-        ...req.body.bankDetails,
+        ...incoming,
+        accountNumber: incoming.accountNumber ? encryptValue(incoming.accountNumber) : existing.bankDetails.accountNumber,
+        ifsc: incoming.ifsc ? encryptValue(incoming.ifsc) : existing.bankDetails.ifsc,
+        upiId: incoming.upiId ? encryptValue(incoming.upiId) : existing.bankDetails.upiId,
       };
     }
 
@@ -1307,12 +1358,18 @@ export const adminUpdateAdsConfig = async (req, res) => {
 export const getSellerAdsConfig = async (req, res) => {
   try {
     const config = await getAdsConfig();
+    const decryptedBank = {
+      ...config.bankDetails,
+      accountNumber: decryptValue(config.bankDetails?.accountNumber || ""),
+      ifsc: decryptValue(config.bankDetails?.ifsc || ""),
+      upiId: decryptValue(config.bankDetails?.upiId || ""),
+    };
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
       data: {
         locationRates: config.locationRates,
-        bankDetails: config.bankDetails,
+        bankDetails: decryptedBank,
       },
     });
   } catch (error) {
@@ -1335,6 +1392,7 @@ export const getSellerAdsConfig = async (req, res) => {
 export const getActiveAds = async (req, res) => {
   try {
     const { location } = req.query;
+    const normalizedLocation = location ? normalizeLocation(location) : null;
     const now = new Date();
 
     const filter = {
@@ -1345,140 +1403,109 @@ export const getActiveAds = async (req, res) => {
       sellerId: { $exists: true }, // ✅ Only ads with sellerId (seller ads)
     };
 
-    // Filter by location if provided
-    if (location && AD_LOCATIONS.includes(location)) {
-      filter.location = location;
+    if (normalizedLocation && AD_LOCATIONS.includes(normalizedLocation)) {
+      filter.location = normalizedLocation;
     }
 
-  // ✅ Use aggregation to filter by seller role
-  // First, get all seller user IDs
-  const sellerUsers = await User.find({ role: "seller" }).select("_id").lean();
-  const sellerIds = sellerUsers.map(u => u._id);
+    // ✅ seller ids
+    const sellerUsers = await User.find({ role: "seller" }).select("_id").lean();
+    const sellerIds = sellerUsers.map((u) => u._id);
+    filter.sellerId = { $in: sellerIds };
 
-  // Filter ads by sellerIds
-  filter.sellerId = { $in: sellerIds };
+    const sellerAds = await Ad.find(filter)
+      .populate("sellerId", "name phone role")
+      .populate("storeId", "name phone images")
+      .populate("productId", "productName primaryImage productImages sellingPrice mrp")
+      .sort({ startDate: 1 })
+      .lean();
 
-  const ads = await Ad.find(filter)
-    .populate("sellerId", "name phone role")
-    .populate("storeId", "name phone images")
-    .populate("productId", "productName primaryImage productImages sellingPrice mrp")
-    .sort({ startDate: 1 })
-    .lean();
-
-  // Group ads by location, keeping only one ad per location (first from sorted list)
-  const adsByLocation = {};
-  ads.forEach((ad) => {
-    // Double check - ensure sellerId exists and role is seller
-    if (!ad.sellerId || ad.sellerId.role !== "seller") return;
-    if (adsByLocation[ad.location]) return;
-    
-    // Prepare product images - combine primaryImage and productImages
-    let productImagesArray = [];
-    if (ad.productId) {
-      if (ad.productId.primaryImage) {
-        productImagesArray.push(ad.productId.primaryImage);
-      }
-      if (Array.isArray(ad.productId.productImages) && ad.productId.productImages.length > 0) {
-        ad.productId.productImages.forEach((img) => {
-          if (img && !productImagesArray.includes(img)) {
-            productImagesArray.push(img);
-          }
-        });
-      }
-      if (productImagesArray.length === 0) {
-        productImagesArray = [];
-      }
+    // Admin fallback ads
+    const fallbackFilter = {
+      status: "active",
+      startDate: { $lte: now },
+      endDate: { $gte: now },
+      deleted: { $ne: true },
+      sellerId: { $exists: false },
+    };
+    if (normalizedLocation && AD_LOCATIONS.includes(normalizedLocation)) {
+      fallbackFilter.location = normalizedLocation;
     }
-    const {
-      formattedImages,
-      formattedVideos,
-      primaryImage,
-      primaryVideo,
-      mediaAssets,
-    } = buildMediaPayload(ad.images, ad.videos);
+    const adminAds = await Ad.find(fallbackFilter).sort({ startDate: 1 }).lean();
 
-    adsByLocation[ad.location] = {
-      _id: ad._id,
-      name: ad.name,
-      description: ad.description,
-      images: formattedImages,
-      videos: formattedVideos,
-      primaryImage,
-      primaryVideo,
-      mediaAssets,
-      location: ad.location,
-      storeId: ad.storeId
-        ? {
-            _id: ad.storeId._id,
-            name: ad.storeId.name,
-            images: ad.storeId.images || [],
-          }
-        : null,
-      productId: ad.productId
-        ? {
-            _id: ad.productId._id,
-            name: ad.productId.productName || ad.productId.name || null,
-            images: productImagesArray,
-            price: ad.productId.sellingPrice ?? ad.productId.price ?? null,
-            mrp: ad.productId.mrp || null,
-          }
-        : null,
-      startDate: ad.startDate,
-      endDate: ad.endDate,
+    // helper to build ad payload
+    const buildAdPayload = (ad) => {
+      let productImagesArray = [];
+      if (ad.productId) {
+        if (ad.productId.primaryImage) productImagesArray.push(ad.productId.primaryImage);
+        if (Array.isArray(ad.productId.productImages)) {
+          ad.productId.productImages.forEach((img) => {
+            if (img && !productImagesArray.includes(img)) productImagesArray.push(img);
+          });
+        }
+      }
+      const { formattedImages, formattedVideos, primaryImage, primaryVideo, mediaAssets } = buildMediaPayload(
+        ad.images,
+        ad.videos
+      );
+      return {
+        _id: ad._id,
+        name: ad.name,
+        description: ad.description,
+        images: formattedImages,
+        videos: formattedVideos,
+        primaryImage,
+        primaryVideo,
+        mediaAssets,
+        location: ad.location,
+        storeId: ad.storeId
+          ? {
+              _id: ad.storeId._id,
+              name: ad.storeId.name,
+              images: ad.storeId.images || [],
+            }
+          : null,
+        productId: ad.productId
+          ? {
+              _id: ad.productId._id,
+              name: ad.productId.productName || ad.productId.name || null,
+              images: productImagesArray,
+              price: ad.productId.sellingPrice ?? ad.productId.price ?? null,
+              mrp: ad.productId.mrp || null,
+            }
+          : null,
+        startDate: ad.startDate,
+        endDate: ad.endDate,
+      };
     };
-  });
 
-  // Fill missing slots per location with admin ads (Orsolum) while keeping seller priority
-  const nowFallback = new Date();
-  const fallbackFilter = {
-    status: "active",
-    startDate: { $lte: nowFallback },
-    endDate: { $gte: nowFallback },
-    deleted: { $ne: true },
-    sellerId: { $exists: false }, // Admin (Orsolum) ads
-  };
-  if (location && AD_LOCATIONS.includes(location)) {
-    fallbackFilter.location = location;
-  }
+    // If requesting stores_near_me → return up to 5 ads (seller first, then admin)
+    if (normalizedLocation === "stores_near_me") {
+      const combined = [...sellerAds, ...adminAds].slice(0, 5).map(buildAdPayload);
+      return res.status(status.OK).json({
+        status: jsonStatus.OK,
+        success: true,
+        data: { ads: combined, adsByLocation: null },
+      });
+    }
 
-  const fallbackAds = await Ad.find(fallbackFilter).sort({ startDate: 1 }).lean();
-
-  fallbackAds.forEach((ad) => {
-    if (adsByLocation[ad.location]) return; // seller ad already occupies slot
-
-    const {
-      formattedImages,
-      formattedVideos,
-      primaryImage,
-      primaryVideo,
-      mediaAssets,
-    } = buildMediaPayload(ad.images, ad.videos);
-
-    adsByLocation[ad.location] = {
-      _id: ad._id,
-      name: ad.name,
-      description: ad.description,
-      images: formattedImages,
-      videos: formattedVideos,
-      primaryImage,
-      primaryVideo,
-      mediaAssets,
-      location: ad.location,
-      storeId: null,
-      productId: null,
-      startDate: ad.startDate,
-      endDate: ad.endDate,
-    };
-  });
-
-  const formattedAds = Object.values(adsByLocation);
+    // Group one per location (seller priority then admin)
+    const adsByLocation = {};
+    sellerAds.forEach((ad) => {
+      if (!ad.sellerId || ad.sellerId.role !== "seller") return;
+      if (adsByLocation[ad.location]) return;
+      adsByLocation[ad.location] = buildAdPayload(ad);
+    });
+    adminAds.forEach((ad) => {
+      if (adsByLocation[ad.location]) return;
+      adsByLocation[ad.location] = buildAdPayload(ad);
+    });
 
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
-      message: "Active ads for online store (seller ads only)",
+      message: "Active ads for online store",
       data: {
-        ads: formattedAds,
+        ads: Object.values(adsByLocation),
         adsByLocation: adsByLocation,
       },
     });

@@ -1055,9 +1055,9 @@ export const getLocalStoreHomePageData = async (req, res) => {
                 }
             },
             {
-                // Show only seller-owned stores to hide retailer inventory
+                // Show only retailer-owned stores
                 $match: {
-                    ownerRole: "seller"
+                    ownerRole: "retailer"
                 }
             },
             {
@@ -1299,9 +1299,9 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     }
                 },
                 {
-                    // Show only seller-owned stores to hide retailer inventory
+                    // Show only retailer-owned stores
                     $match: {
-                        ownerRole: "seller"
+                        ownerRole: "retailer"
                     }
                 },
                 {
@@ -1374,9 +1374,9 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     }
                 },
                 {
-                    // Show only seller-owned stores to hide retailer inventory
+                    // Show only retailer-owned stores
                     $match: {
-                        ownerRole: "seller"
+                        ownerRole: "retailer"
                     }
                 },
                 {
@@ -1548,7 +1548,7 @@ export const getAllStores = async (req, res) => {
         const aggregationPipeline = [];
 
         // Always enforce 5km when coordinates are present
-        if (lat && long) {
+        if (lat && long) {image.png
             aggregationPipeline.unshift({
                 $geoNear: {
                     near: {
