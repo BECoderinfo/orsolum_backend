@@ -1547,7 +1547,8 @@ export const getAllStores = async (req, res) => {
 
         const aggregationPipeline = [];
 
-        if (nearMe === "1" && lat && long) {
+        // Always enforce 5km when coordinates are present
+        if (lat && long) {
             aggregationPipeline.unshift({
                 $geoNear: {
                     near: {
@@ -1555,19 +1556,10 @@ export const getAllStores = async (req, res) => {
                         coordinates: [parseFloat(long), parseFloat(lat)]
                     },
                     distanceField: "distance",
-                    maxDistance: 5000, // 5 km radius as requested
+                    maxDistance: 5000, // strict 5 km radius
                     spherical: true
                 }
             });
-        } else if (lat && long) {
-            matchObj = {
-                ...matchObj,
-                location: {
-                    $geoWithin: {
-                        $centerSphere: [[parseFloat(long), parseFloat(lat)], 5000 / 6378.1] // 5 km radius
-                    }
-                }
-            };
         }
 
         aggregationPipeline.push(
