@@ -621,23 +621,28 @@ export const onlineStoreHomePage = async (req, res) => {
 
         // ✅ Get all seller user IDs to filter products
         const sellerUsers = await User.find({ role: "seller", deleted: false }).select("_id").lean();
-        const sellerIds = sellerUsers.map(u => u._id);
+        const sellerIds = sellerUsers.map(u => new ObjectId(u._id));
 
         // ✅ Get all admin IDs
         const adminUsers = await Admin.find({}).select("_id").lean();
-        const adminIds = adminUsers.map(a => a._id);
+        const adminIds = adminUsers.map(a => new ObjectId(a._id));
 
         // ✅ Combine seller and admin IDs
         const allowedCreatorIds = [...sellerIds, ...adminIds];
 
+        // ✅ If no allowed creators, return empty trending products
+        const trendingMatch = allowedCreatorIds.length > 0 
+            ? { 
+                deleted: false, 
+                trending: true,
+                createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
+            }
+            : { deleted: false, trending: true, _id: { $in: [] } }; // Empty match if no creators
+
         // Fetch trending products (limit 5) - only seller and admin products
         const trendingProducts = await OnlineProduct.aggregate([
             { 
-                $match: { 
-                    deleted: false, 
-                    trending: true,
-                    createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
-                } 
+                $match: trendingMatch
             },
             {
                 $lookup: {
@@ -730,21 +735,23 @@ export const allTrendingProducts = async (req, res) => {
 
         // ✅ Get all seller user IDs to filter products
         const sellerUsers = await User.find({ role: "seller", deleted: false }).select("_id").lean();
-        const sellerIds = sellerUsers.map(u => u._id);
+        const sellerIds = sellerUsers.map(u => new ObjectId(u._id));
 
         // ✅ Get all admin IDs
         const adminUsers = await Admin.find({}).select("_id").lean();
-        const adminIds = adminUsers.map(a => a._id);
+        const adminIds = adminUsers.map(a => new ObjectId(a._id));
 
         // ✅ Combine seller and admin IDs
         const allowedCreatorIds = [...sellerIds, ...adminIds];
 
         // Build match conditions
-        const matchConditions = { 
-            deleted: false, 
-            trending: true,
-            createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
-        };
+        const matchConditions = allowedCreatorIds.length > 0
+            ? { 
+                deleted: false, 
+                trending: true,
+                createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
+            }
+            : { deleted: false, trending: true, _id: { $in: [] } }; // Empty match if no creators
         
         // Add search filter if provided
         if (search) {
@@ -810,11 +817,13 @@ export const allTrendingProducts = async (req, res) => {
         }
 
         // Build count match conditions (same as main query)
-        const countMatchConditions = { 
-            deleted: false, 
-            trending: true,
-            createdBy: { $in: allowedCreatorIds } // ✅ Only count seller and admin products
-        };
+        const countMatchConditions = allowedCreatorIds.length > 0
+            ? { 
+                deleted: false, 
+                trending: true,
+                createdBy: { $in: allowedCreatorIds } // ✅ Only count seller and admin products
+            }
+            : { deleted: false, trending: true, _id: { $in: [] } }; // Empty match if no creators
         if (search) {
             countMatchConditions.name = { $regex: search, $options: 'i' };
         }
@@ -1353,21 +1362,80 @@ export const onlineProductsList = async (req, res) => {
 
         // ✅ Get all seller user IDs to filter products
         const sellerUsers = await User.find({ role: "seller", deleted: false }).select("_id").lean();
-        const sellerIds = sellerUsers.map(u => u._id);
+        const sellerIds = sellerUsers.map(u => new ObjectId(u._id));
 
         // ✅ Get all admin IDs
         const adminUsers = await Admin.find({}).select("_id").lean();
-        const adminIds = adminUsers.map(a => a._id);
+        const adminIds = adminUsers.map(a => new ObjectId(a._id));
 
         // ✅ Combine seller and admin IDs
         const allowedCreatorIds = [...sellerIds, ...adminIds];
 
+        // ✅ If no allowed creators, return empty result
+        if (allowedCreatorIds.length === 0) {
+            return res.status(status.OK).json({
+                status: jsonStatus.OK,
+                success: true,
+                data: { products: [], totalCartCount: 0 },
+                pagination: {
+                    total: 0,
+                    page: page,
+                    pageSize: limit,
+                    totalPages: 0
+                }
+            });
+        }
+
         // Fetch products with applied filters and pagination
+        // ✅ Use lookup to check if creator is seller or admin
         const products = await OnlineProduct.aggregate([
             {
+                $match: query // First match basic query (deleted, category, etc.)
+            },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "creatorUser",
+                    pipeline: [
+                        {
+                            $match: {
+                                role: "seller",
+                                deleted: false
+                            }
+                        },
+                        {
+                            $project: { _id: 1, role: 1 }
+                        }
+                    ]
+                }
+            },
+            {
+                $lookup: {
+                    from: "admins",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "creatorAdmin",
+                    pipeline: [
+                        {
+                            $project: { _id: 1 }
+                        }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    isSellerProduct: { $gt: [{ $size: "$creatorUser" }, 0] },
+                    isAdminProduct: { $gt: [{ $size: "$creatorAdmin" }, 0] }
+                }
+            },
+            {
                 $match: {
-                    ...query,
-                    createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
+                    $or: [
+                        { isSellerProduct: true },
+                        { isAdminProduct: true }
+                    ]
                 }
             },
             {
@@ -1417,11 +1485,31 @@ export const onlineProductsList = async (req, res) => {
             },
             {
                 $project: {
-                    units: 1,
-                    images: 1,
+                    _id: 1,
                     name: 1,
                     manufacturer: 1,
-                    subCategoryPercentageOff: "$subCategory.percentageOff"
+                    information: 1,
+                    images: 1,
+                    details: 1,
+                    categoryId: 1,
+                    subCategoryId: 1,
+                    brandId: 1,
+                    trending: 1,
+                    rating: 1,
+                    ratingCount: 1,
+                    coinCanUsed: 1,
+                    units: 1,
+                    category: 1,
+                    subCategory: 1,
+                    brand: 1,
+                    subCategoryPercentageOff: "$subCategory.percentageOff",
+                    createdAt: 1,
+                    updatedAt: 1,
+                    // Remove temporary fields
+                    creatorUser: 0,
+                    creatorAdmin: 0,
+                    isSellerProduct: 0,
+                    isAdminProduct: 0
                 }
             },
             { $skip: offset },
@@ -1470,14 +1558,49 @@ export const onlineProductsList = async (req, res) => {
         products.forEach(product => {
             if (product.units) {
                 product.units.cartCount = cartCountMap.get(`${product._id}_${product.units._id}`) || 0;
+            } else {
+                // ✅ If product has no units, set cartCount to 0
+                product.units = { cartCount: 0 };
             }
         });
 
-        // ✅ Count only seller and admin products
-        const totalCount = await OnlineProduct.countDocuments({
-            ...query,
-            createdBy: { $in: allowedCreatorIds }
-        });
+        // ✅ Count only seller and admin products using same lookup logic
+        const countPipeline = [
+            { $match: query },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "creatorUser",
+                    pipeline: [
+                        { $match: { role: "seller", deleted: false } },
+                        { $project: { _id: 1, role: 1 } }
+                    ]
+                }
+            },
+            {
+                $lookup: {
+                    from: "admins",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "creatorAdmin",
+                    pipeline: [{ $project: { _id: 1 } }]
+                }
+            },
+            {
+                $match: {
+                    $or: [
+                        { creatorUser: { $ne: [] } },
+                        { creatorAdmin: { $ne: [] } }
+                    ]
+                }
+            },
+            { $count: "total" }
+        ];
+        
+        const countResult = await OnlineProduct.aggregate(countPipeline);
+        const totalCount = countResult.length > 0 ? countResult[0].total : 0;
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
