@@ -17,6 +17,7 @@ import Payment from '../models/Payment.js';
 import Refund from '../models/Refund.js';
 import CoinHistory from '../models/CoinHistory.js';
 import User from '../models/User.js';
+import Admin from '../models/Admin.js';
 import ProductSubCategory from '../models/OnlineStore/SubCategory.js';
 import CouponHistory from '../models/CouponHistory.js';
 
@@ -618,9 +619,26 @@ export const onlineStoreHomePage = async (req, res) => {
             { $limit: 8 }
         ]);
 
-        // Fetch trending products (limit 5)
+        // ✅ Get all seller user IDs to filter products
+        const sellerUsers = await User.find({ role: "seller", deleted: false }).select("_id").lean();
+        const sellerIds = sellerUsers.map(u => u._id);
+
+        // ✅ Get all admin IDs
+        const adminUsers = await Admin.find({}).select("_id").lean();
+        const adminIds = adminUsers.map(a => a._id);
+
+        // ✅ Combine seller and admin IDs
+        const allowedCreatorIds = [...sellerIds, ...adminIds];
+
+        // Fetch trending products (limit 5) - only seller and admin products
         const trendingProducts = await OnlineProduct.aggregate([
-            { $match: { deleted: false, trending: true } },
+            { 
+                $match: { 
+                    deleted: false, 
+                    trending: true,
+                    createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
+                } 
+            },
             {
                 $lookup: {
                     from: "product_units",
@@ -710,8 +728,23 @@ export const allTrendingProducts = async (req, res) => {
         const page = parseInt(req.query.skip) || 1;
         const skip = (page - 1) * limit;
 
+        // ✅ Get all seller user IDs to filter products
+        const sellerUsers = await User.find({ role: "seller", deleted: false }).select("_id").lean();
+        const sellerIds = sellerUsers.map(u => u._id);
+
+        // ✅ Get all admin IDs
+        const adminUsers = await Admin.find({}).select("_id").lean();
+        const adminIds = adminUsers.map(a => a._id);
+
+        // ✅ Combine seller and admin IDs
+        const allowedCreatorIds = [...sellerIds, ...adminIds];
+
         // Build match conditions
-        const matchConditions = { deleted: false, trending: true };
+        const matchConditions = { 
+            deleted: false, 
+            trending: true,
+            createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
+        };
         
         // Add search filter if provided
         if (search) {
@@ -777,7 +810,11 @@ export const allTrendingProducts = async (req, res) => {
         }
 
         // Build count match conditions (same as main query)
-        const countMatchConditions = { deleted: false, trending: true };
+        const countMatchConditions = { 
+            deleted: false, 
+            trending: true,
+            createdBy: { $in: allowedCreatorIds } // ✅ Only count seller and admin products
+        };
         if (search) {
             countMatchConditions.name = { $regex: search, $options: 'i' };
         }
@@ -1314,10 +1351,24 @@ export const onlineProductsList = async (req, res) => {
             query.name = { $regex: search, $options: 'i' };
         }
 
+        // ✅ Get all seller user IDs to filter products
+        const sellerUsers = await User.find({ role: "seller", deleted: false }).select("_id").lean();
+        const sellerIds = sellerUsers.map(u => u._id);
+
+        // ✅ Get all admin IDs
+        const adminUsers = await Admin.find({}).select("_id").lean();
+        const adminIds = adminUsers.map(a => a._id);
+
+        // ✅ Combine seller and admin IDs
+        const allowedCreatorIds = [...sellerIds, ...adminIds];
+
         // Fetch products with applied filters and pagination
         const products = await OnlineProduct.aggregate([
             {
-                $match: query
+                $match: {
+                    ...query,
+                    createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
+                }
             },
             {
                 $lookup: {
@@ -1422,7 +1473,11 @@ export const onlineProductsList = async (req, res) => {
             }
         });
 
-        const totalCount = await OnlineProduct.countDocuments(query);
+        // ✅ Count only seller and admin products
+        const totalCount = await OnlineProduct.countDocuments({
+            ...query,
+            createdBy: { $in: allowedCreatorIds }
+        });
 
         res.status(status.OK).json({
             status: jsonStatus.OK,

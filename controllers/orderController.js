@@ -715,20 +715,87 @@ export const cartDetails = async (req, res) => {
 
     donate = donate ? Number(donate) : 0;
 
-    // If store id is missing/invalid, gracefully fallback to full cart details
+    let storeObjectId = null;
+
+    // If store id is missing/invalid, try to find store from cart items
     if (!id || !ObjectId.isValid(id)) {
-      return await allCartDetails(req, res);
+      // Try to get store ID from user's cart items
+      const userCartItems = await Cart.findOne({
+        createdBy: req.user._id,
+        deleted: false,
+      }).populate({
+        path: "productId",
+        populate: { path: "storeId" },
+      });
+
+      if (userCartItems && userCartItems.productId && userCartItems.productId.storeId) {
+        const storeIdFromCart = userCartItems.productId.storeId._id || userCartItems.productId.storeId;
+        if (ObjectId.isValid(storeIdFromCart)) {
+          storeObjectId = new ObjectId(storeIdFromCart);
+        }
+      }
+
+      // If still no valid store ID, return empty cart with same structure
+      if (!storeObjectId) {
+        const address = await Address.findOne({ createdBy: req.user._id });
+        return res.status(status.OK).json({
+          status: jsonStatus.OK,
+          success: true,
+          data: {
+            stores: [],
+            address,
+            overallTotalAmount: 0,
+            overallDiscountAmount: 0,
+            overallShippingFee: 0,
+            overallGrandTotal: 0,
+            donate,
+            couponCodeDiscount: 0,
+            appliedOffers: [],
+            similarProducts: [],
+          },
+        });
+      }
+    } else {
+      storeObjectId = new ObjectId(id);
     }
 
-    const storeObjectId = new ObjectId(id);
-
-    const findStore = await Store.findById(storeObjectId);
+    let findStore = await Store.findById(storeObjectId);
     if (!findStore) {
-      return res.status(status.NotFound).json({
-        status: jsonStatus.NotFound,
-        success: false,
-        message: "Store not found",
+      // If store not found, try to get store from cart items
+      const userCartItems = await Cart.findOne({
+        createdBy: req.user._id,
+        deleted: false,
+      }).populate({
+        path: "productId",
+        populate: { path: "storeId" },
       });
+
+      if (userCartItems && userCartItems.productId && userCartItems.productId.storeId) {
+        const storeIdFromCart = userCartItems.productId.storeId._id || userCartItems.productId.storeId;
+        if (ObjectId.isValid(storeIdFromCart)) {
+          storeObjectId = new ObjectId(storeIdFromCart);
+          findStore = await Store.findById(storeObjectId);
+          if (!findStore) {
+            return res.status(status.NotFound).json({
+              status: jsonStatus.NotFound,
+              success: false,
+              message: "Store not found",
+            });
+          }
+        } else {
+          return res.status(status.NotFound).json({
+            status: jsonStatus.NotFound,
+            success: false,
+            message: "Store not found",
+          });
+        }
+      } else {
+        return res.status(status.NotFound).json({
+          status: jsonStatus.NotFound,
+          success: false,
+          message: "Store not found",
+        });
+      }
     }
 
     const list = await Store.aggregate([
@@ -787,12 +854,19 @@ export const cartDetails = async (req, res) => {
                 },
               },
             },
+            {
+              $match: {
+                deleted: false,
+              },
+            },
           ],
         },
       },
       {
-        $match: {
-          productList: { $ne: [] },
+        $addFields: {
+          productList: {
+            $ifNull: ["$productList", []],
+          },
         },
       },
     ]);
@@ -811,22 +885,47 @@ export const cartDetails = async (req, res) => {
       deleted: false,
     });
 
+    // Ensure list is not empty - if store found, it should be in list
+    if (!list || list.length === 0) {
+      const address = await Address.findOne({ createdBy: req.user._id });
+      return res.status(status.OK).json({
+        status: jsonStatus.OK,
+        success: true,
+        data: {
+          stores: [],
+          address,
+          overallTotalAmount: 0,
+          overallDiscountAmount: 0,
+          overallShippingFee: 0,
+          overallGrandTotal: 0,
+          donate,
+          couponCodeDiscount: 0,
+          appliedOffers: [],
+          similarProducts: [],
+        },
+      });
+    }
+
     const enhancedList = list.map((store) => {
       let storeTotalAmount = 0;
       let storeDiscountAmount = 0;
       let storeAppliedOffers = []; // Track applied offers at store level
       let storeBOGOProducts = new Set();
 
-      store.productList = store.productList.map((product) => {
+      // Ensure productList is an array
+      const productList = Array.isArray(store.productList) ? store.productList : [];
+
+      store.productList = productList.map((product) => {
         let productTotal = 0;
         let productDiscount = 0;
         let appliedProductOffers = [];
         let freeQuantity = 0;
 
-        // product.cartDetails.forEach(cart => {
-        //     // ✅ Fix: Calculate product total correctly
-        productTotal += product.sellingPrice * product.cartDetails.quantity;
-        // });
+        // ✅ Fix: Calculate product total correctly
+        // Ensure cartDetails exists and has quantity
+        if (product.cartDetails && product.cartDetails.quantity) {
+          productTotal += product.sellingPrice * product.cartDetails.quantity;
+        }
 
         storeTotalAmount += productTotal; // ✅ Fix: Ensure total is accumulated
 
@@ -869,10 +968,11 @@ export const cartDetails = async (req, res) => {
             offer.offerType === "buy_one_get_one" &&
             offer.selectedProducts.includes(product._id.toString())
           ) {
-            // product.cartDetails.forEach(cart => {
             storeBOGOProducts.add(product._id.toString());
-            freeQuantity = product.cartDetails.quantity; // ✅ Add same quantity as free
-            // });
+            // ✅ Add same quantity as free
+            if (product.cartDetails && product.cartDetails.quantity) {
+              freeQuantity = product.cartDetails.quantity;
+            }
             storeAppliedOffers.push({
               type: "buy_one_get_one",
               description: `Buy 1 Get 1 Free applied`,
