@@ -1253,6 +1253,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
 
         let stores = [];
 
+        // Require coordinates or city/area to avoid showing far stores
         if (searchLat !== null && searchLong !== null) {
             // Build match conditions
             let matchConditions = {
@@ -1333,14 +1334,8 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                         distance: 1
                     }
                 },
-                {
-                    $sort: {
-                        createdAt: -1
-                    }
-                },
-                {
-                    $limit: 5
-                }
+                { $sort: { createdAt: -1 } },
+                { $limit: 5 } // Only 5 stores for home section
             ]);
         } else if (searchCity || searchArea) {
             // Build match conditions for city/area-based search
@@ -1363,9 +1358,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             }
 
             stores = await Store.aggregate([
-                {
-                    $match: matchConditions
-                },
+                { $match: matchConditions },
                 {
                     $lookup: {
                         from: "users",
@@ -1415,68 +1408,12 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                         location: 1
                     }
                 },
-                {
-                    $sort: {
-                        createdAt: -1
-                    }
-                },
-                {
-                    $limit: 8
-                }
+                { $sort: { createdAt: -1 } },
+                { $limit: 5 } // Only 5 for home section
             ]);
         } else {
-            // No coords or city: return a small default set of active stores to avoid empty UI
-            stores = await Store.aggregate([
-                { $match: { status: "A" } },
-                {
-                    $lookup: {
-                        from: "users",
-                        localField: "createdBy",
-                        foreignField: "_id",
-                        as: "owner",
-                        pipeline: [{ $project: { role: 1 } }]
-                    }
-                },
-                {
-                    $addFields: {
-                        ownerRole: { $arrayElemAt: ["$owner.role", 0] }
-                    }
-                },
-                {
-                    // Show only seller-owned stores to hide retailer inventory
-                    $match: {
-                        ownerRole: "seller"
-                    }
-                },
-                {
-                    $lookup: {
-                        from: "store_categories",
-                        localField: "category",
-                        foreignField: "_id",
-                        as: "category_name"
-                    }
-                },
-                {
-                    $addFields: {
-                        category_name: {
-                            $ifNull: [{ $arrayElemAt: ["$category_name.name", 0] }, null]
-                        }
-                    }
-                },
-                {
-                    $project: {
-                        _id: 1,
-                        productImages: 1,
-                        category_name: 1,
-                        name: 1,
-                        address: 1,
-                        images: 1,
-                        location: 1
-                    }
-                },
-                { $sort: { createdAt: -1 } },
-                { $limit: 8 }
-            ]);
+            // No coords and no city/area: do not show far stores
+            stores = [];
         }
 
         if (searchLat !== null && searchLong !== null) {
@@ -1505,14 +1442,8 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     estimatedTimeMinutes: null
                 };
             });
-        } else if (searchCity) {
-            stores = stores.map(store => ({
-                ...store,
-                distanceKm: null,
-                estimatedTimeMinutes: null
-            }));
         } else {
-            // Default list (no location): keep distance/time null
+            // Without location, keep distance/time null
             stores = stores.map(store => ({
                 ...store,
                 distanceKm: null,
@@ -1588,8 +1519,13 @@ export const getAllStores = async (req, res) => {
     try {
         const { category, search, relevance, nearMe, offers } = req.query;
         const searchTerm = (typeof search === "string" ? search : "").trim();
-        let { skip } = req.query;
+        let { skip, limit: customLimit } = req.query;
         skip = skip || 1;
+
+        // If nearMe=1 (view all near me), allow larger limit (default 50)
+        const effectiveLimit = nearMe === "1"
+            ? (Number(customLimit) > 0 ? Number(customLimit) : 50)
+            : limit;
         const { lat, long } = req.user || {};
 
         let matchObj = {
@@ -1718,10 +1654,10 @@ export const getAllStores = async (req, res) => {
 
         aggregationPipeline.push(
             {
-                $skip: (Number(skip) - 1) * limit
+                $skip: (Number(skip) - 1) * effectiveLimit
             },
             {
-                $limit: limit
+                $limit: effectiveLimit
             }
         );
 

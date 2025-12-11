@@ -48,6 +48,7 @@ import {
   listSubCategoryByCategory,
   returnChangeStatus,
   onlineOrderChangeStatus,
+  onlineStorePopularCategoriesFromAdmin,
 } from "../controllers/onlineStoreController.js";
 import {
   adminAuthentication,
@@ -190,6 +191,8 @@ onlineStoreRouter.get('/online/store/discovery/v1', userAuthentication, onlineSt
 onlineStoreRouter.get('/online/store/explore/cards/v1', userAuthentication, onlineStoreExploreCards);
 onlineStoreRouter.get('/online/store/popular/categories/v1', userAuthentication, onlineStorePopularCategories);
 onlineStoreRouter.get('/online/store/popular/brands/v1', userAuthentication, onlineStorePopularBrands);
+// User-facing popular categories created in admin panel
+onlineStoreRouter.get('/online/store/popular/admin/categories/v1', userAuthentication, onlineStorePopularCategoriesFromAdmin);
 onlineStoreRouter.get('/online/store/products/list/v1', userAuthentication, onlineProductsList);
 onlineStoreRouter.get('/online/store/products/details/:id/v1', userAuthentication, onlineProductsDetails);
 

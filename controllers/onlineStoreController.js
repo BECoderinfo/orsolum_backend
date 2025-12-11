@@ -18,6 +18,7 @@ import Refund from '../models/Refund.js';
 import CoinHistory from '../models/CoinHistory.js';
 import User from '../models/User.js';
 import Admin from '../models/Admin.js';
+import PopularCategory from '../models/PopularCategory.js';
 import ProductSubCategory from '../models/OnlineStore/SubCategory.js';
 import CouponHistory from '../models/CouponHistory.js';
 
@@ -1295,6 +1296,50 @@ export const onlineStorePopularCategories = async (req, res) => {
     }
 };
 
+// ✅ User-facing: popular categories created in admin panel
+export const onlineStorePopularCategoriesFromAdmin = async (req, res) => {
+    try {
+        const search = req.query.search?.trim() || '';
+        const page = parsePositiveInt(req.query.skip || req.query.page, 1);
+        const pageSize = parsePositiveInt(req.query.limit || req.query.categoryLimit, limit || 10);
+
+        const skip = (page - 1) * pageSize;
+
+        const match = {
+            deleted: false,
+            ...(search ? { name: { $regex: search, $options: 'i' } } : {})
+        };
+
+        const [items, total] = await Promise.all([
+            PopularCategory.aggregate([
+                { $match: match },
+                { $sort: { createdAt: -1 } },
+                { $skip: skip },
+                { $limit: pageSize }
+            ]),
+            PopularCategory.countDocuments(match)
+        ]);
+
+        const totalCartCount = await fetchUserCartCount(req.user._id);
+
+        return res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: {
+                totalCartCount,
+                items,
+                total,
+                page,
+                pageSize,
+                totalPages: Math.ceil(total / pageSize),
+                viewAllEndpoint: "/api/online/store/popular/admin/categories/v1"
+            }
+        });
+    } catch (error) {
+        return catchError('onlineStorePopularCategoriesFromAdmin', error, req, res);
+    }
+};
+
 export const onlineStorePopularBrands = async (req, res) => {
     try {
         const search = req.query.search?.trim() || req.query.brandSearch?.trim() || '';
@@ -1360,83 +1405,10 @@ export const onlineProductsList = async (req, res) => {
             query.name = { $regex: search, $options: 'i' };
         }
 
-        // ✅ Get all seller user IDs to filter products
-        const sellerUsers = await User.find({ role: "seller", deleted: false }).select("_id").lean();
-        const sellerIds = sellerUsers.map(u => new ObjectId(u._id));
-
-        // ✅ Get all admin IDs
-        const adminUsers = await Admin.find({}).select("_id").lean();
-        const adminIds = adminUsers.map(a => new ObjectId(a._id));
-
-        // ✅ Combine seller and admin IDs
-        const allowedCreatorIds = [...sellerIds, ...adminIds];
-
-        // ✅ If no allowed creators, return empty result
-        if (allowedCreatorIds.length === 0) {
-            return res.status(status.OK).json({
-                status: jsonStatus.OK,
-                success: true,
-                data: { products: [], totalCartCount: 0 },
-                pagination: {
-                    total: 0,
-                    page: page,
-                    pageSize: limit,
-                    totalPages: 0
-                }
-            });
-        }
-
         // Fetch products with applied filters and pagination
-        // ✅ Use lookup to check if creator is seller or admin
         const products = await OnlineProduct.aggregate([
             {
-                $match: query // First match basic query (deleted, category, etc.)
-            },
-            {
-                $lookup: {
-                    from: "users",
-                    localField: "createdBy",
-                    foreignField: "_id",
-                    as: "creatorUser",
-                    pipeline: [
-                        {
-                            $match: {
-                                role: "seller",
-                                deleted: false
-                            }
-                        },
-                        {
-                            $project: { _id: 1, role: 1 }
-                        }
-                    ]
-                }
-            },
-            {
-                $lookup: {
-                    from: "admins",
-                    localField: "createdBy",
-                    foreignField: "_id",
-                    as: "creatorAdmin",
-                    pipeline: [
-                        {
-                            $project: { _id: 1 }
-                        }
-                    ]
-                }
-            },
-            {
-                $addFields: {
-                    isSellerProduct: { $gt: [{ $size: "$creatorUser" }, 0] },
-                    isAdminProduct: { $gt: [{ $size: "$creatorAdmin" }, 0] }
-                }
-            },
-            {
-                $match: {
-                    $or: [
-                        { isSellerProduct: true },
-                        { isAdminProduct: true }
-                    ]
-                }
+                $match: query
             },
             {
                 $lookup: {
@@ -1504,12 +1476,7 @@ export const onlineProductsList = async (req, res) => {
                     brand: 1,
                     subCategoryPercentageOff: "$subCategory.percentageOff",
                     createdAt: 1,
-                    updatedAt: 1,
-                    // Remove temporary fields
-                    creatorUser: 0,
-                    creatorAdmin: 0,
-                    isSellerProduct: 0,
-                    isAdminProduct: 0
+                    updatedAt: 1
                 }
             },
             { $skip: offset },
@@ -1544,7 +1511,8 @@ export const onlineProductsList = async (req, res) => {
             deleted: false,
             createdBy: req.user._id,
             productId: { $in: productIds },
-            unitId: { $in: unitIds }
+            // If unitIds is empty, let MongoDB handle it (no matches) – avoid $in: []
+            ...(unitIds.length ? { unitId: { $in: unitIds } } : {})
         });
 
         let totalCartCount = 0;
@@ -1558,49 +1526,11 @@ export const onlineProductsList = async (req, res) => {
         products.forEach(product => {
             if (product.units) {
                 product.units.cartCount = cartCountMap.get(`${product._id}_${product.units._id}`) || 0;
-            } else {
-                // ✅ If product has no units, set cartCount to 0
-                product.units = { cartCount: 0 };
             }
         });
 
-        // ✅ Count only seller and admin products using same lookup logic
-        const countPipeline = [
-            { $match: query },
-            {
-                $lookup: {
-                    from: "users",
-                    localField: "createdBy",
-                    foreignField: "_id",
-                    as: "creatorUser",
-                    pipeline: [
-                        { $match: { role: "seller", deleted: false } },
-                        { $project: { _id: 1, role: 1 } }
-                    ]
-                }
-            },
-            {
-                $lookup: {
-                    from: "admins",
-                    localField: "createdBy",
-                    foreignField: "_id",
-                    as: "creatorAdmin",
-                    pipeline: [{ $project: { _id: 1 } }]
-                }
-            },
-            {
-                $match: {
-                    $or: [
-                        { creatorUser: { $ne: [] } },
-                        { creatorAdmin: { $ne: [] } }
-                    ]
-                }
-            },
-            { $count: "total" }
-        ];
-        
-        const countResult = await OnlineProduct.aggregate(countPipeline);
-        const totalCount = countResult.length > 0 ? countResult[0].total : 0;
+        // ✅ Count documents with the same basic filters
+        const totalCount = await OnlineProduct.countDocuments(query);
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
