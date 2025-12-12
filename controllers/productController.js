@@ -2225,9 +2225,10 @@ export const getStoreProductList = async (req, res) => {
     try {
 
         const { id } = req.params;
-        const { search } = req.query;
-        let { skip } = req.query;
+        let { search, skip, limit } = req.query;
         skip = skip || 1;
+        limit = limit ? parseInt(limit) : 20;
+        const searchTerm = typeof search === "string" ? search.trim() : "";
 
         const store = await Store.findById(id);
         if (!store) {
@@ -2241,9 +2242,14 @@ export const getStoreProductList = async (req, res) => {
                 $match: {
                     deleted: false,
                     storeId: new ObjectId(id),
+                    ...(searchTerm
+                        ? {
                     productName: {
-                        $regex: search, $options: 'i'
+                                $regex: searchTerm,
+                                $options: 'i'
                     }
+                        }
+                        : {})
                 }
             },
             {
