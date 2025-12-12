@@ -156,7 +156,13 @@ const collectNearbyStoreCategoryIds = async ({ lat, long, maxDistance = 5000 }) 
   return stores.map((s) => s._id).filter(Boolean);
 };
 
-const fetchLocalPopularCategories = async ({ lat, long, limitCount = 8 }) => {
+const S3_BASE_URL =
+  process.env.CDN_URL ||
+  process.env.IMAGE_BASE_URL ||
+  process.env.S3_BASE_URL ||
+  "https://orsolum.s3.ap-south-1.amazonaws.com/";
+
+const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => {
   let storeCategoryIds = await collectNearbyStoreCategoryIds({ lat, long, maxDistance: 5000 });
 
   // If nothing found in 5km, retry with 8km to avoid empty UI
@@ -167,7 +173,7 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = 8 }) => {
   // If still none, return empty array (respect location filter)
   if (!storeCategoryIds.length) return [];
 
-  return LocalPopularCategory.aggregate([
+  const pipeline = [
     {
       $match: {
         deleted: false,
@@ -188,8 +194,25 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = 8 }) => {
       },
     },
     { $sort: { createdAt: -1 } },
-    { $limit: limitCount },
-  ]);
+  ];
+
+  // Only apply limit if explicitly provided
+  if (limitCount && Number.isFinite(limitCount)) {
+    pipeline.push({ $limit: limitCount });
+  }
+
+  const rows = await LocalPopularCategory.aggregate(pipeline);
+
+  // Attach absolute image URL for client use
+  return rows.map((row) => ({
+    ...row,
+    image: row.image,
+    imageUrl: row.image
+      ? row.image.startsWith("http")
+        ? row.image
+        : `${S3_BASE_URL}${row.image}`
+      : null,
+  }));
 };
 
 const parseDescriptionField = (incoming) => {
@@ -1266,7 +1289,7 @@ export const getLocalStoreHomePageData = async (req, res) => {
             limitCount: 8,
             fallbackToAll: false
         });
-        const popularCategories = await fetchLocalPopularCategories({ lat, long, limitCount: 8 });
+        const popularCategories = await fetchLocalPopularCategories({ lat, long, limitCount: null });
 
         const basePipeline = [
             {
@@ -1498,7 +1521,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             limitCount: 8,
             fallbackToAll: false
         });
-        const popularCategories = await fetchLocalPopularCategories({ lat: searchLat, long: searchLong, limitCount: 8 });
+        const popularCategories = await fetchLocalPopularCategories({ lat: searchLat, long: searchLong, limitCount: null });
 
         let stores = [];
 
@@ -1790,7 +1813,7 @@ export const getLocalPopularCategories = async (req, res) => {
     try {
         const lat = req.query?.lat ?? req.body?.lat ?? req.user?.lat;
         const long = req.query?.long ?? req.body?.long ?? req.user?.long;
-        const limitCount = req.query?.limit ? Number(req.query.limit) : 8;
+        const limitCount = req.query?.limit ? Number(req.query.limit) : null;
 
         const popularCategories = await fetchLocalPopularCategories({ lat, long, limitCount });
 

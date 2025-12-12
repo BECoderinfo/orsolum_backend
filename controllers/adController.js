@@ -1432,7 +1432,7 @@ export const getActiveAds = async (req, res) => {
     }
     const adminAds = await Ad.find(fallbackFilter).sort({ startDate: 1 }).lean();
 
-    // helper to build ad payload
+    // helper to build ad payload with image fallbacks
     const buildAdPayload = (ad) => {
       let productImagesArray = [];
       if (ad.productId) {
@@ -1443,17 +1443,29 @@ export const getActiveAds = async (req, res) => {
           });
         }
       }
+      const storeImagesArray = normalizeMediaArray(ad.storeId?.images || []);
       const { formattedImages, formattedVideos, primaryImage, primaryVideo, mediaAssets } = buildMediaPayload(
         ad.images,
         ad.videos
       );
+      const formattedProductImages = productImagesArray.map((img) => ensureAbsoluteMediaUrl(img));
+      const resolvedPrimaryImage =
+        primaryImage ||
+        formattedProductImages[0] ||
+        storeImagesArray[0] ||
+        null;
+      const resolvedImages = formattedImages.length
+        ? formattedImages
+        : resolvedPrimaryImage
+        ? [resolvedPrimaryImage]
+        : [];
       return {
         _id: ad._id,
         name: ad.name,
         description: ad.description,
-        images: formattedImages,
+        images: resolvedImages,
         videos: formattedVideos,
-        primaryImage,
+        primaryImage: resolvedPrimaryImage,
         primaryVideo,
         mediaAssets,
         location: ad.location,
@@ -1461,14 +1473,14 @@ export const getActiveAds = async (req, res) => {
           ? {
               _id: ad.storeId._id,
               name: ad.storeId.name,
-              images: ad.storeId.images || [],
+            images: storeImagesArray,
             }
           : null,
         productId: ad.productId
           ? {
               _id: ad.productId._id,
               name: ad.productId.productName || ad.productId.name || null,
-              images: productImagesArray,
+            images: formattedProductImages,
               price: ad.productId.sellingPrice ?? ad.productId.price ?? null,
               mrp: ad.productId.mrp || null,
             }
@@ -1587,6 +1599,16 @@ export const getRetailerLocalStoreAds = async (req, res) => {
         primaryVideo,
         mediaAssets,
       } = buildMediaPayload(ad.images, ad.videos);
+      const resolvedPrimaryImage =
+        primaryImage ||
+        (productImagesArray[0] ? ensureAbsoluteMediaUrl(productImagesArray[0]) : null) ||
+        storeImagesArray[0] ||
+        null;
+      const resolvedImages = adImagesArray.length
+        ? adImagesArray
+        : resolvedPrimaryImage
+        ? [resolvedPrimaryImage]
+        : [];
       
       // Format product images with full URL
       const formattedProductImages = productImagesArray.map((img) => {
@@ -1600,9 +1622,9 @@ export const getRetailerLocalStoreAds = async (req, res) => {
         _id: ad._id,
         name: ad.name,
         description: ad.description,
-        images: adImagesArray,
+        images: resolvedImages,
         videos: adVideosArray,
-        primaryImage,
+        primaryImage: resolvedPrimaryImage,
         primaryVideo,
         mediaAssets,
         location: ad.location,
@@ -1655,17 +1677,34 @@ export const getRetailerLocalStoreAds = async (req, res) => {
       mediaAssets,
     } = buildMediaPayload(ad.images, ad.videos);
 
+    const storeImagesArray = normalizeMediaArray(ad.storeId?.images || []);
+    const resolvedPrimaryImage =
+      primaryImage ||
+      storeImagesArray[0] ||
+      null;
+    const resolvedImages = adImagesArray.length
+      ? adImagesArray
+      : resolvedPrimaryImage
+      ? [resolvedPrimaryImage]
+      : [];
+
     adsByLocation[ad.location] = {
       _id: ad._id,
       name: ad.name,
       description: ad.description,
-      images: adImagesArray,
+      images: resolvedImages,
       videos: adVideosArray,
-      primaryImage,
+      primaryImage: resolvedPrimaryImage,
       primaryVideo,
       mediaAssets,
       location: ad.location,
-      storeId: null,
+      storeId: ad.storeId
+        ? {
+            _id: ad.storeId._id,
+            name: ad.storeId.name,
+            images: storeImagesArray,
+          }
+        : null,
       productId: null,
       startDate: ad.startDate,
       endDate: ad.endDate,
