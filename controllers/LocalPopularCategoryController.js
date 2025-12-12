@@ -1,22 +1,22 @@
-import PopularCategory from "../models/PopularCategory.js";
+import LocalPopularCategory from "../models/LocalPopularCategory.js";
 import { signedUrl } from '../helper/s3.config.js';
 import { jsonStatus, status } from '../helper/api.responses.js';
 import { catchError } from '../helper/service.js';
 
-export const uploadPopularCategoryImage = async (req, res) => {
+export const uploadLocalPopularCategoryImage = async (req, res) => {
   try {
-    signedUrl(req, res, "Popular_Category/");
+    signedUrl(req, res, "Local_Popular_Category/");
   } catch (error) {
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
       message: error.message,
     });
-    return catchError("uploadPopularCategoryImage", error, req, res);
+    return catchError("uploadLocalPopularCategoryImage", error, req, res);
   }
 };
 
-export const createPopularCategory = async (req, res) => {
+export const createLocalPopularCategory = async (req, res) => {
   try {
     const { name, image, storeCategoryId } = req.body;
     const uploadedImagePath = req.file?.key;
@@ -30,7 +30,7 @@ export const createPopularCategory = async (req, res) => {
       });
     }
 
-    let newCategory = new PopularCategory({
+    let newCategory = new LocalPopularCategory({
       name,
       image: finalImage,
       storeCategoryId: storeCategoryId || null,
@@ -51,11 +51,11 @@ export const createPopularCategory = async (req, res) => {
       success: false,
       message: error.message,
     });
-    return catchError("createPopularCategory", error, req, res);
+    return catchError("createLocalPopularCategory", error, req, res);
   }
 };
 
-export const editPopularCategory = async (req, res) => {
+export const editLocalPopularCategory = async (req, res) => {
   try {
     const { name, image, storeCategoryId } = req.body;
     const { id } = req.params;
@@ -70,16 +70,16 @@ export const editPopularCategory = async (req, res) => {
       });
     }
 
-    const category = await PopularCategory.findById(id);
+    const category = await LocalPopularCategory.findById(id);
     if (!category) {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
         success: false,
-        message: "Popular category not found",
+        message: "Local popular category not found",
       });
     }
 
-    const updatedCategory = await PopularCategory.findByIdAndUpdate(
+    const updatedCategory = await LocalPopularCategory.findByIdAndUpdate(
       id,
       { name, image: finalImage, storeCategoryId: storeCategoryId || null, updatedBy: req.user._id },
       { new: true, runValidators: true }
@@ -96,24 +96,24 @@ export const editPopularCategory = async (req, res) => {
       success: false,
       message: error.message,
     });
-    return catchError("editPopularCategory", error, req, res);
+    return catchError("editLocalPopularCategory", error, req, res);
   }
 };
 
-export const deletePopularCategory = async (req, res) => {
+export const deleteLocalPopularCategory = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const category = await PopularCategory.findById(id);
+    const category = await LocalPopularCategory.findById(id);
     if (!category) {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
         success: false,
-        message: "Popular category not found",
+        message: "Local popular category not found",
       });
     }
 
-    await PopularCategory.findByIdAndUpdate(
+    await LocalPopularCategory.findByIdAndUpdate(
       id,
       { deleted: true, updatedBy: req.user._id },
       { new: true, runValidators: true }
@@ -129,13 +129,13 @@ export const deletePopularCategory = async (req, res) => {
       success: false,
       message: error.message,
     });
-    return catchError("deletePopularCategory", error, req, res);
+    return catchError("deleteLocalPopularCategory", error, req, res);
   }
 };
 
-export const listPopularCategory = async (req, res) => {
+export const listLocalPopularCategory = async (req, res) => {
   try {
-    const list = await PopularCategory.aggregate([
+    const list = await LocalPopularCategory.aggregate([
       { $match: { deleted: false } },
       {
         $lookup: {
@@ -147,9 +147,7 @@ export const listPopularCategory = async (req, res) => {
       },
       {
         $addFields: {
-          storeCategory: {
-            $ifNull: [{ $arrayElemAt: ["$storeCategory", 0] }, null],
-          },
+          storeCategory: { $arrayElemAt: ["$storeCategory", 0] },
         },
       },
       { $sort: { createdAt: -1 } },
@@ -166,6 +164,7 @@ export const listPopularCategory = async (req, res) => {
       success: false,
       message: error.message,
     });
-    return catchError("listPopularCategory", error, req, res);
+    return catchError("listLocalPopularCategory", error, req, res);
   }
 };
+

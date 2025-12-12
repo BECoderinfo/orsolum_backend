@@ -1,6 +1,6 @@
 import express from "express";
 import { body } from 'express-validator';
-import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, productDetails, acceptProduct, rejectProduct, deleteLocalProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus, createOffer, listOffers, updateOffer, deleteOffer, getWelcomeImage, uploadWelcomeImage, deleteWelcomeImage, saveStorePopularProducts, updateStoreRating } from "../controllers/adminController.js";
+import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, productDetails, acceptProduct, rejectProduct, deleteLocalProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus, createOffer, listOffers, updateOffer, deleteOffer, getWelcomeImage, uploadWelcomeImage, deleteWelcomeImage, saveStorePopularProducts, updateStoreRating, syncSellerProductsToOnline } from "../controllers/adminController.js";
 import { uploadAdMediaAny, uploadAdMediaMulter, uploadStoreImagesMulter, uploadPopularCategoryImageMulter } from "../helper/uploadImage.js";
 import { adminAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { createWorkHours, getAllWorkHours, updateWorkHours, deleteWorkHours } from "../controllers/workHoursController.js";
@@ -10,6 +10,7 @@ import { createNotification, listNotifications, deleteNotification } from "../co
 import { adminListHelpCenterTickets, adminUpdateHelpCenterTicket, adminDeleteHelpCenterTicket } from "../controllers/helpCenterController.js";
 import { adminListAds, adminGetAdDetails, adminUpdateAdStatus, adminCreateOrsolumAd, adminUpdateOrsolumAd, adminDeleteOrsolumAd, adminGetAdsConfig, adminUpdateAdsConfig, adminDeleteAd } from "../controllers/adController.js";
 import { createPopularCategory, editPopularCategory, uploadPopularCategoryImage, deletePopularCategory, listPopularCategory } from "../controllers/PopularCategoryController.js";
+import { createLocalPopularCategory, editLocalPopularCategory, uploadLocalPopularCategoryImage, deleteLocalPopularCategory, listLocalPopularCategory } from "../controllers/LocalPopularCategoryController.js";
 const adminRouter = express.Router();
 
 // Admin
@@ -61,6 +62,39 @@ adminRouter.get(
   listPopularCategory
 );
 
+// Local Popular Category
+adminRouter.post(
+  "/admin/upload/local/popular/category/image/v1",
+  adminAuthentication,
+  uploadLocalPopularCategoryImage
+);
+
+adminRouter.post(
+  "/admin/create/local/popular/category/v1",
+  adminAuthentication,
+  uploadPopularCategoryImageMulter.single("image"),
+  createLocalPopularCategory
+);
+
+adminRouter.put(
+  "/admin/edit/local/popular/category/:id/v1",
+  adminAuthentication,
+  uploadPopularCategoryImageMulter.single("image"),
+  editLocalPopularCategory
+);
+
+adminRouter.delete(
+  "/admin/delete/local/popular/category/:id/v1",
+  adminAuthentication,
+  deleteLocalPopularCategory
+);
+
+adminRouter.get(
+  "/admin/list/local/popular/category/v1",
+  adminAuthentication,
+  listLocalPopularCategory
+);
+
 // store
 adminRouter.get('/admin/list/store/v1', adminAuthentication, listStores);
 adminRouter.get('/admin/store/details/:id/v1', adminAuthentication, storeDetails);
@@ -76,6 +110,7 @@ adminRouter.get('/admin/product/details/:id/v1', adminAuthentication, productDet
 adminRouter.post('/admin/accept/product/v1', adminAuthentication, acceptProduct);
 adminRouter.post('/admin/reject/product/v1', adminAuthentication, rejectProduct);
 adminRouter.delete('/admin/delete/local/product/:id/v1', adminAuthentication, deleteLocalProduct);
+adminRouter.post('/admin/sync/seller/products/to/online/v1', adminAuthentication, syncSellerProductsToOnline);
 
 // coupon code
 adminRouter.post('/admin/create/coupon/code/v1', adminAuthentication, createCouponCode);

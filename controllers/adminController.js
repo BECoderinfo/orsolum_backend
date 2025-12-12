@@ -19,6 +19,8 @@ import Cart from '../models/Cart.js';
 import PickupAddress from '../models/PickupAddress.js';
 import Offer from '../models/Offer.js';
 import WelcomeImage from '../models/WelcomeImage.js';
+import OnlineProduct from '../models/OnlineStore/OnlineProduct.js';
+import ProductUnitOnline from '../models/OnlineStore/ProductUnit.js';
 import bcrypt from 'bcrypt';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
@@ -311,7 +313,7 @@ export const listStoreCategory = async (req, res) => {
 export const listStores = async (req, res) => {
     try {
 
-        const { search } = req.query;
+        const { search, role } = req.query;
 
         const pipeline = [];
 
@@ -348,7 +350,34 @@ export const listStores = async (req, res) => {
                         ]
                     }
                 }
+            },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "storeCreator",
+                    pipeline: [
+                        {
+                            $project: { role: 1 }
+                        }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    creatorRole: { $arrayElemAt: ["$storeCreator.role", 0] }
+                }
             });
+
+        // Filter by role if provided (retailer or seller)
+        if (role === "retailer" || role === "seller") {
+            pipeline.push({
+                $match: {
+                    creatorRole: role
+                }
+            });
+        }
 
         const list = await Store.aggregate(pipeline);
 
@@ -746,9 +775,48 @@ export const listProducts = async (req, res) => {
             };
         }
 
+        // ✅ Only show products from retailer panel stores (stores created by users with role "retailer")
         const list = await Product.aggregate([
             {
                 $match: matchStage
+            },
+            {
+                $lookup: {
+                    from: "stores",
+                    localField: "storeId",
+                    foreignField: "_id",
+                    as: "store",
+                    pipeline: [
+                        {
+                            $lookup: {
+                                from: "users",
+                                localField: "createdBy",
+                                foreignField: "_id",
+                                as: "storeCreator",
+                                pipeline: [
+                                    {
+                                        $project: { role: 1 }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            $addFields: {
+                                creatorRole: { $arrayElemAt: ["$storeCreator.role", 0] }
+                            }
+                        },
+                        {
+                            $match: {
+                                creatorRole: "retailer" // Only stores created by retailers
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $match: {
+                    "store.0": { $exists: true } // Only products from retailer stores
+                }
             },
             {
                 $sort: {
@@ -768,12 +836,72 @@ export const productDetails = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const product = await Product.findById(id);
-        if (!product) {
+        const productDetails = await Product.aggregate([
+            {
+                $match: {
+                    _id: new ObjectId(id)
+                }
+            },
+            {
+                $lookup: {
+                    from: "stores",
+                    localField: "storeId",
+                    foreignField: "_id",
+                    as: "store",
+                    pipeline: [
+                        {
+                            $project: {
+                                name: 1,
+                                createdBy: 1
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $lookup: {
+                    from: "product_categories",
+                    localField: "categoryId",
+                    foreignField: "_id",
+                    as: "category",
+                    pipeline: [
+                        {
+                            $project: {
+                                name: 1
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $lookup: {
+                    from: "product_sub_categories",
+                    localField: "subCategoryId",
+                    foreignField: "_id",
+                    as: "subCategory",
+                    pipeline: [
+                        {
+                            $project: {
+                                name: 1
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    storeName: { $arrayElemAt: ["$store.name", 0] },
+                    categoryName: { $arrayElemAt: ["$category.name", 0] },
+                    subCategoryName: { $arrayElemAt: ["$subCategory.name", 0] }
+                }
+            }
+        ]);
+
+        if (!productDetails || productDetails.length === 0) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product not found" });
         }
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: product });
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: productDetails[0] });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('productDetails', error, req, res);
@@ -1759,5 +1887,105 @@ export const saveStorePopularProducts = async (req, res) => {
             message: error.message
         });
         return catchError('saveStorePopularProducts', error, req, res);
+    }
+};
+
+// Helper endpoint to sync existing seller products to OnlineProduct
+export const syncSellerProductsToOnline = async (req, res) => {
+    try {
+        // Get all sellers
+        const sellers = await User.find({ role: "seller", deleted: false }).select("_id");
+        const sellerIds = sellers.map(seller => seller._id);
+
+        if (sellerIds.length === 0) {
+            return res.status(status.OK).json({
+                status: jsonStatus.OK,
+                success: true,
+                message: "No sellers found",
+                data: { synced: 0, skipped: 0, failed: 0 }
+            });
+        }
+
+        // Get all seller products with categoryId and subCategoryId
+        const products = await Product.find({
+            createdBy: { $in: sellerIds },
+            deleted: false,
+            categoryId: { $exists: true, $ne: null },
+            subCategoryId: { $exists: true, $ne: null }
+        });
+
+        let synced = 0;
+        let skipped = 0;
+        let failed = 0;
+
+        for (const product of products) {
+            try {
+                // Check if OnlineProduct already exists
+                const existingOnlineProduct = await OnlineProduct.findOne({
+                    createdBy: product.createdBy,
+                    name: product.productName,
+                    manufacturer: product.companyName
+                }).sort({ createdAt: -1 });
+
+                if (existingOnlineProduct) {
+                    skipped++;
+                    continue;
+                }
+
+                // Create OnlineProduct
+                const onlineProductPayload = {
+                    name: product.productName,
+                    information: product.information,
+                    manufacturer: product.companyName,
+                    images: product.productImages || [],
+                    details: product.details || [],
+                    categoryId: product.categoryId,
+                    subCategoryId: product.subCategoryId,
+                    createdBy: product.createdBy,
+                    updatedBy: product.createdBy,
+                };
+
+                const onlineProduct = await OnlineProduct.create(onlineProductPayload);
+
+                // Create primary unit
+                const primaryUnit = product.units && product.units.length > 0 
+                    ? product.units[0] 
+                    : {
+                        qty: product.qty || "1",
+                        mrp: product.mrp,
+                        sellingPrice: product.sellingPrice,
+                        offPer: product.offPer
+                    };
+
+                const unitPayload = {
+                    qty: primaryUnit.qty || "1",
+                    mrp: primaryUnit.mrp || product.mrp,
+                    sellingPrice: primaryUnit.sellingPrice || product.sellingPrice,
+                    offPer: primaryUnit.offPer || product.offPer,
+                    parentProduct: onlineProduct._id,
+                };
+
+                await ProductUnitOnline.create(unitPayload);
+                synced++;
+            } catch (err) {
+                console.error(`Failed to sync product ${product._id}:`, err.message);
+                failed++;
+            }
+        }
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: `Sync completed: ${synced} synced, ${skipped} skipped, ${failed} failed`,
+            data: { synced, skipped, failed, total: products.length }
+        });
+    } catch (error) {
+        console.error("Error in syncSellerProductsToOnline:", error);
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('syncSellerProductsToOnline', error, req, res);
     }
 };

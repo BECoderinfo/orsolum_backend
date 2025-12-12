@@ -88,7 +88,7 @@ const UserSchema = new mongoose.Schema({
     },
     storeStatus: {
         type: String,
-        enum: ["Pending", "Approved", "Rejected"],
+        enum: ["Pending", "Approved", "Rejected", "draft"],
         default: "Pending",
     },
 }, { timestamps: true });

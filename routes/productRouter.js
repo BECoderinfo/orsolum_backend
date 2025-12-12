@@ -1,6 +1,6 @@
 import express from "express";
 import { body } from 'express-validator';
-import { uploadProductImage, createProduct, editProduct, deleteProduct, productDetails, productList, getLocalStoreHomePageData, getLocalStoreHomePageDataV2, getAllCategories, getAllStores, getStoreDetails, getStoreProductList, getCategoryProductList, getProductDetails, deleteProductImage } from "../controllers/productController.js";
+import { uploadProductImage, createProduct, editProduct, deleteProduct, productDetails, productList, getLocalStoreHomePageData, getLocalStoreHomePageDataV2, getAllCategories, getLocalPopularCategories, getAllStores, getStoreDetails, getStoreProductList, getCategoryProductList, getProductDetails, deleteProductImage } from "../controllers/productController.js";
 import { retailerAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { uploadProductImagesMulter } from "../helper/uploadImage.js";
 const productRouter = express.Router();
@@ -23,6 +23,7 @@ productRouter.put('/retailer/delete/product/image/:id/v1', retailerAuthenticatio
 productRouter.get('/user/local/store/home/page/v1', userAuthentication, getLocalStoreHomePageData); // not in used
 productRouter.post('/user/local/store/home/page/v2', userAuthentication, getLocalStoreHomePageDataV2);
 productRouter.get('/user/get/all/categories/v1', userAuthentication, getAllCategories);
+productRouter.get('/user/local/popular/categories/v1', userAuthentication, getLocalPopularCategories);
 productRouter.get('/user/get/all/stores/v1', userAuthentication, getAllStores);
 productRouter.get('/user/store/details/:id/v1', userAuthentication, getStoreDetails);
 productRouter.get('/user/store/product/list/:id/v1', userAuthentication, getStoreProductList);

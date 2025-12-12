@@ -5,10 +5,15 @@ import User from '../models/User.js';
 import Cart from '../models/Cart.js';
 import Product from '../models/Product.js';
 import StoreCategory from '../models/StoreCategory.js';
+import PopularCategory from '../models/PopularCategory.js';
+import LocalPopularCategory from '../models/LocalPopularCategory.js';
+import OnlineProduct from '../models/OnlineStore/OnlineProduct.js';
+import ProductUnitOnline from '../models/OnlineStore/ProductUnit.js';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
 import { getDistance } from "geolib";
 import { fetchTrendingProducts } from "../helper/trendingHelper.js";
+import { getDistanceAndTime } from "../helper/latAndLong.js";
 
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
@@ -62,6 +67,129 @@ const parseProductImagesField = (incoming) => {
 const mergeProductImages = (...lists) => {
   const flat = lists.flat().filter(Boolean);
   return [...new Set(flat)];
+};
+
+const toNumberOrNull = (value) => {
+  const num = parseFloat(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+/**
+ * Fetch store categories that have at least one active store within the given radius.
+ * If coordinates are missing and fallbackToAll is true, return all non-deleted categories.
+ */
+const fetchCategoriesWithLocation = async ({
+  lat,
+  long,
+  limitCount,
+  fallbackToAll = true,
+  maxDistance = 5000
+}) => {
+  const parsedLat = toNumberOrNull(lat);
+  const parsedLong = toNumberOrNull(long);
+
+  const basePipeline = [{ $match: { deleted: false } }, { $sort: { createdAt: -1 } }];
+  if (Number.isFinite(limitCount)) {
+    basePipeline.push({ $limit: limitCount });
+  }
+
+  if (parsedLat === null || parsedLong === null) {
+    return fallbackToAll ? StoreCategory.aggregate(basePipeline) : [];
+  }
+
+  const nearbyCategories = await Store.aggregate([
+    {
+      $geoNear: {
+        near: {
+          type: "Point",
+          coordinates: [parsedLong, parsedLat]
+        },
+        distanceField: "distance",
+        maxDistance: maxDistance,
+        spherical: true
+      }
+    },
+    { $match: { status: "A" } },
+    { $group: { _id: "$category" } }
+  ]);
+
+  const categoryIds = nearbyCategories.map((c) => c._id).filter(Boolean);
+  if (!categoryIds.length) {
+    return [];
+  }
+
+  const pipeline = [
+    {
+      $match: {
+        _id: { $in: categoryIds },
+        deleted: false
+      }
+    },
+    { $sort: { createdAt: -1 } }
+  ];
+
+  if (Number.isFinite(limitCount)) {
+    pipeline.push({ $limit: limitCount });
+  }
+
+  return StoreCategory.aggregate(pipeline);
+};
+
+const collectNearbyStoreCategoryIds = async ({ lat, long, maxDistance = 5000 }) => {
+  const parsedLat = toNumberOrNull(lat);
+  const parsedLong = toNumberOrNull(long);
+  if (parsedLat === null || parsedLong === null) return [];
+
+  const stores = await Store.aggregate([
+    {
+      $geoNear: {
+        near: { type: "Point", coordinates: [parsedLong, parsedLat] },
+        distanceField: "distance",
+        maxDistance,
+        spherical: true,
+      },
+    },
+    { $match: { status: "A" } },
+    { $group: { _id: "$category" } },
+  ]);
+
+  return stores.map((s) => s._id).filter(Boolean);
+};
+
+const fetchLocalPopularCategories = async ({ lat, long, limitCount = 8 }) => {
+  let storeCategoryIds = await collectNearbyStoreCategoryIds({ lat, long, maxDistance: 5000 });
+
+  // If nothing found in 5km, retry with 8km to avoid empty UI
+  if (!storeCategoryIds.length) {
+    storeCategoryIds = await collectNearbyStoreCategoryIds({ lat, long, maxDistance: 8000 });
+  }
+
+  // If still none, return empty array (respect location filter)
+  if (!storeCategoryIds.length) return [];
+
+  return LocalPopularCategory.aggregate([
+    {
+      $match: {
+        deleted: false,
+        storeCategoryId: { $in: storeCategoryIds },
+      },
+    },
+    {
+      $lookup: {
+        from: "store_categories",
+        localField: "storeCategoryId",
+        foreignField: "_id",
+        as: "storeCategory",
+      },
+    },
+    {
+      $addFields: {
+        storeCategory: { $arrayElemAt: ["$storeCategory", 0] },
+      },
+    },
+    { $sort: { createdAt: -1 } },
+    { $limit: limitCount },
+  ]);
 };
 
 const parseDescriptionField = (incoming) => {
@@ -486,33 +614,44 @@ export const createProduct = async (req, res) => {
       // ✅ Sync to online store when created by seller role (so seller products appear in online store)
       try {
         if (req.user?.role === "seller") {
-          // Create OnlineProduct
-          const onlineProductPayload = {
-            name: productName,
-            information,
-            manufacturer: companyName,
-            images: productImages,
-            details: parsedDetails,
-            categoryId: categoryParse.value,
-            subCategoryId: subCategoryParse.value,
-            createdBy: req.user._id, // although schema ref is admin, keep creator for trace
-            updatedBy: req.user._id,
-          };
+          // Only sync if category and subcategory are valid (required for OnlineProduct)
+          if (categoryParse.value && subCategoryParse.value) {
+            // Create OnlineProduct
+            const onlineProductPayload = {
+              name: productName,
+              information,
+              manufacturer: companyName,
+              images: productImages,
+              details: parsedDetails,
+              categoryId: categoryParse.value,
+              subCategoryId: subCategoryParse.value,
+              createdBy: req.user._id, // although schema ref is admin, keep creator for trace
+              updatedBy: req.user._id,
+            };
 
-          const onlineProduct = await OnlineProduct.create(onlineProductPayload);
+            const onlineProduct = await OnlineProduct.create(onlineProductPayload);
+            console.log("✅ OnlineProduct created for seller:", onlineProduct._id);
 
-          // Create primary unit for online product (using primaryUnit or base prices)
-          const primaryUnitPayload = {
-            qty: primaryUnit?.qty || "1",
-            mrp: parsedMrp,
-            sellingPrice: parsedSellingPrice,
-            offPer: offPer,
-            parentProduct: onlineProduct._id,
-          };
-          await ProductUnitOnline.create(primaryUnitPayload);
+            // Create primary unit for online product (using primaryUnit or base prices)
+            const primaryUnitPayload = {
+              qty: primaryUnit?.qty || "1",
+              mrp: parsedMrp,
+              sellingPrice: parsedSellingPrice,
+              offPer: offPer,
+              parentProduct: onlineProduct._id,
+            };
+            await ProductUnitOnline.create(primaryUnitPayload);
+            console.log("✅ ProductUnit created for OnlineProduct:", onlineProduct._id);
+          } else {
+            console.warn("⚠️ Skipping OnlineProduct sync: category or subcategory missing", {
+              categoryId: categoryParse.value,
+              subCategoryId: subCategoryParse.value
+            });
+          }
         }
       } catch (syncErr) {
-        console.warn("⚠️ Online product sync failed:", syncErr.message);
+        console.error("❌ Online product sync failed:", syncErr.message);
+        console.error("Sync error details:", syncErr);
         // Do not block retailer product creation on sync failure
       }
 
@@ -791,6 +930,109 @@ export const editProduct = async (req, res) => {
             { new: true, runValidators: true }
         );
 
+        // ✅ Sync to OnlineProduct when updated by seller and category/subcategory are present
+        if (req.user?.role === "seller" && editProduct) {
+            try {
+                const finalCategoryId = updateData.categoryId || editProduct.categoryId;
+                const finalSubCategoryId = updateData.subCategoryId || editProduct.subCategoryId;
+
+                if (finalCategoryId && finalSubCategoryId) {
+                    // Check if OnlineProduct already exists for this Product
+                    const existingOnlineProduct = await OnlineProduct.findOne({
+                        createdBy: req.user._id,
+                        name: editProduct.productName,
+                        manufacturer: editProduct.companyName
+                    }).sort({ createdAt: -1 });
+
+                    const onlineProductData = {
+                        name: updateData.productName || editProduct.productName,
+                        information: updateData.information || editProduct.information,
+                        manufacturer: updateData.companyName || editProduct.companyName,
+                        images: updateData.productImages || editProduct.productImages || [],
+                        details: updateData.details || editProduct.details || [],
+                        categoryId: finalCategoryId,
+                        subCategoryId: finalSubCategoryId,
+                        createdBy: req.user._id,
+                        updatedBy: req.user._id,
+                    };
+
+                    if (existingOnlineProduct) {
+                        // Update existing OnlineProduct
+                        await OnlineProduct.findByIdAndUpdate(
+                            existingOnlineProduct._id,
+                            onlineProductData,
+                            { new: true, runValidators: true }
+                        );
+
+                        // Update or create ProductUnit
+                        const primaryUnit = editProduct.units && editProduct.units.length > 0 
+                            ? editProduct.units[0] 
+                            : {
+                                qty: editProduct.qty || "1",
+                                mrp: editProduct.mrp,
+                                sellingPrice: editProduct.sellingPrice,
+                                offPer: editProduct.offPer
+                            };
+
+                        const unitData = {
+                            qty: primaryUnit.qty || "1",
+                            mrp: primaryUnit.mrp || editProduct.mrp,
+                            sellingPrice: primaryUnit.sellingPrice || editProduct.sellingPrice,
+                            offPer: primaryUnit.offPer || editProduct.offPer,
+                            parentProduct: existingOnlineProduct._id,
+                            deleted: false
+                        };
+
+                        const existingUnit = await ProductUnitOnline.findOne({
+                            parentProduct: existingOnlineProduct._id,
+                            deleted: false
+                        });
+
+                        if (existingUnit) {
+                            await ProductUnitOnline.findByIdAndUpdate(existingUnit._id, unitData, { new: true });
+                        } else {
+                            await ProductUnitOnline.create(unitData);
+                        }
+
+                        console.log("✅ OnlineProduct updated for seller:", existingOnlineProduct._id);
+                    } else {
+                        // Create new OnlineProduct
+                        const newOnlineProduct = await OnlineProduct.create(onlineProductData);
+                        console.log("✅ OnlineProduct created for seller:", newOnlineProduct._id);
+
+                        // Create primary unit
+                        const primaryUnit = editProduct.units && editProduct.units.length > 0 
+                            ? editProduct.units[0] 
+                            : {
+                                qty: editProduct.qty || "1",
+                                mrp: editProduct.mrp,
+                                sellingPrice: editProduct.sellingPrice,
+                                offPer: editProduct.offPer
+                            };
+
+                        const unitPayload = {
+                            qty: primaryUnit.qty || "1",
+                            mrp: primaryUnit.mrp || editProduct.mrp,
+                            sellingPrice: primaryUnit.sellingPrice || editProduct.sellingPrice,
+                            offPer: primaryUnit.offPer || editProduct.offPer,
+                            parentProduct: newOnlineProduct._id,
+                        };
+                        await ProductUnitOnline.create(unitPayload);
+                        console.log("✅ ProductUnit created for OnlineProduct:", newOnlineProduct._id);
+                    }
+                } else {
+                    console.warn("⚠️ Skipping OnlineProduct sync: category or subcategory missing", {
+                        categoryId: finalCategoryId,
+                        subCategoryId: finalSubCategoryId
+                    });
+                }
+            } catch (syncErr) {
+                console.error("❌ Online product sync failed:", syncErr.message);
+                console.error("Sync error details:", syncErr);
+                // Do not block product update on sync failure
+            }
+        }
+
         const formattedProduct = applyPrimaryImageFallback(
             editProduct?.toObject ? editProduct.toObject() : editProduct
         );
@@ -1018,21 +1260,13 @@ export const getLocalStoreHomePageData = async (req, res) => {
         const parsedLat = Number.isFinite(parseFloat(lat)) ? parseFloat(lat) : null;
         const parsedLong = Number.isFinite(parseFloat(long)) ? parseFloat(long) : null;
 
-        const categories = await StoreCategory.aggregate([
-            {
-                $match: {
-                    deleted: false
-                }
-            },
-            {
-                $sort: {
-                    createdAt: -1
-                }
-            },
-            {
-                $limit: 8
-            }
-        ]);
+        const categories = await fetchCategoriesWithLocation({
+            lat,
+            long,
+            limitCount: 8,
+            fallbackToAll: false
+        });
+        const popularCategories = await fetchLocalPopularCategories({ lat, long, limitCount: 8 });
 
         const basePipeline = [
             {
@@ -1112,31 +1346,55 @@ export const getLocalStoreHomePageData = async (req, res) => {
         let stores = await Store.aggregate(basePipeline);
 
         if (parsedLat !== null && parsedLong !== null) {
-            const userLocation = { latitude: parsedLat, longitude: parsedLong };
-            const speedKmPerHour = 30; // Adjust for travel mode
 
-            stores = stores.map(store => {
-                if (store.location && store.location.coordinates) {
-                    const storeLocation = {
-                        latitude: store.location.coordinates[1],
-                        longitude: store.location.coordinates[0]
-                    };
+            const userLocation = { lat: parsedLat, lng: parsedLong };
 
-                    const distance = store.distance ? store.distance / 1000 : getDistance(userLocation, storeLocation) / 1000; // Convert to km
-                    const estimatedTime = (distance / speedKmPerHour) * 60; // Convert to minutes
+            // Calculate distance and time for all stores using Google Maps API
+            const storesWithDistance = await Promise.all(
+                stores.map(async (store) => {
+                    if (store.location && store.location.coordinates) {
+                        const storeLocation = {
+                            lat: store.location.coordinates[1],
+                            lng: store.location.coordinates[0]
+                        };
 
+                        // Try to get real distance and time from Google Maps
+                        const distanceTimeData = await getDistanceAndTime(userLocation, storeLocation);
+                        
+                        if (distanceTimeData) {
+                            return {
+                                ...store,
+                                distanceKm: distanceTimeData.distance,
+                                estimatedTimeMinutes: distanceTimeData.duration
+                            };
+                        } else {
+                            // Fallback to simple calculation
+                            const userLocationGeo = {
+                                latitude: parsedLat,
+                                longitude: parsedLong
+                            };
+                            const storeLocationGeo = {
+                                latitude: store.location.coordinates[1],
+                                longitude: store.location.coordinates[0]
+                            };
+                            const distance = store.distance ? store.distance / 1000 : getDistance(userLocationGeo, storeLocationGeo) / 1000;
+                            const speedKmPerHour = 30;
+                            const estimatedTime = (distance / speedKmPerHour) * 60;
+                            return {
+                                ...store,
+                                distanceKm: Math.ceil(distance),
+                                estimatedTimeMinutes: Math.ceil(estimatedTime)
+                            };
+                        }
+                    }
                     return {
                         ...store,
-                        distanceKm: Math.ceil(distance),
-                        estimatedTimeMinutes: Math.ceil(estimatedTime)
+                        distanceKm: null,
+                        estimatedTimeMinutes: null
                     };
-                }
-                return {
-                    ...store,
-                    distanceKm: null,
-                    estimatedTimeMinutes: null
-                };
-            });
+                })
+            );
+            stores = storesWithDistance;
         } else {
             // If user location is not available, set distance and time to null for all stores
             stores = stores.map(store => ({
@@ -1146,7 +1404,7 @@ export const getLocalStoreHomePageData = async (req, res) => {
             }));
         }
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: { categories, stores } });
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: { categories, popularCategories, stores } });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('getLocalStoreHomePageData', error, req, res);
@@ -1234,22 +1492,13 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             searchArea = extractAreaFromAddress(userDetails.address);
         }
 
-        // Fetch categories (unchanged from original code)
-        const categories = await StoreCategory.aggregate([
-            {
-                $match: {
-                    deleted: false
-                }
-            },
-            {
-                $sort: {
-                    createdAt: -1
-                }
-            },
-            {
-                $limit: 8
-            }
-        ]);
+        const categories = await fetchCategoriesWithLocation({
+            lat: searchLat,
+            long: searchLong,
+            limitCount: 8,
+            fallbackToAll: false
+        });
+        const popularCategories = await fetchLocalPopularCategories({ lat: searchLat, long: searchLong, limitCount: 8 });
 
         let stores = [];
 
@@ -1417,31 +1666,54 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
         }
 
         if (searchLat !== null && searchLong !== null) {
-            const userLocation = { latitude: searchLat, longitude: searchLong };
-            const speedKmPerHour = 30; // Adjust for travel mode
+            const userLocation = { lat: searchLat, lng: searchLong };
 
-            stores = stores.map(store => {
-                if (store.location && store.location.coordinates) {
-                    const storeLocation = {
-                        latitude: store.location.coordinates[1],
-                        longitude: store.location.coordinates[0]
-                    };
+            // Calculate distance and time for all stores using Google Maps API
+            const storesWithDistance = await Promise.all(
+                stores.map(async (store) => {
+                    if (store.location && store.location.coordinates) {
+                        const storeLocation = {
+                            lat: store.location.coordinates[1],
+                            lng: store.location.coordinates[0]
+                        };
 
-                    const distance = store.distance ? store.distance / 1000 : getDistance(userLocation, storeLocation) / 1000; // Convert to km
-                    const estimatedTime = (distance / speedKmPerHour) * 60; // Convert to minutes
-
+                        // Try to get real distance and time from Google Maps
+                        const distanceTimeData = await getDistanceAndTime(userLocation, storeLocation);
+                        
+                        if (distanceTimeData) {
+                            return {
+                                ...store,
+                                distanceKm: distanceTimeData.distance,
+                                estimatedTimeMinutes: distanceTimeData.duration
+                            };
+                        } else {
+                            // Fallback to simple calculation
+                            const userLocationGeo = {
+                                latitude: searchLat,
+                                longitude: searchLong
+                            };
+                            const storeLocationGeo = {
+                                latitude: store.location.coordinates[1],
+                                longitude: store.location.coordinates[0]
+                            };
+                            const distance = store.distance ? store.distance / 1000 : getDistance(userLocationGeo, storeLocationGeo) / 1000;
+                            const speedKmPerHour = 30;
+                            const estimatedTime = (distance / speedKmPerHour) * 60;
+                            return {
+                                ...store,
+                                distanceKm: Math.ceil(distance),
+                                estimatedTimeMinutes: Math.ceil(estimatedTime)
+                            };
+                        }
+                    }
                     return {
                         ...store,
-                        distanceKm: Math.ceil(distance),
-                        estimatedTimeMinutes: Math.ceil(estimatedTime)
+                        distanceKm: null,
+                        estimatedTimeMinutes: null
                     };
-                }
-                return {
-                    ...store,
-                    distanceKm: null,
-                    estimatedTimeMinutes: null
-                };
-            });
+                })
+            );
+            stores = storesWithDistance;
         } else {
             // Without location, keep distance/time null
             stores = stores.map(store => ({
@@ -1480,6 +1752,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             success: true,
             data: {
                 categories,
+                popularCategories,
                 stores,
                 trendingProducts,
                 totalCartCount,
@@ -1495,23 +1768,36 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
 export const getAllCategories = async (req, res) => {
     try {
 
-        const categories = await StoreCategory.aggregate([
-            {
-                $match: {
-                    deleted: false
-                }
-            },
-            {
-                $sort: {
-                    createdAt: -1
-                }
-            }
-        ]);
+        const lat = req.query?.lat ?? req.user?.lat;
+        const long = req.query?.long ?? req.user?.long;
+
+        const categories = await fetchCategoriesWithLocation({
+            lat,
+            long,
+            // Return complete list when location is missing
+            fallbackToAll: true,
+            limitCount: null
+        });
 
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: categories });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('getAllCategories', error, req, res);
+    }
+};
+
+export const getLocalPopularCategories = async (req, res) => {
+    try {
+        const lat = req.query?.lat ?? req.body?.lat ?? req.user?.lat;
+        const long = req.query?.long ?? req.body?.long ?? req.user?.long;
+        const limitCount = req.query?.limit ? Number(req.query.limit) : 8;
+
+        const popularCategories = await fetchLocalPopularCategories({ lat, long, limitCount });
+
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: popularCategories });
+    } catch (error) {
+        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        return catchError('getLocalPopularCategories', error, req, res);
     }
 };
 
@@ -1548,7 +1834,7 @@ export const getAllStores = async (req, res) => {
         const aggregationPipeline = [];
 
         // Always enforce 5km when coordinates are present
-        if (lat && long) {image.png
+        if (lat && long) {
             aggregationPipeline.unshift({
                 $geoNear: {
                     near: {
@@ -1656,31 +1942,54 @@ export const getAllStores = async (req, res) => {
         let stores = await Store.aggregate(aggregationPipeline);
 
         if (lat && long) {
-            const userLocation = { latitude: parseFloat(lat), longitude: parseFloat(long) };
-            const speedKmPerHour = 30; // Adjust for travel mode
+            const userLocation = { lat: parseFloat(lat), lng: parseFloat(long) };
 
-            stores = stores.map(store => {
-                if (store.location && store.location.coordinates) {
-                    const storeLocation = {
-                        latitude: store.location.coordinates[1],
-                        longitude: store.location.coordinates[0]
-                    };
+            // Calculate distance and time for all stores using Google Maps API
+            const storesWithDistance = await Promise.all(
+                stores.map(async (store) => {
+                    if (store.location && store.location.coordinates) {
+                        const storeLocation = {
+                            lat: store.location.coordinates[1],
+                            lng: store.location.coordinates[0]
+                        };
 
-                    const distance = getDistance(userLocation, storeLocation) / 1000; // Convert to km
-                    const estimatedTime = (distance / speedKmPerHour) * 60; // Convert to minutes
-
+                        // Try to get real distance and time from Google Maps
+                        const distanceTimeData = await getDistanceAndTime(userLocation, storeLocation);
+                        
+                        if (distanceTimeData) {
+                            return {
+                                ...store,
+                                distanceKm: distanceTimeData.distance,
+                                estimatedTimeMinutes: distanceTimeData.duration
+                            };
+                        } else {
+                            // Fallback to simple calculation
+                            const userLocationGeo = {
+                                latitude: parseFloat(lat),
+                                longitude: parseFloat(long)
+                            };
+                            const storeLocationGeo = {
+                                latitude: store.location.coordinates[1],
+                                longitude: store.location.coordinates[0]
+                            };
+                            const distance = getDistance(userLocationGeo, storeLocationGeo) / 1000;
+                            const speedKmPerHour = 30;
+                            const estimatedTime = (distance / speedKmPerHour) * 60;
+                            return {
+                                ...store,
+                                distanceKm: Math.ceil(distance),
+                                estimatedTimeMinutes: Math.ceil(estimatedTime)
+                            };
+                        }
+                    }
                     return {
                         ...store,
-                        distanceKm: Math.ceil(distance),
-                        estimatedTimeMinutes: Math.ceil(estimatedTime)
+                        distanceKm: null,
+                        estimatedTimeMinutes: null
                     };
-                }
-                return {
-                    ...store,
-                    distanceKm: null,
-                    estimatedTimeMinutes: null
-                };
-            });
+                })
+            );
+            stores = storesWithDistance;
         } else {
             // If user location is not available, set distance and time to null for all stores
             stores = stores.map(store => ({
@@ -1835,21 +2144,38 @@ export const getStoreDetails = async (req, res) => {
             const user = await User.findById(userId);
             if (user && user.lat && user.long) {
                 const userLocation = {
-                    latitude: parseFloat(user.lat),
-                    longitude: parseFloat(user.long)
+                    lat: parseFloat(user.lat),
+                    lng: parseFloat(user.long)
                 };
 
                 const storeLocation = {
-                    latitude: store.location.coordinates[1],
-                    longitude: store.location.coordinates[0]
+                    lat: store.location.coordinates[1],
+                    lng: store.location.coordinates[0]
                 };
 
-                distance = getDistance(userLocation, storeLocation) / 1000; // Convert to km
-
-                const speedKmPerHour = 30; // Adjust based on travel mode (e.g., walking ~5 km/h, car ~30 km/h)
-                estimatedTime = (distance / speedKmPerHour) * 60; // Convert to minutes
-                distance = Math.ceil(distance);
-                estimatedTime = Math.ceil(estimatedTime);
+                // Try to get real distance and time from Google Maps Distance Matrix API
+                const distanceTimeData = await getDistanceAndTime(userLocation, storeLocation);
+                
+                if (distanceTimeData) {
+                    // Use real data from Google Maps
+                    distance = distanceTimeData.distance;
+                    estimatedTime = distanceTimeData.duration;
+                } else {
+                    // Fallback to simple calculation if API fails
+                    const userLocationGeo = {
+                        latitude: parseFloat(user.lat),
+                        longitude: parseFloat(user.long)
+                    };
+                    const storeLocationGeo = {
+                        latitude: store.location.coordinates[1],
+                        longitude: store.location.coordinates[0]
+                    };
+                    distance = getDistance(userLocationGeo, storeLocationGeo) / 1000; // Convert to km
+                    const speedKmPerHour = 30; // Adjust based on travel mode (e.g., walking ~5 km/h, car ~30 km/h)
+                    estimatedTime = (distance / speedKmPerHour) * 60; // Convert to minutes
+                    distance = Math.ceil(distance);
+                    estimatedTime = Math.ceil(estimatedTime);
+                }
             }
         }
 

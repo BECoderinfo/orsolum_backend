@@ -5,6 +5,11 @@ const ProductSchema = new mongoose.Schema({
     primaryImage: {
         type: String
     },
+    extraCharges: [{
+        label: { type: String, trim: true },
+        amount: { type: Number, default: 0 },
+        type: { type: String, enum: ["flat", "percent"], default: "flat" } // percent applied on product line total
+    }],
     productImages: [
         {
             type: String

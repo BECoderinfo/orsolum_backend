@@ -6,6 +6,7 @@ import Product from '../models/Product.js';
 import StorePopularProduct from '../models/StorePopularProduct.js';
 import StoreOffer from '../models/StoreOffer.js';
 import StoreCategory from '../models/StoreCategory.js';
+import Notification from '../models/Notification.js';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
 import { processGoogleMapsLink } from '../helper/latAndLong.js';
@@ -16,6 +17,30 @@ let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
 
 const { ObjectId } = mongoose.Types;
+
+const broadcastOfferNotification = async (storeDoc, offersCount = 1) => {
+  try {
+    if (!storeDoc?._id) return;
+
+    const title = `${storeDoc.name || "Store"} has new offer${offersCount > 1 ? "s" : ""}`;
+    const message = `Check the latest deals from ${storeDoc.name || "this store"}.`;
+
+    await Notification.create({
+      title,
+      message,
+      type: "offer",
+      targetRoles: ["user", "all"],
+      meta: {
+        storeId: storeDoc._id,
+        categoryId: storeDoc.category,
+        offersCount
+      },
+      createdBy: storeDoc.createdBy
+    });
+  } catch (err) {
+    console.warn("Failed to broadcast offer notification:", err.message);
+  }
+};
 
 /**
  * Parse address string to extract city, state, and pincode
@@ -570,6 +595,50 @@ export const createStore = async (req, res) => {
     } else {
       responseStore.shiprocket.pickup_addresses_data = [];
       responseStore.shiprocket.pickup_addresses_ids = [];
+
+    // Try to recover pickup addresses from DB by storeId
+    try {
+      const pickupDocs = await PickupAddress.find({ storeId: savedStore._id })
+        .select('-__v')
+        .lean();
+      if (pickupDocs.length > 0) {
+        responseStore.shiprocket.pickup_addresses = pickupDocs;
+        responseStore.shiprocket.pickup_addresses_data = pickupDocs;
+        responseStore.shiprocket.pickup_addresses_ids = pickupDocs.map((p) => p._id);
+        if (!responseStore.shiprocket.pickup_address_id) {
+          responseStore.shiprocket.pickup_address_id =
+            pickupDocs[0].shiprocket?.pickup_address_id || responseStore.shiprocket.pickup_address_id || null;
+        }
+      }
+    } catch (recoverErr) {
+      console.warn("⚠️ Failed to recover pickup addresses by storeId:", recoverErr.message);
+    }
+
+    // Fallback: if pickup_addresses is still empty but pickup_location exists, synthesize an entry for UI
+    const pl = responseStore.shiprocket.pickup_location || {};
+    const hasPickupLocation =
+      pl.address || pl.city || pl.state || pl.pincode || pl.name || pl.phone || pl.email;
+    if (hasPickupLocation && (!responseStore.shiprocket.pickup_addresses || responseStore.shiprocket.pickup_addresses.length === 0)) {
+      const synthesized = {
+        _id: null,
+        nickname: pl.name || "Primary",
+        shiprocket: {
+          pickup_address_id: responseStore.shiprocket.pickup_address_id || null,
+          pickup_location: {
+            name: pl.name || "",
+            phone: pl.phone || "",
+            email: pl.email || "",
+            address: pl.address || "",
+            city: pl.city || "",
+            state: pl.state || "",
+            pincode: pl.pincode || "",
+            country: pl.country || "India"
+          }
+        }
+      };
+      responseStore.shiprocket.pickup_addresses = [synthesized];
+      responseStore.shiprocket.pickup_addresses_data = [synthesized];
+    }
     }
 
     const finalResponseStore = applyCoverImageFallback(responseStore);
@@ -759,9 +828,10 @@ export const editStore = async (req, res) => {
     const email = payload.email || updatedStore.email;
 
     // Check if city, state, pincode are provided for pickup address
-    const city = payload.city || updatedStore.shiprocket?.pickup_location?.city;
-    const state = payload.state || updatedStore.shiprocket?.pickup_location?.state;
-    const pincode = payload.pincode || payload.pin_code || updatedStore.shiprocket?.pickup_location?.pincode;
+    // Prefer explicit payload, then parsed/updatedData, then existing store pickup_location
+    const city = payload.city || updateData.city || updatedStore.shiprocket?.pickup_location?.city;
+    const state = payload.state || updateData.state || updatedStore.shiprocket?.pickup_location?.state;
+    const pincode = payload.pincode || payload.pin_code || updateData.pincode || updatedStore.shiprocket?.pickup_location?.pincode;
 
     // If city, state, and pincode are available, create/update pickup address
     if (city && state && pincode && name && phone && address) {
@@ -941,6 +1011,117 @@ export const editStore = async (req, res) => {
           .lean();
       }
 
+      // Auto-create pickup address if missing both locally and in Shiprocket
+      if (!pickupAddresses.length) {
+        const pl = shiprocketInfo.pickup_location || {};
+        const payloadReady =
+          pl &&
+          pl.name &&
+          pl.phone &&
+          pl.address &&
+          pl.city &&
+          pl.state &&
+          pl.pincode;
+
+        let shiprocketPickupId = shiprocketInfo.pickup_address_id || null;
+
+        if (payloadReady) {
+          try {
+            const shiprocketService = new ShiprocketService();
+
+            // If an ID exists but fetch fails, recreate
+            if (shiprocketPickupId) {
+              try {
+                await shiprocketService.getPickupAddress(shiprocketPickupId);
+              } catch (fetchErr) {
+                // recreate if 404
+                const createRes = await shiprocketService.createPickupAddress({
+                  name: pl.name,
+                  phone: pl.phone,
+                  email: pl.email || `${pl.phone}@orsolum.com`,
+                  address: pl.address,
+                  city: pl.city,
+                  state: pl.state,
+                  pin_code: pl.pincode,
+                  country: pl.country || "India",
+                });
+                shiprocketPickupId =
+                  createRes?.data?.pickup_location ||
+                  createRes?.data?.pickup_address_id ||
+                  createRes?.id ||
+                  null;
+              }
+            } else {
+              const createRes = await shiprocketService.createPickupAddress({
+                name: pl.name,
+                phone: pl.phone,
+                email: pl.email || `${pl.phone}@orsolum.com`,
+                address: pl.address,
+                city: pl.city,
+                state: pl.state,
+                pin_code: pl.pincode,
+                country: pl.country || "India",
+              });
+              shiprocketPickupId =
+                createRes?.data?.pickup_location ||
+                createRes?.data?.pickup_address_id ||
+                createRes?.id ||
+                null;
+            }
+
+            // Persist PickupAddress locally
+            if (shiprocketPickupId) {
+              const newPickup = await PickupAddress.create({
+                storeId: storeDoc._id,
+                nickname: pl.name,
+                spocDetails: { name: pl.name, phone: pl.phone, email: pl.email || `${pl.phone}@orsolum.com` },
+                shiprocket: {
+                  pickup_address_id: shiprocketPickupId,
+                  pickup_location: {
+                    name: pl.name,
+                    phone: pl.phone,
+                    email: pl.email || `${pl.phone}@orsolum.com`,
+                    address: pl.address,
+                    city: pl.city,
+                    state: pl.state,
+                    pincode: pl.pincode,
+                    country: pl.country || "India",
+                  },
+                },
+                address: pl.address,
+                city: pl.city,
+                state: pl.state,
+                pincode: pl.pincode,
+                country: pl.country || "India",
+                isPrimary: true,
+                createdBy: storeDoc.createdBy,
+              });
+
+              pickupAddresses = [newPickup.toObject()];
+              shiprocketInfo.pickup_address_id = shiprocketPickupId;
+              shiprocketInfo.pickup_addresses = [newPickup._id];
+              shiprocketInfo.default_pickup_address = newPickup._id;
+
+              await Store.findByIdAndUpdate(
+                storeDoc._id,
+                {
+                  $set: {
+                    "shiprocket.pickup_address_id": shiprocketPickupId,
+                    "shiprocket.default_pickup_address": newPickup._id,
+                  },
+                  $addToSet: {
+                    "shiprocket.pickup_addresses": newPickup._id,
+                  },
+                },
+                { new: true }
+              );
+            }
+          } catch (autoPickupErr) {
+            console.warn("⚠️ Auto-create pickup failed:", autoPickupErr.message);
+          }
+        }
+      }
+
       const defaultPickupId = shiprocketInfo.default_pickup_address?.toString() || null;
       const defaultPickup = defaultPickupId
         ? pickupAddresses.find((addr) => addr._id.toString() === defaultPickupId)
@@ -948,7 +1129,7 @@ export const editStore = async (req, res) => {
 
       enrichedStore.shiprocket = {
         ...shiprocketInfo,
-        pickup_addresses_ids: pickupIds,
+        pickup_addresses_ids: shiprocketInfo.pickup_addresses || [],
         pickup_addresses_data: pickupAddresses,
         default_pickup_address_id: defaultPickupId,
         default_pickup_address_data: defaultPickup || null
@@ -1207,6 +1388,8 @@ export const saveAllOffers = async (req, res) => {
 
         const insertedOffers = await StoreOffer.insertMany(offerDocuments);
 
+        await broadcastOfferNotification(store, insertedOffers.length);
+
         res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: insertedOffers });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
@@ -1230,6 +1413,8 @@ export const createStoreOffer = async (req, res) => {
 
         let newStoreOffer = new StoreOffer({ offer, createdBy: req.user._id, storeId: id });
         newStoreOffer = await newStoreOffer.save();
+
+        await broadcastOfferNotification(store, 1);
 
         res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: newStoreOffer });
     } catch (error) {
@@ -1263,6 +1448,11 @@ export const createOffers = async (req, res) => {
         // Validation: Ensure required fields are present
         if (!storeId || !Array.isArray(offers) || offers.length === 0) {
             return res.status(400).json({ success: false, message: 'storeId and at least one offer are required.' });
+        }
+
+        const store = await Store.findById(storeId);
+        if (!store) {
+            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Store not found" });
         }
 
         // Array to store new offers
@@ -1300,6 +1490,8 @@ export const createOffers = async (req, res) => {
 
         // Bulk insert into MongoDB
         const savedOffers = await StoreOffer.insertMany(newOffers);
+
+        await broadcastOfferNotification(store, savedOffers.length);
 
         res.status(201).json({
             success: true,

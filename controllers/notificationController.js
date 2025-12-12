@@ -14,7 +14,7 @@ const roleTargets = {
 
 const normalizeRoleList = (roles) => {
   if (!roles) {
-    return ["retailer"];
+    return ["all"];
   }
 
   let roleArray = [];
@@ -434,6 +434,7 @@ export const clearRetailerNotifications = clearNotificationsForRole("retailer");
 export const getUserNotifications = (req, res) =>
   listNotificationsForRole(req, res, "user");
 export const markUserNotificationRead = markNotificationReadForRole("user");
+export const dismissUserNotification = dismissNotificationForRole("user");
 export const clearUserNotifications = clearNotificationsForRole("user");
 
 export const getDeliveryNotifications = (req, res) =>

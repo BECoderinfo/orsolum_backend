@@ -2,7 +2,7 @@ import express from "express";
 import { sellerAuthentication } from "../middlewares/middleware.js";
 import { uploadAdMediaAny, uploadAdMediaMulter, uploadStoreImagesMulter, uploadUserImage } from "../helper/uploadImage.js";
 import { createSellerStore, updateStoreObjectives, updateStoreLicense, getSellerStoreDetails, updateSellerStore } from "../controllers/sellerStoreController.js";
-import { listOfCategories } from "../controllers/storeController.js";
+import { listOfCategories, deleteStoreImage } from "../controllers/storeController.js";
 import { 
   sendRegisterOtp,
   verifyRegisterOtp,
@@ -89,6 +89,9 @@ sellerRouter.put("/seller/store/license/v1", sellerAuthentication, uploadStoreIm
 
 // 📊 Get Seller Store Details
 sellerRouter.get("/seller/store/details/v1", sellerAuthentication, getSellerStoreDetails);
+
+// 🗑️ Delete Store Image
+sellerRouter.put("/seller/delete/store/image/v1", sellerAuthentication, deleteStoreImage);
 
 // 📅 Slot Booking / Inquiries
 sellerRouter.get("/seller/inquiries/v1", sellerAuthentication, getSellerInquiries);

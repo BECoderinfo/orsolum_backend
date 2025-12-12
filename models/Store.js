@@ -101,6 +101,12 @@ const StoreSchema = new mongoose.Schema({
         type: Boolean,
         default: false,
       },
+    platformFee: { type: Number, default: null }, // per-store override; falls back to env PLATFORM_FEE
+    extraCharges: [{
+        label: { type: String, trim: true },
+        amount: { type: Number, default: 0 },
+        type: { type: String, enum: ["flat", "percent"], default: "flat" } // percent applied on products subtotal
+    }]
 
 
 }, { timestamps: true });

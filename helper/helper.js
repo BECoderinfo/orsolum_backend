@@ -15,6 +15,79 @@ import OnlineStoreCart from '../models/OnlineStore/OnlineStoreCart.js';
 import { generateInvoice, generateOnlineInvoice } from './generateInvoice.js';
 import ProductSubCategory from '../models/OnlineStore/SubCategory.js';
 
+const PLATFORM_FEE = Number(process.env.PLATFORM_FEE || 0);
+
+const toNumberOrZero = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+};
+
+const sumProductExtraCharges = (products = []) => {
+    let total = 0;
+    const breakdown = [];
+    products.forEach((p) => {
+        const lineTotal = toNumberOrZero(p.productPrice) * toNumberOrZero(p.quantity || 1);
+        if (Array.isArray(p.extraCharges)) {
+            p.extraCharges.forEach((charge) => {
+                const amount =
+                    charge?.type === "percent"
+                        ? (lineTotal * toNumberOrZero(charge.amount || 0)) / 100
+                        : toNumberOrZero(charge.amount || 0);
+                if (amount > 0) {
+                    total += amount;
+                    breakdown.push({
+                        label: charge.label || "Product charge",
+                        amount: Number(amount.toFixed(2)),
+                    });
+                }
+            });
+        }
+    });
+    return { total: Number(total.toFixed(2)), breakdown };
+};
+
+const sumStoreExtraCharges = ({ store, subtotal }) => {
+    let total = 0;
+    const breakdown = [];
+    if (Array.isArray(store?.extraCharges)) {
+        store.extraCharges.forEach((charge) => {
+            const amount =
+                charge?.type === "percent"
+                    ? (subtotal * toNumberOrZero(charge.amount || 0)) / 100
+                    : toNumberOrZero(charge.amount || 0);
+            if (amount > 0) {
+                total += amount;
+                breakdown.push({
+                    label: charge.label || "Extra charge",
+                    amount: Number(amount.toFixed(2)),
+                });
+            }
+        });
+    }
+    return { total: Number(total.toFixed(2)), breakdown };
+};
+
+const buildCharges = ({ store, products, productsSubtotal }) => {
+    const platformFee = Number.isFinite(store?.platformFee)
+        ? Number(store.platformFee)
+        : PLATFORM_FEE;
+
+    const productCharge = sumProductExtraCharges(products);
+    const storeCharge = sumStoreExtraCharges({ store, subtotal: productsSubtotal });
+
+    const chargesTotal = Number(
+        (productCharge.total + storeCharge.total + (platformFee || 0)).toFixed(2)
+    );
+
+    const breakdown = [
+        ...(platformFee ? [{ label: "Platform fee", amount: platformFee }] : []),
+        ...productCharge.breakdown,
+        ...storeCharge.breakdown,
+    ];
+
+    return { platformFee: platformFee || 0, chargesTotal, breakdown };
+};
+
 export const handleLocalStoreOrderCallback = async (webhookCallRes) => {
     try {
         const cf_order_id = webhookCallRes.payment_gateway_details.gateway_order_id;
@@ -132,7 +205,8 @@ export const handleLocalStoreOrderCallback = async (webhookCallRes) => {
                             mrp,
                             quantity,
                             freeQuantity,
-                            appliedOffers
+                            appliedOffers,
+                            extraCharges: cart.productId.extraCharges || []
                         });
                     });
 
@@ -155,17 +229,27 @@ export const handleLocalStoreOrderCallback = async (webhookCallRes) => {
                         }
                     }
 
+                    const storeDoc = storeId ? await Store.findById(storeId).lean() : null;
+
                     // Shipping Fee Logic
                     const storeShippingFee = storeTotal > 500 ? 0 : 50;
 
+                    const charges = buildCharges({
+                        store: storeDoc,
+                        products: productDetails,
+                        productsSubtotal: storeTotal,
+                    });
+
                     // Calculate grand total
-                    const grandTotal = storeTotal - storeDiscountAmount - couponCodeDiscount + storeShippingFee + donate;
+                    const grandTotal = storeTotal - storeDiscountAmount - couponCodeDiscount + storeShippingFee + donate + charges.chargesTotal;
 
                     // Order Summary
                     const orderSummary = {
                         totalAmount: storeTotal,
                         discountAmount: storeDiscountAmount + couponCodeDiscount,
                         shippingFee: storeShippingFee,
+                        platformFee: charges.platformFee,
+                        extraCharges: charges.breakdown,
                         donate: donate,
                         grandTotal
                     };
@@ -323,7 +407,7 @@ export const handleOnlineStoreOrderCallback = async (webhookCallRes) => {
             const shippingFee = totalAmount > 500 ? 0 : 50;
 
             // Calculate grand total
-            const grandTotal = totalAmount - couponCodeDiscount + shippingFee + donate - coinUsed;
+                    const grandTotal = totalAmount - couponCodeDiscount + shippingFee + donate - coinUsed + PLATFORM_FEE;
 
             // Order Summary
             const orderSummary = {

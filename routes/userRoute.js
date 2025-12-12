@@ -4,7 +4,7 @@ import { uploadProfileImage, loginUser, registerUser, sendLoginOtp, sendRegister
 import { createAddress, editAddress, deleteAddress, getAddress, getAllAddress, getUserAllAddress, addProductToCart } from "../controllers/orderController.js";
 import { userAuthentication } from "../middlewares/middleware.js";
 import { uploadUserImage } from "../helper/uploadImage.js";
-import { getUserNotifications, markUserNotificationRead, clearUserNotifications } from "../controllers/notificationController.js";
+import { getUserNotifications, markUserNotificationRead, dismissUserNotification, clearUserNotifications } from "../controllers/notificationController.js";
 const userRouter = express.Router();
 
 // image upload
@@ -37,6 +37,7 @@ userRouter.post('/purchase/premium/v1', userAuthentication, purchasePremium);
 // notifications
 userRouter.get('/user/notifications/v1', userAuthentication, getUserNotifications);
 userRouter.patch('/user/notifications/:id/read/v1', userAuthentication, markUserNotificationRead);
+userRouter.delete('/user/notifications/:id/v1', userAuthentication, dismissUserNotification);
 userRouter.delete('/user/notifications/clear/v1', userAuthentication, clearUserNotifications);
 
 userRouter.post('/create/address/v1', userAuthentication, createAddress);

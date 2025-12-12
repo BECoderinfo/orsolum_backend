@@ -107,3 +107,58 @@ export const processGoogleMapsLink = async (url) => {
     return { lat: null, lng: null };
   }
 };
+
+/**
+ * Get real distance and time from Google Maps Distance Matrix API
+ * @param {Object} origin - { lat: number, lng: number }
+ * @param {Object} destination - { lat: number, lng: number }
+ * @returns {Promise<{distance: number, duration: number, distanceText: string, durationText: string}>}
+ */
+export const getDistanceAndTime = async (origin, destination) => {
+  try {
+    if (!GOOGLE_MAPS_API_KEY) {
+      console.warn("Google Maps API key not configured");
+      return null;
+    }
+
+    if (!origin || !destination || !origin.lat || !origin.lng || !destination.lat || !destination.lng) {
+      console.warn("Invalid origin or destination coordinates");
+      return null;
+    }
+
+    const origins = `${origin.lat},${origin.lng}`;
+    const destinations = `${destination.lat},${destination.lng}`;
+    
+    const apiUrl = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${origins}&destinations=${destinations}&mode=driving&key=${GOOGLE_MAPS_API_KEY}`;
+    
+    const response = await fetch(apiUrl);
+    const data = await response.json();
+
+    if (data.status === "OK" && data.rows && data.rows[0] && data.rows[0].elements && data.rows[0].elements[0]) {
+      const element = data.rows[0].elements[0];
+      
+      if (element.status === "OK") {
+        // Distance in meters, convert to km
+        const distanceKm = element.distance.value / 1000;
+        // Duration in seconds, convert to minutes
+        const durationMinutes = element.duration.value / 60;
+        
+        return {
+          distance: Math.round(distanceKm * 10) / 10, // Round to 1 decimal place
+          duration: Math.ceil(durationMinutes), // Round up to nearest minute
+          distanceText: element.distance.text,
+          durationText: element.duration.text
+        };
+      } else {
+        console.warn("Distance Matrix API element status:", element.status);
+        return null;
+      }
+    } else {
+      console.warn("Distance Matrix API status:", data.status);
+      return null;
+    }
+  } catch (error) {
+    console.error("Error fetching distance and time from Google Maps:", error);
+    return null;
+  }
+};

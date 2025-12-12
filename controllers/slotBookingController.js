@@ -9,19 +9,59 @@ import { catchError } from "../helper/service.js";
 export const isAutomobileCategory = (categoryName) => {
   if (!categoryName) return false;
   const name = categoryName.toLowerCase().trim();
+  
+  // Exact matches first to avoid false positives
+  const exactMatches = [
+    "automobile",
+    "automobiles",
+    "automotive",
+    "auto",
+    "vehicle",
+    "vehicles",
+    "car",
+    "cars",
+    "bike",
+    "bikes",
+    "motorcycle",
+    "motorcycles",
+    "two wheeler",
+    "two-wheeler",
+    "four wheeler",
+    "four-wheeler",
+    "scooter",
+    "scooters"
+  ];
+  
+  // Check for exact match first
+  if (exactMatches.includes(name)) {
+    return true;
+  }
+  
+  // Check if name contains automobile-related keywords (but not personal care, beauty, etc.)
+  const excludeKeywords = ["personal", "care", "beauty", "cosmetic", "skincare", "haircare", "wellness"];
+  const hasExcludeKeyword = excludeKeywords.some(keyword => name.includes(keyword));
+  
+  if (hasExcludeKeyword) {
+    return false;
+  }
+  
+  // Check for automobile keywords
   return name.includes("automobile") || 
          name.includes("automobiles") ||
-         name.includes("bike") || 
-         name.includes("bikes") ||
-         name.includes("car") || 
-         name.includes("cars") ||
-         name.includes("vehicle") ||
-         name.includes("vehicles") ||
-         name.includes("auto") ||
+         name.includes("automotive") ||
+         (name.includes("bike") && !name.includes("hair")) ||
+         (name.includes("bikes") && !name.includes("hair")) ||
+         (name.includes("car") && !name.includes("care")) ||
+         (name.includes("cars") && !name.includes("care")) ||
+         (name.includes("vehicle") && !name.includes("personal")) ||
+         (name.includes("vehicles") && !name.includes("personal")) ||
+         (name.includes("auto") && !name.includes("personal") && !name.includes("care")) ||
          name.includes("two wheeler") ||
          name.includes("two-wheeler") ||
          name.includes("four wheeler") ||
-         name.includes("four-wheeler");
+         name.includes("four-wheeler") ||
+         name.includes("scooter") ||
+         name.includes("scooters");
 };
 
 // Create Slot Booking (User App)

@@ -33,6 +33,81 @@ let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
 
 const IN_PROGRESS_STATUSES = ["Accepted", "Product shipped", "On the way", "Out for delivery", "Your Destination"];
+const LOCAL_STORE_MAX_DISTANCE_KM = 5;
+const PLATFORM_FEE = Number(process.env.PLATFORM_FEE || 0);
+
+const toNumberOrZero = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+};
+
+const sumProductExtraCharges = (products = []) => {
+  let total = 0;
+  const breakdown = [];
+
+  products.forEach((p) => {
+    const lineTotal = toNumberOrZero(p.productPrice) * toNumberOrZero(p.quantity || 1);
+    if (Array.isArray(p.extraCharges)) {
+      p.extraCharges.forEach((charge) => {
+        const amount =
+          charge?.type === "percent"
+            ? (lineTotal * toNumberOrZero(charge.amount || 0)) / 100
+            : toNumberOrZero(charge.amount || 0);
+        if (amount > 0) {
+          total += amount;
+          breakdown.push({
+            label: charge.label || "Product charge",
+            amount: Number(amount.toFixed(2)),
+          });
+        }
+      });
+    }
+  });
+
+  return { total: Number(total.toFixed(2)), breakdown };
+};
+
+const sumStoreExtraCharges = ({ store, subtotal }) => {
+  let total = 0;
+  const breakdown = [];
+  if (Array.isArray(store?.extraCharges)) {
+    store.extraCharges.forEach((charge) => {
+      const amount =
+        charge?.type === "percent"
+          ? (subtotal * toNumberOrZero(charge.amount || 0)) / 100
+          : toNumberOrZero(charge.amount || 0);
+      if (amount > 0) {
+        total += amount;
+        breakdown.push({
+          label: charge.label || "Extra charge",
+          amount: Number(amount.toFixed(2)),
+        });
+      }
+    });
+  }
+  return { total: Number(total.toFixed(2)), breakdown };
+};
+
+const buildCharges = ({ store, products, productsSubtotal }) => {
+  const platformFee = Number.isFinite(store?.platformFee)
+    ? Number(store.platformFee)
+    : PLATFORM_FEE;
+
+  const productCharge = sumProductExtraCharges(products);
+  const storeCharge = sumStoreExtraCharges({ store, subtotal: productsSubtotal });
+
+  const chargesTotal = Number(
+    (productCharge.total + storeCharge.total + (platformFee || 0)).toFixed(2)
+  );
+
+  const breakdown = [
+    ...(platformFee ? [{ label: "Platform fee", amount: platformFee }] : []),
+    ...productCharge.breakdown,
+    ...storeCharge.breakdown,
+  ];
+
+  return { platformFee: platformFee || 0, chargesTotal, breakdown };
+};
 
 const toRadians = (value = 0) => (value * Math.PI) / 180;
 
@@ -353,6 +428,33 @@ export const addProductToCart = async (req, res) => {
           isPopulated: !!productDetails.storeId?._id
         } : undefined
       });
+    }
+
+    // ✅ Enforce single-store cart with replace prompt
+    const replaceCart = req.body?.replace === true || req.body?.replace === "1" || req.body?.replace === 1;
+    const otherStoreCart = await Cart.findOne({
+      createdBy: req.user._id,
+      deleted: false,
+      storeId: { $ne: storeId },
+    }).populate("storeId", "name address");
+
+    if (otherStoreCart && !replaceCart) {
+      return res.status(409).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Your cart has items from another store. Replace cart to continue.",
+        requireReplace: true,
+        existingStore: otherStoreCart.storeId
+          ? { id: otherStoreCart.storeId._id, name: otherStoreCart.storeId.name, address: otherStoreCart.storeId.address }
+          : null,
+      });
+    }
+
+    if (otherStoreCart && replaceCart) {
+      await Cart.updateMany(
+        { createdBy: req.user._id, deleted: false, storeId: { $ne: storeId } },
+        { $set: { deleted: true } }
+      );
     }
 
     const normalizedQuantity = Number(quantity);
@@ -873,11 +975,31 @@ export const cartDetails = async (req, res) => {
 
     const address = await Address.findOne({ createdBy: req.user._id });
 
+    const storeLocation = Array.isArray(list?.[0]?.location?.coordinates)
+      ? list[0].location.coordinates
+      : [];
+    const storeLat = typeof storeLocation[1] === "number" ? storeLocation[1] : null;
+    const storeLong = typeof storeLocation[0] === "number" ? storeLocation[0] : null;
+    const addressLat = address ? Number(address.lat) : null;
+    const addressLong = address ? Number(address.long) : null;
+
+    const addressDistanceKm =
+      storeLat !== null &&
+      storeLong !== null &&
+      Number.isFinite(addressLat) &&
+      Number.isFinite(addressLong)
+        ? calculateDistanceKm(storeLat, storeLong, addressLat, addressLong)
+        : null;
+
+    const isAddressInRange =
+      addressDistanceKm === null ? true : addressDistanceKm <= LOCAL_STORE_MAX_DISTANCE_KM;
+
     let overallTotalAmount = 0;
     let overallShippingFee = 0;
     let overallGrandTotal = 0;
     let overallDiscountAmount = 0;
     let appliedOffers = []; // Store applied offers
+    let overallCharges = 0;
 
     // Fetch store offers
     const storeOffers = await StoreOffer.find({
@@ -991,13 +1113,24 @@ export const cartDetails = async (req, res) => {
         };
       });
 
+      const charges = buildCharges({
+        store,
+        products: productList.map((p) => ({
+          productPrice: p.sellingPrice,
+          quantity: p.cartDetails?.quantity || 0,
+          extraCharges: p.extraCharges,
+        })),
+        productsSubtotal: storeTotalAmount,
+      });
+
       const storeShippingFee = storeTotalAmount > 500 ? 0 : 50; // Example shipping logic
       const storeGrandTotal =
-        storeTotalAmount - storeDiscountAmount + storeShippingFee;
+        storeTotalAmount - storeDiscountAmount + storeShippingFee + charges.chargesTotal;
 
       overallTotalAmount += storeTotalAmount;
       overallDiscountAmount += storeDiscountAmount;
       overallShippingFee += storeShippingFee;
+      overallCharges += charges.chargesTotal;
       overallGrandTotal += storeGrandTotal;
 
       appliedOffers.push(...storeAppliedOffers);
@@ -1009,6 +1142,11 @@ export const cartDetails = async (req, res) => {
         grandTotal: storeGrandTotal,
         bogoProducts: Array.from(storeBOGOProducts),
         appliedOffers: storeAppliedOffers,
+        charges: {
+          platformFee: charges.platformFee,
+          total: charges.chargesTotal,
+          breakdown: charges.breakdown,
+        },
       };
     });
 
@@ -1131,9 +1269,16 @@ export const cartDetails = async (req, res) => {
         overallShippingFee,
         overallGrandTotal,
         donate,
+        platformFee: PLATFORM_FEE,
+        charges: overallCharges,
         couponCodeDiscount,
         appliedOffers,
         similarProducts,
+        addressRange: {
+          distanceKm: addressDistanceKm,
+          withinRange: isAddressInRange,
+          maxRangeKm: LOCAL_STORE_MAX_DISTANCE_KM
+        }
       },
     });
   } catch (error) {
@@ -1616,11 +1761,44 @@ export const getAddress = async (req, res) => {
 
 export const getUserAllAddress = async (req, res) => {
   try {
-    const address = await Address.find({ createdBy: req.user._id });
+    const { storeId } = req.query;
+
+    let storeLat = null;
+    let storeLong = null;
+
+    if (storeId && mongoose.Types.ObjectId.isValid(storeId)) {
+      const store = await Store.findById(storeId).select("location");
+      const coords = store?.location?.coordinates || [];
+      storeLat = typeof coords[1] === "number" ? coords[1] : null;
+      storeLong = typeof coords[0] === "number" ? coords[0] : null;
+    }
+
+    const addresses = await Address.find({ createdBy: req.user._id }).lean();
+
+    const enhancedAddresses = addresses.map((addr) => {
+      const addrLat = Number(addr.lat);
+      const addrLong = Number(addr.long);
+      const hasCoords =
+        Number.isFinite(addrLat) &&
+        Number.isFinite(addrLong) &&
+        storeLat !== null &&
+        storeLong !== null;
+
+      const distanceKm = hasCoords
+        ? calculateDistanceKm(storeLat, storeLong, addrLat, addrLong)
+        : null;
+
+      return {
+        ...addr,
+        distanceKm,
+        withinRange:
+          distanceKm === null ? true : distanceKm <= LOCAL_STORE_MAX_DISTANCE_KM,
+      };
+    });
 
     return res
       .status(status.OK)
-      .json({ status: jsonStatus.OK, success: true, data: address || [] });
+      .json({ status: jsonStatus.OK, success: true, data: enhancedAddresses || [] });
   } catch (error) {
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
@@ -1722,6 +1900,44 @@ export const createOrderV2 = async (req, res) => {
         status: jsonStatus.BadRequest,
         success: false,
         message: "Please add a delivery address",
+      });
+    }
+
+    const store = await Store.findById(storeId);
+    if (!store) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Store not found",
+      });
+    }
+
+    const storeCoords = store?.location?.coordinates || [];
+    const storeLat = typeof storeCoords[1] === "number" ? storeCoords[1] : null;
+    const storeLong = typeof storeCoords[0] === "number" ? storeCoords[0] : null;
+    const addressLat = Number(address.lat);
+    const addressLong = Number(address.long);
+
+    if (
+      storeLat === null ||
+      storeLong === null ||
+      !Number.isFinite(addressLat) ||
+      !Number.isFinite(addressLong)
+    ) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Please select an address with a valid location to continue delivery",
+      });
+    }
+
+    const deliveryDistanceKm = calculateDistanceKm(storeLat, storeLong, addressLat, addressLong);
+    if (deliveryDistanceKm === null || deliveryDistanceKm > LOCAL_STORE_MAX_DISTANCE_KM) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: `Delivery address is outside the ${LOCAL_STORE_MAX_DISTANCE_KM} km store range. Please choose a nearby address.`,
+        distanceKm: deliveryDistanceKm,
       });
     }
 
@@ -1862,12 +2078,23 @@ export const createOrderV2 = async (req, res) => {
         : rawDiscount;
     }
 
+    const charges = buildCharges({
+      store,
+      products: productDetails,
+      productsSubtotal: storeTotal,
+    });
+
     // ✅ Shipping Fee
     const storeShippingFee = storeTotal > 500 ? 0 : 50;
 
     // ✅ Grand Total
     const grandTotal =
-      storeTotal - storeDiscountAmount - couponCodeDiscount + storeShippingFee + donateValue;
+      storeTotal -
+      storeDiscountAmount -
+      couponCodeDiscount +
+      storeShippingFee +
+      donateValue +
+      charges.chargesTotal;
 
     // ✅ Create Cashfree payment session
     const paymentRequestData = {
@@ -1933,16 +2160,6 @@ export const createOrderV2 = async (req, res) => {
       });
     }
 
-    // ✅ Get store to copy pickup_addresses
-    const store = await Store.findById(storeId);
-    if (!store) {
-      return res.status(status.NotFound).json({
-        status: jsonStatus.NotFound,
-        success: false,
-        message: "Store not found",
-      });
-    }
-
     // ✅ Validate address object
     if (!address || !address.address_1) {
       return res.status(status.BadRequest).json({
@@ -1977,6 +2194,8 @@ export const createOrderV2 = async (req, res) => {
           totalAmount: storeTotal,
           discountAmount: storeDiscountAmount + couponCodeDiscount,
           shippingFee: storeShippingFee,
+          platformFee: charges.platformFee,
+          extraCharges: charges.breakdown,
           donate: donateValue,
           grandTotal,
         },
@@ -2002,7 +2221,6 @@ export const createOrderV2 = async (req, res) => {
     // ✅ Send notification to retailer about new order
     try {
       const { notifyNewOrder } = await import('../helper/notificationHelper.js');
-      const store = await Store.findById(storeId);
       if (store && store.createdBy) {
         await notifyNewOrder(store.createdBy, newOrder);
       }
@@ -2337,6 +2555,15 @@ export const orderListV2 = async (req, res) => {
         $match: {
           createdBy: new mongoose.Types.ObjectId(req.user._id),
           // Show all orders regardless of payment status
+        },
+      },
+      {
+        // Filter out failed/unpaid phantom orders
+        $match: {
+          $nor: [
+            { paymentStatus: "FAILED" },
+            { $and: [{ paymentStatus: "PENDING" }, { status: "Cancelled" }] },
+          ],
         },
       },
       // Add stage to normalize storeId - convert invalid values to null to prevent ObjectId cast errors

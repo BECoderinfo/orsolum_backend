@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 const { ObjectId } = mongoose.Schema.Types;
 
-const PopularCategorySchema = new mongoose.Schema(
+const LocalPopularCategorySchema = new mongoose.Schema(
   {
     createdBy: {
       type: ObjectId,
@@ -33,9 +33,10 @@ const PopularCategorySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const PopularCategory = mongoose.model(
-  "popular_category",
-  PopularCategorySchema
+const LocalPopularCategory = mongoose.model(
+  "local_popular_category",
+  LocalPopularCategorySchema
 );
 
-export default PopularCategory;
+export default LocalPopularCategory;
+

@@ -431,40 +431,70 @@ export const listProducts = async (req, res) => {
         const regex = new RegExp(search, "i");
 
         // If the caller is a seller, only return products created by that seller
-        const sellerFilter = (req?.user && req.user.role === "seller")
-            ? { createdBy: req.user._id }
-            : {};
+        let sellerIds = [];
+        if (req?.user && req.user.role === "seller") {
+            sellerIds = [req.user._id];
+        } else {
+            // For admin panel, fetch all seller user IDs
+            const sellers = await User.find({ role: "seller" }).select("_id");
+            sellerIds = sellers.map(seller => seller._id);
+        }
 
-        const list = await OnlineProduct.aggregate([
+        const pipeline = [
             {
                 $match: {
                     deleted: false,
-                    ...sellerFilter,
+                    createdBy: { $in: sellerIds }
+                }
+            }
+        ];
+
+        // Add search filter
+        if (search) {
+            pipeline.push({
+                $match: {
                     $or: [
                         { name: { $regex: regex } },
                         { manufacturer: { $regex: regex } }
                     ]
                 }
-            },
-            {
-                $lookup: {
-                    from: "product_units",
-                    localField: "_id",
-                    foreignField: "parentProduct",
-                    as: "units",
-                    pipeline: [
-                        {
-                            $match: {
-                                deleted: false
-                            }
+            });
+        }
+
+        pipeline.push({
+            $lookup: {
+                from: "product_units",
+                localField: "_id",
+                foreignField: "parentProduct",
+                as: "units",
+                pipeline: [
+                    {
+                        $match: {
+                            deleted: false
                         }
-                    ]
-                }
+                    }
+                ]
             }
-        ]);
+        });
+
+        const list = await OnlineProduct.aggregate(pipeline);
+        
+        // Debug: Log the pipeline and results
+        console.log("📦 Online Products Query:", {
+            totalProducts: list.length,
+            searchTerm: search,
+            userRole: req?.user?.role,
+            sellerIdsCount: sellerIds.length,
+            sampleProduct: list.length > 0 ? {
+                id: list[0]._id,
+                name: list[0].name,
+                createdBy: list[0].createdBy
+            } : null
+        });
 
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: list });
     } catch (error) {
+        console.error("❌ Error in listProducts:", error);
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('listProducts', error, req, res);
     }
@@ -1406,9 +1436,39 @@ export const onlineProductsList = async (req, res) => {
         }
 
         // Fetch products with applied filters and pagination
+        // Only show products from seller panel stores (createdBy user with role "seller")
+        // Also ensure products have required categoryId and subCategoryId
         const products = await OnlineProduct.aggregate([
             {
-                $match: query
+                $match: {
+                    ...query,
+                    categoryId: { $exists: true, $ne: null },
+                    subCategoryId: { $exists: true, $ne: null }
+                }
+            },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "creator",
+                    pipeline: [
+                        {
+                            $project: { role: 1 }
+                        }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    creatorRole: { $arrayElemAt: ["$creator.role", 0] }
+                }
+            },
+            {
+                // Filter to only show products created by sellers
+                $match: {
+                    creatorRole: "seller"
+                }
             },
             {
                 $lookup: {
@@ -1453,6 +1513,12 @@ export const onlineProductsList = async (req, res) => {
                 $addFields: {
                     units: { $ifNull: [{ $arrayElemAt: ["$units", 0] }, null] },
                     subCategory: { $arrayElemAt: ["$subCategory", 0] }
+                }
+            },
+            {
+                // Only show products that have units (pricing information)
+                $match: {
+                    units: { $ne: null }
                 }
             },
             {
@@ -1529,8 +1595,44 @@ export const onlineProductsList = async (req, res) => {
             }
         });
 
-        // ✅ Count documents with the same basic filters
-        const totalCount = await OnlineProduct.countDocuments(query);
+        // ✅ Count documents with the same basic filters (only seller products with category, subcategory, and units)
+        // Get all seller user IDs first
+        const sellerUsers = await User.find({ role: "seller" }).select("_id");
+        const sellerUserIds = sellerUsers.map(u => u._id);
+        
+        // Count products that match all criteria: seller role, category, subcategory, and have units
+        const countQuery = { 
+            ...query, 
+            createdBy: { $in: sellerUserIds },
+            categoryId: { $exists: true, $ne: null },
+            subCategoryId: { $exists: true, $ne: null }
+        };
+        
+        // Also check that products have units
+        const productsWithUnits = await OnlineProduct.aggregate([
+            { $match: countQuery },
+            {
+                $lookup: {
+                    from: "product_units",
+                    localField: "_id",
+                    foreignField: "parentProduct",
+                    as: "units",
+                    pipeline: [
+                        { $match: { deleted: false } }
+                    ]
+                }
+            },
+            {
+                $match: {
+                    units: { $ne: [] }
+                }
+            },
+            {
+                $count: "total"
+            }
+        ]);
+        
+        const totalCount = productsWithUnits[0]?.total || 0;
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
