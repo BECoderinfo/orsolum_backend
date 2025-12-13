@@ -832,6 +832,116 @@ export const listProducts = async (req, res) => {
     }
 };
 
+export const listSellerProducts = async (req, res) => {
+    try {
+        const { search } = req.query;
+
+        const matchStage = {
+            deleted: false
+        };
+
+        // Add regex search if a search term is provided
+        if (search) {
+            matchStage.productName = {
+                $regex: search,
+                $options: "i" // case-insensitive
+            };
+        }
+
+        // ✅ Only show products from seller panel stores (stores created by users with role "seller")
+        const list = await Product.aggregate([
+            {
+                $match: matchStage
+            },
+            {
+                $lookup: {
+                    from: "stores",
+                    localField: "storeId",
+                    foreignField: "_id",
+                    as: "store",
+                    pipeline: [
+                        {
+                            $lookup: {
+                                from: "users",
+                                localField: "createdBy",
+                                foreignField: "_id",
+                                as: "storeCreator",
+                                pipeline: [
+                                    {
+                                        $project: { role: 1 }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            $addFields: {
+                                creatorRole: { $arrayElemAt: ["$storeCreator.role", 0] }
+                            }
+                        },
+                        {
+                            $match: {
+                                creatorRole: "seller" // Only stores created by sellers
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $match: {
+                    "store.0": { $exists: true } // Only products from seller stores
+                }
+            },
+            {
+                $lookup: {
+                    from: "product_categories",
+                    localField: "categoryId",
+                    foreignField: "_id",
+                    as: "category",
+                    pipeline: [
+                        {
+                            $project: {
+                                name: 1
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $lookup: {
+                    from: "product_sub_categories",
+                    localField: "subCategoryId",
+                    foreignField: "_id",
+                    as: "subCategory",
+                    pipeline: [
+                        {
+                            $project: {
+                                name: 1
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    categoryName: { $arrayElemAt: ["$category.name", 0] },
+                    subCategoryName: { $arrayElemAt: ["$subCategory.name", 0] },
+                    storeName: { $arrayElemAt: ["$store.name", 0] }
+                }
+            },
+            {
+                $sort: {
+                    createdAt: -1
+                }
+            }
+        ]);
+
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: list, totalCount: list.length });
+    } catch (error) {
+        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        return catchError('listSellerProducts', error, req, res);
+    }
+};
+
 export const productDetails = async (req, res) => {
     try {
         const { id } = req.params;

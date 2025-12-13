@@ -5,6 +5,7 @@ import Store from "../models/Store.js";
 import Product from "../models/Product.js";
 import Address from "../models/Address.js";
 import Order from "../models/Order.js";
+import OnlineOrder from "../models/OnlineStore/OnlineOrder.js";
 import CouponCode from "../models/CouponCode.js";
 import CouponHistory from "../models/CouponHistory.js";
 import StoreOffer from "../models/StoreOffer.js";
@@ -15,6 +16,7 @@ import crypto from "crypto";
 import axios from "axios";
 import ShiprocketService from "../helper/shiprocketService.js";
 import DeliveryBoy from "../models/DeliveryBoy.js";
+import { generateInvoice, generateOnlineInvoice } from "../helper/generateInvoice.js";
 import {
   handleLocalStoreOrderCallback,
   handleOnlineStoreOrderCallback,
@@ -2911,7 +2913,30 @@ export const orderDetailsV2 = async (req, res) => {
           as: "storeDetails",
         },
       },
+      {
+        $lookup: {
+          from: "payments",
+          localField: "_id",
+          foreignField: "orderId",
+          as: "paymentDetails",
+          pipeline: [
+            {
+              $match: { type: "LocalStore" }
+            },
+            {
+              $project: {
+                paymentMethod: 1,
+                paymentGateway: 1,
+                paymentStatus: 1,
+                status: 1,
+                cf_order_id: 1
+              }
+            }
+          ]
+        },
+      },
       { $unwind: { path: "$storeDetails", preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: "$paymentDetails", preserveNullAndEmptyArrays: true } },
       { $unwind: { path: "$productDetails", preserveNullAndEmptyArrays: true } },
       {
         $lookup: {
@@ -2942,10 +2967,12 @@ export const orderDetailsV2 = async (req, res) => {
         $group: {
           _id: "$_id",
           storeDetails: { $first: "$storeDetails" },
+          paymentDetails: { $first: "$paymentDetails" },
           orderId: { $first: "$orderId" },
           cf_order_id: { $first: "$cf_order_id" },
           estimatedDate: { $first: "$estimatedDate" },
           status: { $first: "$status" },
+          paymentStatus: { $first: "$paymentStatus" },
           summary: { $first: "$summary" },
           invoiceUrl: { $first: "$invoiceUrl" },
           createdAt: { $first: "$createdAt" },
@@ -2965,6 +2992,7 @@ export const orderDetailsV2 = async (req, res) => {
     }
 
     // 4️⃣ Format the output
+    const paymentInfo = details[0].paymentDetails || {};
     const formattedDetails = {
       _id: details[0]._id,
       store: details[0].storeDetails
@@ -2976,9 +3004,11 @@ export const orderDetailsV2 = async (req, res) => {
         }
         : null,
       orderId: details[0].orderId,
-      cf_order_id: details[0].cf_order_id,
+      cf_order_id: details[0].cf_order_id || paymentInfo.cf_order_id || null,
       estimatedDate: details[0].estimatedDate || null,
       status: details[0].status,
+      paymentStatus: details[0].paymentStatus || paymentInfo.paymentStatus || paymentInfo.status || "PENDING",
+      paymentMethod: paymentInfo.paymentMethod || paymentInfo.paymentGateway || null,
       totalPrice: details[0].summary?.grandTotal || 0,
       discountAmount: details[0].summary?.discountAmount || 0,
       shippingFee: details[0].summary?.shippingFee || 0,
@@ -3015,6 +3045,342 @@ export const orderDetailsV2 = async (req, res) => {
       status: 500,
       success: false,
       message: error.message,
+    });
+  }
+};
+
+export const generateOrderInvoice = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { orderType = "local" } = req.query; // "local" or "online"
+
+    // Find order
+    let order = null;
+    if (orderType === "online") {
+      if (mongoose.isValidObjectId(id)) {
+        order = await OnlineOrder.findOne({
+          _id: new mongoose.Types.ObjectId(id),
+          createdBy: new mongoose.Types.ObjectId(req.user._id),
+        });
+      }
+      if (!order) {
+        order = await OnlineOrder.findOne({
+          createdBy: new mongoose.Types.ObjectId(req.user._id),
+          $or: [{ orderId: id }, { cf_order_id: id }],
+        });
+      }
+    } else {
+      if (mongoose.isValidObjectId(id)) {
+        order = await Order.findOne({
+          _id: new mongoose.Types.ObjectId(id),
+          createdBy: new mongoose.Types.ObjectId(req.user._id),
+        });
+      }
+      if (!order) {
+        order = await Order.findOne({
+          createdBy: new mongoose.Types.ObjectId(req.user._id),
+          $or: [{ orderId: id }, { cf_order_id: id }],
+        });
+      }
+    }
+
+    if (!order) {
+      return res.status(404).json({
+        status: 404,
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // Check if order is delivered
+    if (order.status !== "Delivered" && order.status !== "Delivered") {
+      return res.status(400).json({
+        status: 400,
+        success: false,
+        message: "Invoice can only be generated for delivered orders",
+      });
+    }
+
+    // Check if invoice already exists
+    if (order.invoiceUrl) {
+      return res.status(200).json({
+        status: 200,
+        success: true,
+        message: "Invoice already exists",
+        data: { invoiceUrl: order.invoiceUrl },
+      });
+    }
+
+    // Generate invoice
+    let invoiceUrl;
+    if (orderType === "online") {
+      invoiceUrl = await generateOnlineInvoice(order._id);
+    } else {
+      invoiceUrl = await generateInvoice(order._id);
+    }
+
+    return res.status(200).json({
+      status: 200,
+      success: true,
+      message: "Invoice generated successfully",
+      data: { invoiceUrl },
+    });
+  } catch (error) {
+    console.error("Error generating invoice:", error);
+    return res.status(500).json({
+      status: 500,
+      success: false,
+      message: error.message || "Failed to generate invoice",
+    });
+  }
+};
+
+export const reOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { addressId, paymentType, coupon, donate } = req.body;
+
+    // Find the original order
+    let originalOrder = null;
+    if (mongoose.isValidObjectId(id)) {
+      originalOrder = await Order.findOne({
+        _id: new mongoose.Types.ObjectId(id),
+        createdBy: new mongoose.Types.ObjectId(req.user._id),
+      });
+    }
+    if (!originalOrder) {
+      originalOrder = await Order.findOne({
+        createdBy: new mongoose.Types.ObjectId(req.user._id),
+        $or: [{ orderId: id }, { cf_order_id: id }],
+      });
+    }
+
+    if (!originalOrder) {
+      return res.status(404).json({
+        status: 404,
+        success: false,
+        message: "Original order not found",
+      });
+    }
+
+    // Get address (use provided addressId or original order address)
+    let address = null;
+    if (addressId) {
+      address = await Address.findOne({ _id: addressId, createdBy: req.user._id });
+    }
+    if (!address) {
+      // Try to get any address of user
+      address = await Address.findOne({ createdBy: req.user._id });
+    }
+    
+    // If still no address, use original order address (but need to convert to Address format)
+    if (!address && originalOrder.address) {
+      // Create a temporary address object from order address
+      address = {
+        lat: originalOrder.address.lat || originalOrder.address.latitude || "0",
+        long: originalOrder.address.long || originalOrder.address.longitude || "0",
+        address_1: originalOrder.address.address_1 || originalOrder.address.addressLine || "",
+        city: originalOrder.address.city || "",
+        state: originalOrder.address.state || "",
+        pincode: originalOrder.address.pincode || "",
+        toObject: function() { return this; }
+      };
+    }
+
+    if (!address) {
+      return res.status(400).json({
+        status: 400,
+        success: false,
+        message: "Please add a delivery address",
+      });
+    }
+
+    const store = await Store.findById(originalOrder.storeId);
+    if (!store) {
+      return res.status(404).json({
+        status: 404,
+        success: false,
+        message: "Store not found",
+      });
+    }
+
+    // Validate delivery distance
+    const storeCoords = store?.location?.coordinates || [];
+    const storeLat = typeof storeCoords[1] === "number" ? storeCoords[1] : null;
+    const storeLong = typeof storeCoords[0] === "number" ? storeCoords[0] : null;
+    const addressLat = Number(address.lat);
+    const addressLong = Number(address.long);
+
+    if (
+      storeLat === null ||
+      storeLong === null ||
+      !Number.isFinite(addressLat) ||
+      !Number.isFinite(addressLong)
+    ) {
+      return res.status(400).json({
+        status: 400,
+        success: false,
+        message: "Please select an address with a valid location to continue delivery",
+      });
+    }
+
+    const deliveryDistanceKm = calculateDistanceKm(storeLat, storeLong, addressLat, addressLong);
+    if (deliveryDistanceKm === null || deliveryDistanceKm > LOCAL_STORE_MAX_DISTANCE_KM) {
+      return res.status(400).json({
+        status: 400,
+        success: false,
+        message: `Delivery address is outside the ${LOCAL_STORE_MAX_DISTANCE_KM} km store range. Please choose a nearby address.`,
+        distanceKm: deliveryDistanceKm,
+      });
+    }
+
+    // Add products from original order to cart
+    const productDetails = originalOrder.productDetails || [];
+    if (productDetails.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        success: false,
+        message: "Original order has no products to re-order",
+      });
+    }
+
+    // Clear existing cart for this store
+    await Cart.updateMany(
+      { createdBy: req.user._id, storeId: originalOrder.storeId, deleted: false },
+      { $set: { deleted: true } }
+    );
+
+    // Add products to cart
+    const cartItems = [];
+    for (const product of productDetails) {
+      const productDoc = await Product.findById(product.productId);
+      if (!productDoc || productDoc.deleted || productDoc.status !== "A") {
+        continue; // Skip unavailable products
+      }
+
+      // Check stock
+      const requestedQty = product.quantity || 1;
+      if (productDoc.stock < requestedQty) {
+        return res.status(400).json({
+          status: 400,
+          success: false,
+          message: `${productDoc.productName} is out of stock. Available: ${productDoc.stock}`,
+        });
+      }
+
+      const cartItem = new Cart({
+        createdBy: req.user._id,
+        storeId: originalOrder.storeId,
+        productId: product.productId,
+        quantity: requestedQty,
+        sellingPrice: product.productPrice || productDoc.sellingPrice,
+      });
+      await cartItem.save();
+      cartItems.push(cartItem);
+    }
+
+    if (cartItems.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        success: false,
+        message: "No products available for re-order",
+      });
+    }
+
+    // Now create order using createOrderV2 logic
+    // We'll reuse the createOrderV2 function by calling it internally
+    // But for simplicity, we'll create the order directly here
+    const donateValue = Number(donate || 0);
+    const validPaymentTypes = ["CARD", "WALLET", "BANK", "COD", "QR"];
+    const finalPaymentType = (paymentType && validPaymentTypes.includes(paymentType.toUpperCase())) 
+      ? paymentType.toUpperCase() 
+      : "COD";
+
+    // Calculate totals
+    let storeTotal = 0;
+    let storeDiscountAmount = 0;
+    let storeShippingFee = 0;
+    const productDetailsForOrder = [];
+
+    for (const cartItem of cartItems) {
+      const product = await Product.findById(cartItem.productId);
+      if (!product) continue;
+
+      const itemPrice = cartItem.sellingPrice || product.sellingPrice;
+      const itemQty = cartItem.quantity;
+      const itemTotal = itemPrice * itemQty;
+      storeTotal += itemTotal;
+
+      productDetailsForOrder.push({
+        productId: product._id,
+        mrp: product.mrp,
+        productPrice: itemPrice,
+        quantity: itemQty,
+        freeQuantity: 0,
+      });
+    }
+
+    // Apply coupon if provided
+    let couponCodeDiscount = 0;
+    if (coupon) {
+      const couponDoc = await CouponCode.findOne({ code: coupon, deleted: false });
+      if (couponDoc && couponDoc.status === "active") {
+        // Apply coupon logic here
+        couponCodeDiscount = 0; // Calculate based on coupon type
+      }
+    }
+
+    const grandTotal = storeTotal - storeDiscountAmount - couponCodeDiscount + storeShippingFee + donateValue;
+
+    // Create order
+    const orderId = `ORD_${Date.now()}`;
+    const newOrder = new Order({
+      createdBy: req.user._id,
+      storeId: originalOrder.storeId,
+      orderId,
+      paymentStatus: "PENDING",
+      paymentType: finalPaymentType,
+      address: address.toObject ? address.toObject() : address,
+      summary: {
+        totalAmount: storeTotal,
+        discountAmount: storeDiscountAmount + couponCodeDiscount,
+        shippingFee: storeShippingFee,
+        donate: donateValue,
+        grandTotal,
+      },
+      productDetails: productDetailsForOrder,
+      status: "Pending",
+      shiprocket: store?.shiprocket?.pickup_addresses ? {
+        pickup_addresses: store.shiprocket.pickup_addresses || [],
+        default_pickup_address: store.shiprocket.default_pickup_address || null
+      } : {}
+    });
+
+    await newOrder.save();
+
+    // Clear cart
+    await Cart.updateMany(
+      { createdBy: req.user._id, storeId: originalOrder.storeId, deleted: false },
+      { $set: { deleted: true } }
+    );
+
+    return res.status(200).json({
+      status: 200,
+      success: true,
+      message: "Order re-created successfully",
+      data: {
+        orderId: newOrder.orderId,
+        _id: newOrder._id,
+        grandTotal,
+        paymentType: finalPaymentType,
+      },
+    });
+  } catch (error) {
+    console.error("Error in reOrder:", error);
+    return res.status(500).json({
+      status: 500,
+      success: false,
+      message: error.message || "Failed to re-order",
     });
   }
 };

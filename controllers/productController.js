@@ -14,6 +14,7 @@ import { signedUrl } from '../helper/s3.config.js';
 import { getDistance } from "geolib";
 import { fetchTrendingProducts } from "../helper/trendingHelper.js";
 import { getDistanceAndTime } from "../helper/latAndLong.js";
+import { isAutomobileCategory } from './slotBookingController.js';
 
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
@@ -438,7 +439,7 @@ export const createProduct = async (req, res) => {
       );
   
       // ✅ Verify Store Ownership (fixed ObjectId mismatch issue)
-      const store = await Store.findById(storeId);
+      const store = await Store.findById(storeId).populate('category', 'name');
       if (!store) {
         return res.status(status.NotFound).json({
           status: jsonStatus.NotFound,
@@ -455,6 +456,10 @@ export const createProduct = async (req, res) => {
           message: "You are not the owner of this store",
         });
       }
+
+      // ✅ Check if store is an automobile store
+      const storeCategoryName = store.category?.name || "";
+      const isAutomobileStore = isAutomobileCategory(storeCategoryName);
   
       // ✅ Calculate discount percentage
       const offPer = calculateDiscount(parsedMrp, parsedSellingPrice);
@@ -476,12 +481,31 @@ export const createProduct = async (req, res) => {
           message: "Invalid category selected.",
         });
       }
+      
+      // ✅ For non-automobile stores, category is required
+      if (!isAutomobileStore && !categoryParse.value) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Category is required for non-automobile products.",
+        });
+      }
+
       const subCategoryParse = parseOptionalObjectId(req.body.subcategory || req.body.subCategoryId);
       if (!subCategoryParse.valid) {
         return res.status(status.BadRequest).json({
           status: jsonStatus.BadRequest,
           success: false,
           message: "Invalid subcategory selected.",
+        });
+      }
+
+      // ✅ For non-automobile stores, subcategory is required
+      if (!isAutomobileStore && !subCategoryParse.value) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Subcategory is required for non-automobile products.",
         });
       }
 
@@ -707,6 +731,15 @@ export const editProduct = async (req, res) => {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: `Product not found` });
         }
 
+        // ✅ Get store to check if it's an automobile store
+        const storeIdToCheck = payload.storeId || product.storeId;
+        const store = await Store.findById(storeIdToCheck).populate('category', 'name');
+        let isAutomobileStore = false;
+        if (store) {
+            const storeCategoryName = store.category?.name || "";
+            isAutomobileStore = isAutomobileCategory(storeCategoryName);
+        }
+
         const updateData = { updatedBy: req.user._id };
         let priceUpdatedViaUnits = false;
 
@@ -904,7 +937,22 @@ export const editProduct = async (req, res) => {
                     message: "Invalid category selected."
                 });
             }
+            // ✅ For non-automobile stores, category is required
+            if (!isAutomobileStore && !categoryParse.value) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: "Category is required for non-automobile products."
+                });
+            }
             updateData.categoryId = categoryParse.value;
+        } else if (!isAutomobileStore && !product.categoryId) {
+            // ✅ If category is not being updated but product doesn't have one and store is non-automobile, require it
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Category is required for non-automobile products. Please provide a category."
+            });
         }
 
         if (
@@ -919,7 +967,22 @@ export const editProduct = async (req, res) => {
                     message: "Invalid subcategory selected."
                 });
             }
+            // ✅ For non-automobile stores, subcategory is required
+            if (!isAutomobileStore && !subCategoryParse.value) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: "Subcategory is required for non-automobile products."
+                });
+            }
             updateData.subCategoryId = subCategoryParse.value;
+        } else if (!isAutomobileStore && !product.subCategoryId) {
+            // ✅ If subcategory is not being updated but product doesn't have one and store is non-automobile, require it
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Subcategory is required for non-automobile products. Please provide a subcategory."
+            });
         }
 
         const hasMrp = Object.prototype.hasOwnProperty.call(payload, "mrp");
@@ -2237,11 +2300,41 @@ export const getStoreProductList = async (req, res) => {
 
         const userId = req.user._id;
 
+        // ✅ Verify store is created by retailer (not seller)
+        const storeWithOwner = await Store.aggregate([
+            {
+                $match: { _id: new ObjectId(id) }
+            },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "owner",
+                    pipeline: [{ $project: { role: 1 } }]
+                }
+            },
+            {
+                $addFields: {
+                    ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+                }
+            }
+        ]);
+
+        if (!storeWithOwner.length || storeWithOwner[0].ownerRole !== "retailer") {
+            return res.status(status.NotFound).json({ 
+                status: jsonStatus.NotFound, 
+                success: false, 
+                message: "Store not found or not a retailer store" 
+            });
+        }
+
         const list = await Product.aggregate([
             {
                 $match: {
                     deleted: false,
                     storeId: new ObjectId(id),
+                    status: "A",
                     ...(searchTerm
                         ? {
                     productName: {
@@ -2323,7 +2416,8 @@ export const getCategoryProductList = async (req, res) => {
         const list = await Product.aggregate([
             {
                 $match: {
-                    deleted: false
+                    deleted: false,
+                    status: "A"
                 }
             },
             {
@@ -2331,7 +2425,28 @@ export const getCategoryProductList = async (req, res) => {
                     from: "stores",
                     localField: "storeId",
                     foreignField: "_id",
-                    as: "storeDetails"
+                    as: "storeDetails",
+                    pipeline: [
+                        {
+                            $lookup: {
+                                from: "users",
+                                localField: "createdBy",
+                                foreignField: "_id",
+                                as: "owner",
+                                pipeline: [{ $project: { role: 1 } }]
+                            }
+                        },
+                        {
+                            $addFields: {
+                                ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+                            }
+                        },
+                        {
+                            $match: {
+                                ownerRole: "retailer"
+                            }
+                        }
+                    ]
                 }
             },
             {
@@ -2346,6 +2461,7 @@ export const getCategoryProductList = async (req, res) => {
             },
             {
                 $match: {
+                    "storeDetails": { $ne: null },
                     "storeDetails.category": new ObjectId(id)
                 }
             },

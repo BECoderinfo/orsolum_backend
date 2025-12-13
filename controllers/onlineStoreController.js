@@ -1425,9 +1425,21 @@ export const onlineProductsList = async (req, res) => {
         // Build the query conditions
         const query = { deleted: false };
 
-        // Apply category, subcategory, and brand filters if provided
-        if (category) query.categoryId = new ObjectId(category);
-        if (subcategory) query.subCategoryId = new ObjectId(subcategory);
+        // ✅ Apply category, subcategory, and brand filters if provided
+        if (category) {
+            query.categoryId = new ObjectId(category);
+        } else {
+            // If category not provided, still ensure categoryId exists
+            query.categoryId = { $exists: true, $ne: null };
+        }
+        
+        if (subcategory) {
+            query.subCategoryId = new ObjectId(subcategory);
+        } else {
+            // If subcategory not provided, still ensure subCategoryId exists
+            query.subCategoryId = { $exists: true, $ne: null };
+        }
+        
         if (brand) query.brandId = new ObjectId(brand);
 
         // Apply search filter on the name field using regex
@@ -1437,14 +1449,10 @@ export const onlineProductsList = async (req, res) => {
 
         // Fetch products with applied filters and pagination
         // Only show products from seller panel stores (createdBy user with role "seller")
-        // Also ensure products have required categoryId and subCategoryId
+        // ✅ When category is provided, only show products from that category
         const products = await OnlineProduct.aggregate([
             {
-                $match: {
-                    ...query,
-                    categoryId: { $exists: true, $ne: null },
-                    subCategoryId: { $exists: true, $ne: null }
-                }
+                $match: query
             },
             {
                 $lookup: {
@@ -1558,14 +1566,32 @@ export const onlineProductsList = async (req, res) => {
 
                     if (subcategoryPercentage > 0) {
                         const discountPrice = Math.round(sellingPrice * (1 - subcategoryPercentage / 100));
+                        // ✅ Calculate offPer properly - ensure it's just a number without "% OFF"
+                        const calculatedOffPer = calculateOffPer(sellingPrice, discountPrice);
 
                         product.units = {
                             ...product.units,
                             mrp: sellingPrice, // Show selling price as MRP
                             sellingPrice: discountPrice, // Apply new discount price
-                            offPer: `${subcategoryPercentage}` // numeric string; UI can append "% OFF"
+                            offPer: calculatedOffPer // numeric string; UI can append "% OFF"
                         };
+                    } else if (product.units.offPer) {
+                        // ✅ Ensure offPer doesn't contain "% OFF" text - clean it if needed
+                        const offPerValue = String(product.units.offPer).replace(/%\s*OFF/gi, '').trim();
+                        product.units.offPer = offPerValue;
                     }
+                } else if (product.units && product.units.offPer) {
+                    // ✅ Clean offPer for non-premium users too
+                    const offPerValue = String(product.units.offPer).replace(/%\s*OFF/gi, '').trim();
+                    product.units.offPer = offPerValue;
+                }
+            });
+        } else {
+            // ✅ For non-premium users, ensure offPer is clean
+            products.forEach(product => {
+                if (product.units && product.units.offPer) {
+                    const offPerValue = String(product.units.offPer).replace(/%\s*OFF/gi, '').trim();
+                    product.units.offPer = offPerValue;
                 }
             });
         }
@@ -1600,12 +1626,11 @@ export const onlineProductsList = async (req, res) => {
         const sellerUsers = await User.find({ role: "seller" }).select("_id");
         const sellerUserIds = sellerUsers.map(u => u._id);
         
-        // Count products that match all criteria: seller role, category, subcategory, and have units
+        // ✅ Count products that match all criteria: seller role, category filter (if provided), subcategory filter (if provided), and have units
+        // Use the same query object which already has category/subcategory filters applied
         const countQuery = { 
             ...query, 
-            createdBy: { $in: sellerUserIds },
-            categoryId: { $exists: true, $ne: null },
-            subCategoryId: { $exists: true, $ne: null }
+            createdBy: { $in: sellerUserIds }
         };
         
         // Also check that products have units
@@ -1731,15 +1756,35 @@ export const onlineProductsDetails = async (req, res) => {
             if (subcategoryPercentage > 0) {
                 details[0].productUnits = details[0].productUnits.map(unit => {
                     const discountPrice = Math.round(unit.sellingPrice * (1 - subcategoryPercentage / 100));
+                    // ✅ Calculate offPer properly - ensure it's just a number without "% OFF"
+                    const calculatedOffPer = calculateOffPer(unit.sellingPrice, discountPrice);
 
                     return {
                         ...unit,
                         mrp: unit.sellingPrice, // Show selling price as MRP
                         sellingPrice: discountPrice, // Apply discount
-                        offPer: `${subcategoryPercentage}` // numeric string; UI can append "% OFF"
+                        offPer: calculatedOffPer // numeric string; UI can append "% OFF"
                     };
                 });
+            } else {
+                // ✅ Clean offPer even if no premium discount
+                details[0].productUnits = details[0].productUnits.map(unit => {
+                    if (unit.offPer) {
+                        const offPerValue = String(unit.offPer).replace(/%\s*OFF/gi, '').trim();
+                        return { ...unit, offPer: offPerValue };
+                    }
+                    return unit;
+                });
             }
+        } else {
+            // ✅ For non-premium users, ensure offPer is clean
+            details[0].productUnits = details[0].productUnits.map(unit => {
+                if (unit.offPer) {
+                    const offPerValue = String(unit.offPer).replace(/%\s*OFF/gi, '').trim();
+                    return { ...unit, offPer: offPerValue };
+                }
+                return unit;
+            });
         }
 
         // Fetch similar products
@@ -1809,14 +1854,28 @@ export const onlineProductsDetails = async (req, res) => {
 
                     if (subcategoryPercentage > 0) {
                         const discountPrice = Math.round(sellingPrice * (1 - subcategoryPercentage / 100));
+                        // ✅ Calculate offPer properly
+                        const calculatedOffPer = calculateOffPer(sellingPrice, discountPrice);
 
                         product.productUnits = {
                             ...product.productUnits,
                             mrp: sellingPrice, // Show selling price as MRP
                             sellingPrice: discountPrice, // Apply new discount price
-                            offPer: `${subcategoryPercentage}` // numeric string; UI can append "% OFF"
+                            offPer: calculatedOffPer // numeric string; UI can append "% OFF"
                         };
+                    } else if (product.productUnits.offPer) {
+                        // ✅ Clean offPer
+                        const offPerValue = String(product.productUnits.offPer).replace(/%\s*OFF/gi, '').trim();
+                        product.productUnits.offPer = offPerValue;
                     }
+                }
+            });
+        } else {
+            // ✅ For non-premium users, ensure offPer is clean
+            similarProducts.forEach(product => {
+                if (product.productUnits && product.productUnits.offPer) {
+                    const offPerValue = String(product.productUnits.offPer).replace(/%\s*OFF/gi, '').trim();
+                    product.productUnits.offPer = offPerValue;
                 }
             });
         }
@@ -2069,13 +2128,19 @@ export const onlineStoreCartDetails = async (req, res) => {
 
             if (req.user.isPremium && percentageOff > 0) {
                 const discountPrice = Math.round(modifiedUnit.sellingPrice * (1 - percentageOff / 100));
+                // ✅ Calculate offPer properly
+                const calculatedOffPer = calculateOffPer(modifiedUnit.sellingPrice, discountPrice);
 
                 modifiedUnit = {
                     ...modifiedUnit,
                     mrp: modifiedUnit.sellingPrice, // Show selling price as MRP
                     sellingPrice: discountPrice, // Apply discount
-                    offPer: `${percentageOff}` // numeric string; UI can append "% OFF"
+                    offPer: calculatedOffPer // numeric string; UI can append "% OFF"
                 };
+            } else if (modifiedUnit.offPer) {
+                // ✅ Clean offPer even if no premium discount
+                const offPerValue = String(modifiedUnit.offPer).replace(/%\s*OFF/gi, '').trim();
+                modifiedUnit.offPer = offPerValue;
             }
 
             let productTotal = modifiedUnit.sellingPrice * quantity;

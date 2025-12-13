@@ -1,5 +1,5 @@
 import express from "express";
-import { addProductToCart, incrementProductQuantityInCart, decrementProductQuantityInCart, deleteProductFromCart, cartDetails, allCartDetails, couponCodeList, createAddress, editAddress, getAddress, getAllAddress, createOrder, cancelOrder, orderList, orderDetails, retailerOrderList, retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetails, orderChangeStatus, createOrderV2, orderListV2, orderDetailsV2, retailerOrderDetailsV2, paymentWebhookCall, getUserAllAddress, createOrderWithShiprocket, processPaymentAndUpdateShiprocket, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy, retailerDeliveryBoyDashboard, deleteAddress } from "../controllers/orderController.js";
+import { addProductToCart, incrementProductQuantityInCart, decrementProductQuantityInCart, deleteProductFromCart, cartDetails, allCartDetails, couponCodeList, createAddress, editAddress, getAddress, getAllAddress, createOrder, cancelOrder, orderList, orderDetails, retailerOrderList, retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetails, orderChangeStatus, createOrderV2, orderListV2, orderDetailsV2, retailerOrderDetailsV2, paymentWebhookCall, getUserAllAddress, createOrderWithShiprocket, processPaymentAndUpdateShiprocket, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy, retailerDeliveryBoyDashboard, deleteAddress, generateOrderInvoice, reOrder } from "../controllers/orderController.js";
 import { retailerAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { webhookTracking } from '../controllers/shiprocketController.js';
 import { createSlotBooking, getUserSlotBookings } from "../controllers/slotBookingController.js";
@@ -33,6 +33,8 @@ orderRouter.post('/create/order/v2', userAuthentication, createOrderV2);
 orderRouter.put('/cancel/order/:id/v1', userAuthentication, cancelOrder);
 orderRouter.get('/order/list/v2', userAuthentication, orderListV2);
 orderRouter.get('/order/details/:id/v2', userAuthentication, orderDetailsV2);
+orderRouter.post('/order/generate/invoice/:id/v1', userAuthentication, generateOrderInvoice);
+orderRouter.post('/order/re-order/:id/v1', userAuthentication, reOrder);
 orderRouter.post('/create/order/with/shiprocket/v1', userAuthentication, createOrderWithShiprocket);
 orderRouter.post('/process/payment/and/update/shiprocket/v1', userAuthentication, processPaymentAndUpdateShiprocket);
 

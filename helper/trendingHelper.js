@@ -96,12 +96,33 @@ export const fetchTrendingProducts = async ({
         localField: "product.storeId",
         foreignField: "_id",
         as: "store",
+        pipeline: [
+          {
+            $lookup: {
+              from: "users",
+              localField: "createdBy",
+              foreignField: "_id",
+              as: "owner",
+              pipeline: [{ $project: { role: 1 } }]
+            }
+          },
+          {
+            $addFields: {
+              ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+            }
+          },
+          {
+            $match: {
+              ownerRole: "retailer"
+            }
+          }
+        ]
       },
     },
     {
       $unwind: {
         path: "$store",
-        preserveNullAndEmptyArrays: true,
+        preserveNullAndEmptyArrays: false, // Only show products from retailer stores
       },
     },
     {
@@ -141,9 +162,52 @@ export const fetchTrendingProducts = async ({
   }
 
   // Fallback: show latest active products if no completed orders yet
+  // ✅ Only show products from retailer stores
+  const retailerStores = await Store.aggregate([
+    {
+      $lookup: {
+        from: "users",
+        localField: "createdBy",
+        foreignField: "_id",
+        as: "owner",
+        pipeline: [{ $project: { role: 1 } }]
+      }
+    },
+    {
+      $addFields: {
+        ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+      }
+    },
+    {
+      $match: {
+        ownerRole: "retailer"
+      }
+    },
+    {
+      $project: { _id: 1 }
+    }
+  ]);
+
+  const retailerStoreIds = retailerStores.map(s => s._id);
+  
   const fallbackQuery = { deleted: false, status: "A" };
   if (storeObjectIds.length) {
-    fallbackQuery.storeId = { $in: storeObjectIds };
+    // Filter by provided storeIds AND ensure they are retailer stores
+    const validStoreIds = storeObjectIds.filter(id => 
+      retailerStoreIds.some(rid => rid.toString() === id.toString())
+    );
+    if (validStoreIds.length) {
+      fallbackQuery.storeId = { $in: validStoreIds };
+    } else {
+      return []; // No valid retailer stores
+    }
+  } else {
+    // If no storeIds provided, only show products from retailer stores
+    if (retailerStoreIds.length) {
+      fallbackQuery.storeId = { $in: retailerStoreIds };
+    } else {
+      return []; // No retailer stores found
+    }
   }
 
   const fallbackProducts = await Product.find(fallbackQuery)
@@ -163,9 +227,38 @@ export const fetchTrendingProducts = async ({
     ),
   ];
 
-  const storeDocs = await Store.find({ _id: { $in: fallbackStoreIds } })
-    .select("name address")
-    .lean();
+  // ✅ Only get retailer stores
+  const storeDocs = await Store.aggregate([
+    {
+      $match: { _id: { $in: fallbackStoreIds.map(id => new ObjectId(id)) } }
+    },
+    {
+      $lookup: {
+        from: "users",
+        localField: "createdBy",
+        foreignField: "_id",
+        as: "owner",
+        pipeline: [{ $project: { role: 1 } }]
+      }
+    },
+    {
+      $addFields: {
+        ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+      }
+    },
+    {
+      $match: {
+        ownerRole: "retailer"
+      }
+    },
+    {
+      $project: {
+        _id: 1,
+        name: 1,
+        address: 1
+      }
+    }
+  ]);
   const storeMap = new Map(
     storeDocs.map((store) => [store._id.toString(), store])
   );
