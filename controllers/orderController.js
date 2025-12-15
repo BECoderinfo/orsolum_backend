@@ -3515,10 +3515,11 @@ export const retailerPendingOrderList = async (req, res) => {
     // Retrieve the store linked to the retailer - use lean() for faster query
     const findStore = await Store.findOne({ createdBy: req.user._id }).lean();
     if (!findStore) {
-      return res.status(status.NotFound).json({
-        status: jsonStatus.NotFound,
-        success: false,
-        message: "Store not found",
+      // Return empty instead of 404 to avoid blank UI
+      return res.status(status.OK).json({
+        status: jsonStatus.OK,
+        success: true,
+        data: [],
       });
     }
 
@@ -3526,7 +3527,8 @@ export const retailerPendingOrderList = async (req, res) => {
     let matchObj = {
       storeId: new mongoose.Types.ObjectId(findStore._id),
       status: "Pending",
-      paymentStatus: "SUCCESS",
+      // Show pending orders regardless of paymentStatus (include COD / unpaid)
+      paymentStatus: { $ne: "FAILED" },
     };
 
     // Build sort object once (more efficient than multiple $sort stages)
@@ -3620,19 +3622,19 @@ export const retailerOrderHistoryList = async (req, res) => {
     // Retrieve the store linked to the retailer - use lean() for faster query
     const findStore = await Store.findOne({ createdBy: req.user._id }).lean();
     if (!findStore) {
-      return res.status(status.NotFound).json({
-        status: jsonStatus.NotFound,
-        success: false,
-        message: "Store not found",
+      return res.status(status.OK).json({
+        status: jsonStatus.OK,
+        success: true,
+        data: [],
       });
     }
 
-    // If store is not accepted yet, return clear message (avoids 500 on client)
+    // If store is not accepted yet, still return empty list to keep UI working
     if (findStore.status !== "A") {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Store is not accepted yet. Please contact admin.",
+      return res.status(status.OK).json({
+        status: jsonStatus.OK,
+        success: true,
+        data: [],
       });
     }
 

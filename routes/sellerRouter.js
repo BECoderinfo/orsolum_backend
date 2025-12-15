@@ -21,7 +21,7 @@ import { getSellerNotifications, markSellerNotificationRead, clearSellerNotifica
 import { orderChangeStatus } from "../controllers/orderController.js";
 import { getSellerInquiries, updateInquiryStatus, deleteInquiry } from "../controllers/slotBookingController.js";
 import { createHelpCenterTicket, getSellerHelpTickets } from "../controllers/helpCenterController.js";
-import { createSellerAdRequest, listSellerAds, getSellerAdDetails, renewSellerAd, getSellerAdsConfig, deleteSellerAd, createAdPaymentSession } from "../controllers/adController.js";
+import { createSellerAdRequest, listSellerAds, getSellerAdDetails, renewSellerAd, getSellerAdsConfig, deleteSellerAd, createAdPaymentSession, getAdPaymentInfo } from "../controllers/adController.js";
 
 const sellerRouter = express.Router();
 
@@ -127,5 +127,6 @@ sellerRouter.delete(
   deleteSellerAd
 );
 sellerRouter.post("/seller/ads/payment/session/v1", sellerAuthentication, createAdPaymentSession);
+sellerRouter.get("/seller/ads/:id([a-fA-F0-9]{24})/payment/info/v1", sellerAuthentication, getAdPaymentInfo);
 
 export default sellerRouter;

@@ -2,6 +2,7 @@ import express from "express";
 import { body } from 'express-validator';
 import { uploadProfileImage, loginUser, registerUser, sendLoginOtp, sendRegisterOtp, getMyProfile, updateMyProfile, deleteMyAccount, purchasePremium, reActivateMyAccount, logoutUser, shareMyProfile } from "../controllers/userController.js";
 import { createAddress, editAddress, deleteAddress, getAddress, getAllAddress, getUserAllAddress, addProductToCart } from "../controllers/orderController.js";
+import { getAppThemeSettings } from "../controllers/adminController.js";
 import { userAuthentication } from "../middlewares/middleware.js";
 import { uploadUserImage } from "../helper/uploadImage.js";
 import { getUserNotifications, markUserNotificationRead, dismissUserNotification, clearUserNotifications } from "../controllers/notificationController.js";
@@ -49,5 +50,8 @@ userRouter.get('/get/address/user/list/v1', userAuthentication, getUserAllAddres
 
 // Cart (alias without /order prefix for mobile clients)
 userRouter.post('/add/product/in/cart/v1', userAuthentication, addProductToCart);
+
+// App Theme Settings (Public - no auth required for user app)
+userRouter.get('/app/theme/settings/v1', getAppThemeSettings);
 
 export default userRouter;

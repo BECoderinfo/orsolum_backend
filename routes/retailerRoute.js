@@ -4,7 +4,7 @@ import { retailerAuthentication } from "../middlewares/middleware.js";
 import { uploadAdMediaAny, uploadAdMediaMulter, uploadUserImage, uploadStoreImagesMulter } from "../helper/uploadImage.js";
 import { getRetailerNotifications, markRetailerNotificationRead, clearRetailerNotifications } from "../controllers/notificationController.js";
 import { retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetailsV2, orderChangeStatus, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy, retailerDeliveryBoyDashboard, retailerDeliveryBoyHistory, retailerCreateOrder } from "../controllers/orderController.js";
-import { createRetailerAdRequest, deleteRetailerAd, getRetailerAdDetails, getSellerAdsConfig, listRetailerAds, getRetailerLocalStoreAds, createRetailerAdPaymentSession } from "../controllers/adController.js";
+import { createRetailerAdRequest, deleteRetailerAd, getRetailerAdDetails, getSellerAdsConfig, listRetailerAds, getRetailerLocalStoreAds, createRetailerAdPaymentSession, getAdPaymentInfo } from "../controllers/adController.js";
 const retailerRouter = express.Router();
 
 // auth
@@ -69,6 +69,7 @@ retailerRouter.delete(
   deleteRetailerAd
 );
 retailerRouter.post('/retailer/ads/payment/session/v1', retailerAuthentication, createRetailerAdPaymentSession);
+retailerRouter.get('/retailer/ads/:id([a-fA-F0-9]{24})/payment/info/v1', retailerAuthentication, getAdPaymentInfo);
 retailerRouter.get('/retailer/local/store/ads/v1', retailerAuthentication, getRetailerLocalStoreAds);
 
 export default retailerRouter;

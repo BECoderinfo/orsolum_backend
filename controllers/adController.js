@@ -119,6 +119,15 @@ const findOverlappingAds = async ({
     return { count: 0, conflicts: [] };
   }
 
+  // Treat ads with null/undefined endDate as infinitely running (conflict)
+  const endDateCondition = {
+    $or: [
+      { endDate: { $gte: projectedStart } },
+      { endDate: { $exists: false } },
+      { endDate: null },
+    ],
+  };
+
   const query = {
     location,
     deleted: { $ne: true },
@@ -137,7 +146,7 @@ const findOverlappingAds = async ({
       { status: "approved", paymentStatus: "paid" },
     ],
     startDate: { $lte: projectedEnd },
-    endDate: { $gte: projectedStart },
+    ...endDateCondition,
   };
 
   const conflicts = await Ad.find(query)
@@ -371,7 +380,8 @@ export const listSellerAds = async (req, res) => {
 
     const filter = { 
       sellerId: new ObjectId(sellerId),
-      deleted: { $ne: true } // Don't show deleted ads to seller
+      deleted: { $ne: true }, // Don't show deleted ads to seller
+      isDead: { $ne: true }, // Don't show dead ads (payment deadline expired)
     };
     if (statusFilter && statusFilter !== "all") {
       filter.status = statusFilter;
@@ -515,6 +525,97 @@ export const renewSellerAd = async (req, res) => {
 export const createRetailerAdRequest = (req, res) => createSellerAdRequest(req, res);
 export const listRetailerAds = (req, res) => listSellerAds(req, res);
 export const getRetailerAdDetails = (req, res) => getSellerAdDetails(req, res);
+
+/**
+ * Get payment info for approved ad (with bank details)
+ * For seller/retailer to view payment information
+ */
+export const getAdPaymentInfo = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid ad ID",
+      });
+    }
+
+    const ad = await Ad.findOne({
+      _id: new ObjectId(id),
+      sellerId: new ObjectId(userId),
+      deleted: { $ne: true },
+    }).lean();
+
+    if (!ad) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Ad not found",
+      });
+    }
+
+    // Only show payment info if ad is approved and not dead
+    if (ad.isDead || ad.deleted) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "This ad has been deleted due to payment deadline expiration",
+      });
+    }
+
+    if (ad.status !== "approved" || ad.paymentStatus !== "pending") {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Payment info is only available for approved ads with pending payment",
+      });
+    }
+
+    // Get bank details from config
+    const config = await getAdsConfig();
+    const decryptedBank = {
+      accountName: decryptValue(config.bankDetails?.accountName || ""),
+      accountNumber: decryptValue(config.bankDetails?.accountNumber || ""),
+      ifsc: decryptValue(config.bankDetails?.ifsc || ""),
+      bankName: config.bankDetails?.bankName || "",
+      branch: config.bankDetails?.branch || "",
+      upiId: decryptValue(config.bankDetails?.upiId || ""),
+      note: config.bankDetails?.note || "first payment after will start ads",
+    };
+
+    return res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      message: "Payment info fetched successfully",
+      data: {
+        ad: {
+          _id: ad._id,
+          name: ad.name,
+          location: ad.location,
+          amount: ad.amount || 0,
+          paymentStatus: ad.paymentStatus,
+          paymentDeadline: ad.paymentDeadline,
+          totalRunDays: ad.totalRunDays,
+        },
+        paymentAmount: ad.amount || 0,
+        bankDetails: decryptedBank,
+        paymentDeadline: ad.paymentDeadline,
+        canMakePayment: ad.status === "approved" && ad.paymentStatus === "pending" && !ad.isDead,
+      },
+    });
+  } catch (error) {
+    console.error("getAdPaymentInfo error:", error);
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message || "Failed to fetch payment info",
+    });
+    return catchError("getAdPaymentInfo", error, req, res);
+  }
+};
 export const deleteRetailerAd = (req, res) => deleteSellerAd(req, res);
 
 // ===================== ADMIN APIs =====================
@@ -713,6 +814,11 @@ export const adminUpdateAdStatus = async (req, res) => {
       ad.status = "approved";
       ad.approvedBy = adminId;
       
+      // Set payment deadline: 48 hours from approval
+      const paymentDeadline = new Date();
+      paymentDeadline.setHours(paymentDeadline.getHours() + 48);
+      ad.paymentDeadline = paymentDeadline;
+      
       // If payment is already paid or being set to paid, set start/end dates
       const finalPaymentStatus = paymentStatus || ad.paymentStatus;
       if (finalPaymentStatus === "paid") {
@@ -728,6 +834,43 @@ export const adminUpdateAdStatus = async (req, res) => {
         setAdDates(startDate);
         // If payment is paid, automatically activate the ad
         ad.status = "active";
+        // Clear payment deadline since payment is already done
+        ad.paymentDeadline = undefined;
+      } else {
+        // Send notification to seller/retailer about approval with payment info
+        try {
+          const config = await getAdsConfig();
+          const decryptedBank = {
+            accountName: decryptValue(config.bankDetails?.accountName || ""),
+            accountNumber: decryptValue(config.bankDetails?.accountNumber || ""),
+            ifsc: decryptValue(config.bankDetails?.ifsc || ""),
+            bankName: config.bankDetails?.bankName || "",
+            branch: config.bankDetails?.branch || "",
+            upiId: decryptValue(config.bankDetails?.upiId || ""),
+            note: config.bankDetails?.note || "",
+          };
+
+          // Determine if seller or retailer
+          const User = await import("../models/User.js");
+          const user = await User.default.findById(ad.sellerId);
+          const userRole = user?.role || "seller";
+
+          await Notification.create({
+            title: "Ad Approved - Payment Required",
+            message: `Your ad '${ad.name}' has been approved. Please make payment of ₹${ad.amount || 0} within 48 hours. Click to view payment details.`,
+            type: "info",
+            targetRoles: [userRole],
+            targetUserIds: [ad.sellerId],
+            meta: {
+              category: "ad",
+              adId: ad._id.toString(),
+              paymentAmount: ad.amount || 0,
+              paymentDeadline: paymentDeadline.toISOString(),
+            },
+          });
+        } catch (notifError) {
+          console.error("Error sending approval notification:", notifError);
+        }
       }
     } else if (newStatus === "active") {
       // Ad should start only after payment is marked paid
@@ -799,20 +942,18 @@ export const adminCreateOrsolumAd = async (req, res) => {
       name,
       description,
       location,
-      totalRunDays,
       inquiry,
-      startDate,
-      scheduledStartDate,
       videos,
+      productId, // ✅ Product selection for admin ads
     } = req.body;
 
     const normalizedLocation = normalizeLocation(location);
 
-    if (!name || !normalizedLocation || !totalRunDays) {
+    if (!name || !normalizedLocation) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
-        message: "Please provide ad name, location and total run days",
+        message: "Please provide ad name and location",
       });
     }
 
@@ -822,6 +963,33 @@ export const adminCreateOrsolumAd = async (req, res) => {
         success: false,
         message: "Invalid ad location",
       });
+    }
+
+    // Validate productId if provided
+    let finalProductId = null;
+    if (productId) {
+      if (!ObjectId.isValid(productId)) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Invalid product ID",
+        });
+      }
+
+      // Check if product exists
+      const product = await Product.findOne({
+        _id: new ObjectId(productId),
+        deleted: false,
+      });
+      if (!product) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Product not found",
+        });
+      }
+
+      finalProductId = new ObjectId(productId);
     }
 
     // Handle uploaded images from multer + manual URLs
@@ -865,36 +1033,11 @@ export const adminCreateOrsolumAd = async (req, res) => {
     }
     videoUrls = [...new Set(videoUrls)];
 
-    // Handle scheduled date if provided
-    let start, end, adStatus;
-    if (scheduledStartDate) {
-      const scheduledDate = new Date(scheduledStartDate);
-      if (scheduledDate > new Date()) {
-        // Scheduled for future - set status as approved, will activate on scheduled date
-        start = scheduledDate;
-        end = new Date(scheduledDate);
-        end.setDate(end.getDate() + Number(totalRunDays || 1));
-        adStatus = "approved"; // Will be activated by cron job
-      } else {
-        // Scheduled date is in past, activate immediately
-        start = scheduledDate;
-        end = new Date(scheduledDate);
-        end.setDate(end.getDate() + Number(totalRunDays || 1));
-        adStatus = "active";
-      }
-    } else if (startDate) {
-      // Use provided startDate
-      start = new Date(startDate);
-      end = new Date(start);
-      end.setDate(end.getDate() + Number(totalRunDays || 1));
-      adStatus = "active";
-    } else {
-      // No scheduled date, activate immediately
-      start = new Date();
-      end = new Date(start);
-      end.setDate(end.getDate() + Number(totalRunDays || 1));
-      adStatus = "active";
-    }
+    // ✅ Admin ads: No time limit. Use a long duration for endDate so conflict checks work.
+    const now = new Date();
+    const LONG_RUN_DAYS = 3650; // 10 years fallback
+    const end = new Date(now);
+    end.setDate(end.getDate() + LONG_RUN_DAYS);
 
     const ad = new Ad({
       name: name.trim(),
@@ -902,14 +1045,14 @@ export const adminCreateOrsolumAd = async (req, res) => {
       location,
       images,
       videos: videoUrls,
-      totalRunDays: Number(totalRunDays),
+      productId: finalProductId, // ✅ Product selection
+      totalRunDays: LONG_RUN_DAYS,
       inquiry: inquiry?.trim(),
-      status: adStatus,
+      status: "active", // ✅ Active immediately
       amount: 0, // Admin ads don't require payment
       paymentStatus: "paid", // Auto-set as paid for admin ads
-      startDate: start,
-      endDate: end,
-      scheduledStartDate: scheduledStartDate ? new Date(scheduledStartDate) : undefined,
+      startDate: now, // Start immediately
+      endDate: end, // ✅ Long-running end date for overlap checks
       createdByAdmin: adminId,
       approvedBy: adminId,
     });
@@ -919,7 +1062,7 @@ export const adminCreateOrsolumAd = async (req, res) => {
     return res.status(status.Create).json({
       status: jsonStatus.Create,
       success: true,
-      message: "Orsolum ad created successfully",
+      message: "Orsolum ad created successfully. This ad will run when no seller/retailer ads are active for this location.",
       data: ad,
     });
   } catch (error) {
@@ -1105,17 +1248,14 @@ export const adminDeleteAd = async (req, res) => {
       });
     }
 
-    // Soft delete - mark as deleted and cancelled, but don't remove from database
-    ad.deleted = true;
-    ad.deletedBy = "admin";
-    ad.status = "cancelled";
-    await ad.save();
+    // Hard delete - remove from database
+    await Ad.deleteOne({ _id: ad._id });
 
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
       message: "Ad deleted successfully",
-      data: ad,
+      data: { _id: ad._id },
     });
   } catch (error) {
     res.status(status.InternalServerError).json({
@@ -1175,11 +1315,54 @@ export const checkAdsExpiryAndNotify = async () => {
       console.log(`✅ Activated ${scheduledAds.length} scheduled ads`);
     }
 
-    // 1) Mark completed ads (excluding deleted ones)
+    // 0.5) Delete ads that exceeded 48-hour payment deadline
+    const expiredPaymentAds = await Ad.find({
+      status: "approved",
+      paymentStatus: "pending",
+      paymentDeadline: { $lte: now },
+      isDead: { $ne: true },
+      deleted: { $ne: true },
+    });
+
+    if (expiredPaymentAds.length > 0) {
+      for (const ad of expiredPaymentAds) {
+        // Mark as dead and deleted
+        ad.isDead = true;
+        ad.deleted = true;
+        ad.deletedBy = "admin"; // System deletion
+        ad.status = "cancelled"; // Mark as cancelled
+        await ad.save();
+
+        // Send notification to seller/retailer
+        try {
+          const User = await import("../models/User.js");
+          const user = await User.default.findById(ad.sellerId);
+          const userRole = user?.role || "seller";
+
+          await Notification.create({
+            title: "Ad Deleted - Payment Deadline Expired",
+            message: `Your ad '${ad.name}' has been deleted because payment was not completed within 48 hours of approval.`,
+            type: "alert",
+            targetRoles: [userRole],
+            targetUserIds: [ad.sellerId],
+            meta: {
+              category: "ad",
+              adId: ad._id.toString(),
+              reason: "payment_deadline_expired",
+            },
+          });
+        } catch (notifError) {
+          console.error("Error sending payment deadline expiration notification:", notifError);
+        }
+      }
+      console.log(`✅ Deleted ${expiredPaymentAds.length} ads due to payment deadline expiration`);
+    }
+
+    // 1) Mark completed ads (excluding deleted ones and admin ads without endDate)
     const completedResult = await Ad.updateMany(
       {
         status: "active",
-        endDate: { $lte: now },
+        endDate: { $exists: true, $ne: null, $lte: now },
         deleted: { $ne: true },
       },
       { $set: { status: "completed" } }
@@ -1419,13 +1602,19 @@ export const getActiveAds = async (req, res) => {
       .sort({ startDate: 1 })
       .lean();
 
-    // Admin fallback ads
+    // Admin fallback ads - ✅ No endDate limit (runs indefinitely)
     const fallbackFilter = {
       status: "active",
       startDate: { $lte: now },
-      endDate: { $gte: now },
+      // ✅ Admin ads can have no endDate (null) or very high endDate (999999 days)
+      $or: [
+        { endDate: { $exists: false } },
+        { endDate: null },
+        { endDate: { $gte: now } },
+      ],
       deleted: { $ne: true },
-      sellerId: { $exists: false },
+      sellerId: { $exists: false }, // Admin ads don't have sellerId
+      createdByAdmin: { $exists: true }, // Only admin-created ads
     };
     if (normalizedLocation && AD_LOCATIONS.includes(normalizedLocation)) {
       fallbackFilter.location = normalizedLocation;
@@ -1770,6 +1959,15 @@ export const createRetailerAdPaymentSession = async (req, res) => {
       });
     }
 
+    // Check if ad is dead (payment deadline expired)
+    if (ad.isDead || ad.deleted) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "This ad has been deleted due to payment deadline expiration. Payment is no longer available.",
+      });
+    }
+
     if (ad.status !== "approved") {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
@@ -1954,6 +2152,15 @@ export const createAdPaymentSession = async (req, res) => {
         status: jsonStatus.NotFound,
         success: false,
         message: "Ad not found",
+      });
+    }
+
+    // Check if ad is dead (payment deadline expired)
+    if (ad.isDead || ad.deleted) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "This ad has been deleted due to payment deadline expiration. Payment is no longer available.",
       });
     }
 

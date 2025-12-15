@@ -1,6 +1,6 @@
 import express from "express";
 import { body } from 'express-validator';
-import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, listSellerProducts, productDetails, acceptProduct, rejectProduct, deleteLocalProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus, createOffer, listOffers, updateOffer, deleteOffer, getWelcomeImage, uploadWelcomeImage, deleteWelcomeImage, saveStorePopularProducts, updateStoreRating, syncSellerProductsToOnline } from "../controllers/adminController.js";
+import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, listSellerProducts, productDetails, acceptProduct, rejectProduct, deleteLocalProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus, createOffer, listOffers, updateOffer, deleteOffer, getWelcomeImage, uploadWelcomeImage, deleteWelcomeImage, saveStorePopularProducts, updateStoreRating, syncSellerProductsToOnline, fixPurseProductsCategory, getAppThemeSettings, updateAppThemeSettings, getAdminStore, upsertAdminStore, deleteAdminStore, listAdminProducts, createAdminProduct, updateAdminProduct, deleteAdminProduct } from "../controllers/adminController.js";
 import { uploadAdMediaAny, uploadAdMediaMulter, uploadStoreImagesMulter, uploadPopularCategoryImageMulter } from "../helper/uploadImage.js";
 import { adminAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { createWorkHours, getAllWorkHours, updateWorkHours, deleteWorkHours } from "../controllers/workHoursController.js";
@@ -112,6 +112,19 @@ adminRouter.post('/admin/accept/product/v1', adminAuthentication, acceptProduct)
 adminRouter.post('/admin/reject/product/v1', adminAuthentication, rejectProduct);
 adminRouter.delete('/admin/delete/local/product/:id/v1', adminAuthentication, deleteLocalProduct);
 adminRouter.post('/admin/sync/seller/products/to/online/v1', adminAuthentication, syncSellerProductsToOnline);
+adminRouter.post('/admin/fix/purse/products/category/v1', adminAuthentication, fixPurseProductsCategory);
+
+// admin store (self)
+adminRouter.get('/admin/my/store/v1', adminAuthentication, getAdminStore);
+adminRouter.post('/admin/my/store/v1', adminAuthentication, uploadStoreImagesMulter.any(), upsertAdminStore);
+adminRouter.put('/admin/my/store/v1', adminAuthentication, uploadStoreImagesMulter.any(), upsertAdminStore);
+adminRouter.delete('/admin/my/store/v1', adminAuthentication, deleteAdminStore);
+
+// admin products (self)
+adminRouter.get('/admin/my/products/v1', adminAuthentication, listAdminProducts);
+adminRouter.post('/admin/my/products/v1', adminAuthentication, uploadAdMediaAny, createAdminProduct);
+adminRouter.put('/admin/my/products/:id/v1', adminAuthentication, uploadAdMediaAny, updateAdminProduct);
+adminRouter.delete('/admin/my/products/:id/v1', adminAuthentication, deleteAdminProduct);
 
 // coupon code
 adminRouter.post('/admin/create/coupon/code/v1', adminAuthentication, createCouponCode);
@@ -200,5 +213,9 @@ adminRouter.delete('/admin/orsolum/ads/:id/v1', adminAuthentication, adminDelete
 // Ads configuration (rates + bank details)
 adminRouter.get('/admin/ads/config/v1', adminAuthentication, adminGetAdsConfig);
 adminRouter.put('/admin/ads/config/v1', adminAuthentication, adminUpdateAdsConfig);
+
+// App Theme Settings
+adminRouter.get('/admin/app/theme/settings/v1', adminAuthentication, getAppThemeSettings);
+adminRouter.put('/admin/app/theme/settings/v1', adminAuthentication, updateAppThemeSettings);
 
 export default adminRouter;

@@ -21,6 +21,8 @@ import Offer from '../models/Offer.js';
 import WelcomeImage from '../models/WelcomeImage.js';
 import OnlineProduct from '../models/OnlineStore/OnlineProduct.js';
 import ProductUnitOnline from '../models/OnlineStore/ProductUnit.js';
+import ProductCategory from '../models/OnlineStore/Category.js';
+import AppSettings from '../models/AppSettings.js';
 import bcrypt from 'bcrypt';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
@@ -1018,6 +1020,230 @@ export const productDetails = async (req, res) => {
     }
 };
 
+// ================== ADMIN SELF STORE & PRODUCTS ==================
+
+export const getAdminStore = async (req, res) => {
+    try {
+        const adminId = req.user._id;
+        const store = await Store.findOne({ createdBy: adminId, type: "admin", deleted: { $ne: true } }).lean();
+        return res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: store });
+    } catch (error) {
+        return catchError("getAdminStore", error, req, res);
+    }
+};
+
+export const upsertAdminStore = async (req, res) => {
+    try {
+        const adminId = req.user._id;
+        const {
+            name,
+            category,
+            information,
+            phone,
+            address,
+            email,
+            directMe,
+            city,
+            state,
+            pincode,
+        } = req.body;
+
+        let store = await Store.findOne({ createdBy: adminId, type: "admin", deleted: { $ne: true } });
+
+        // gather images
+        let images = store?.images || [];
+        if (req.files && req.files.length) {
+            images = req.files.map((f) => f.location || f.key).filter(Boolean);
+        }
+        const coverImage = images[0] || store?.coverImage || "";
+
+        // coordinates
+        let coordinates = store?.location?.coordinates || [77.209, 28.6139];
+        if (directMe) {
+            try {
+                const coords = await processGoogleMapsLink(directMe);
+                if (coords?.lat && coords?.lng) coordinates = [coords.lng, coords.lat];
+            } catch (e) { /* ignore */ }
+        }
+
+        if (!store) {
+            store = await Store.create({
+                name,
+                category,
+                information,
+                phone,
+                address,
+                email,
+                directMe,
+                city,
+                state,
+                pincode,
+                images,
+                coverImage,
+                location: { type: "Point", coordinates },
+                createdBy: adminId,
+                updatedBy: adminId,
+                type: "admin",
+                onboardingCompleted: true,
+                status: "A",
+            });
+        } else {
+            store.name = name ?? store.name;
+            store.category = category ?? store.category;
+            store.information = information ?? store.information;
+            store.phone = phone ?? store.phone;
+            store.address = address ?? store.address;
+            store.email = email ?? store.email;
+            store.directMe = directMe ?? store.directMe;
+            store.city = city ?? store.city;
+            store.state = state ?? store.state;
+            store.pincode = pincode ?? store.pincode;
+            store.images = images;
+            store.coverImage = coverImage;
+            store.location = { type: "Point", coordinates };
+            store.type = "admin";
+            store.status = store.status || "A";
+            store.updatedBy = adminId;
+            await store.save();
+        }
+
+        return res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: store });
+    } catch (error) {
+        return catchError("upsertAdminStore", error, req, res);
+    }
+};
+
+export const deleteAdminStore = async (req, res) => {
+    try {
+        const adminId = req.user._id;
+        await Store.updateOne({ createdBy: adminId, type: "admin" }, { $set: { deleted: true } });
+        return res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: "Admin store deleted" });
+    } catch (error) {
+        return catchError("deleteAdminStore", error, req, res);
+    }
+};
+
+const flattenUploads = (files = []) => {
+    const list = Array.isArray(files) ? files : [];
+    return list.map((f) => f.location || f.key).filter(Boolean);
+};
+
+export const listAdminProducts = async (req, res) => {
+    try {
+        const adminId = req.user._id;
+        const { search = "", storeId } = req.query;
+        const store = await Store.findOne({ createdBy: adminId, type: "admin", deleted: { $ne: true } }).lean();
+        if (!store) {
+            return res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: [] });
+        }
+        const match = {
+            createdBy: new ObjectId(adminId),
+            type: "admin",
+            deleted: { $ne: true },
+        };
+        if (storeId) {
+            match.storeId = new ObjectId(storeId);
+        } else {
+            match.storeId = store._id;
+        }
+        if (search) {
+            match.$or = [
+                { name: { $regex: search, $options: "i" } },
+                { productName: { $regex: search, $options: "i" } },
+            ];
+        }
+        const list = await Product.find(match)
+            .populate("storeId", "name")
+            .sort({ createdAt: -1 })
+            .lean();
+        return res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: list });
+    } catch (error) {
+        return catchError("listAdminProducts", error, req, res);
+    }
+};
+
+export const createAdminProduct = async (req, res) => {
+    try {
+        const adminId = req.user._id;
+        const store = await Store.findOne({ createdBy: adminId, type: "admin", deleted: { $ne: true } });
+        if (!store) {
+            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Admin store not found. Create store first." });
+        }
+        const { name, productName, description, price, mrp, sellingPrice, stock, categoryId } = req.body;
+        const images = flattenUploads(req.files);
+        const product = await Product.create({
+            name: name || productName,
+            productName: productName || name,
+            description,
+            price: Number(price) || 0,
+            mrp: Number(mrp) || Number(price) || 0,
+            sellingPrice: Number(sellingPrice) || Number(price) || 0,
+            stock: Number(stock) || 0,
+            totalStock: Number(stock) || 0,
+            categoryId: categoryId && ObjectId.isValid(categoryId) ? new ObjectId(categoryId) : undefined,
+            images,
+            primaryImage: images[0] || "",
+            storeId: store._id,
+            createdBy: adminId,
+            type: "admin",
+            source: "admin",
+            deleted: false,
+        });
+        return res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: product });
+    } catch (error) {
+        return catchError("createAdminProduct", error, req, res);
+    }
+};
+
+export const updateAdminProduct = async (req, res) => {
+    try {
+        const adminId = req.user._id;
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) {
+            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Invalid product id" });
+        }
+        const product = await Product.findOne({ _id: new ObjectId(id), createdBy: adminId, type: "admin", deleted: { $ne: true } });
+        if (!product) {
+            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product not found" });
+        }
+        const { name, productName, description, price, mrp, sellingPrice, stock, categoryId } = req.body;
+        const images = flattenUploads(req.files);
+        if (name) product.name = name;
+        if (productName) product.productName = productName;
+        if (description) product.description = description;
+        if (price !== undefined) product.price = Number(price) || 0;
+        if (mrp !== undefined) product.mrp = Number(mrp) || product.price;
+        if (sellingPrice !== undefined) product.sellingPrice = Number(sellingPrice) || product.price;
+        if (stock !== undefined) {
+            product.stock = Number(stock) || 0;
+            product.totalStock = Number(stock) || 0;
+        }
+        if (categoryId && ObjectId.isValid(categoryId)) product.categoryId = new ObjectId(categoryId);
+        if (images.length) {
+            product.images = images;
+            product.primaryImage = images[0];
+        }
+        await product.save();
+        return res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: product });
+    } catch (error) {
+        return catchError("updateAdminProduct", error, req, res);
+    }
+};
+
+export const deleteAdminProduct = async (req, res) => {
+    try {
+        const adminId = req.user._id;
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) {
+            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Invalid product id" });
+        }
+        await Product.updateOne({ _id: new ObjectId(id), createdBy: adminId, type: "admin" }, { $set: { deleted: true } });
+        return res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: "Product deleted" });
+    } catch (error) {
+        return catchError("deleteAdminProduct", error, req, res);
+    }
+};
+
 export const acceptProduct = async (req, res) => {
     try {
         const { product } = req.body
@@ -1465,11 +1691,89 @@ export const onlineOrderDetails = async (req, res) => {
             });
         }
 
-        const order = await OnlineOrder.findById(id)
-            .populate('createdBy', 'name email phone')
-            .populate('productDetails.productId', 'productName productImage');
+        // Use aggregation to get complete order details with proper population
+        const order = await OnlineOrder.aggregate([
+            {
+                $match: {
+                    _id: new ObjectId(id)
+                }
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'createdBy',
+                    foreignField: '_id',
+                    as: 'userDetails'
+                }
+            },
+            {
+                $unwind: {
+                    path: '$userDetails',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $unwind: {
+                    path: '$productDetails',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $lookup: {
+                    from: 'online_products',
+                    localField: 'productDetails.productId',
+                    foreignField: '_id',
+                    as: 'productInfo'
+                }
+            },
+            {
+                $unwind: {
+                    path: '$productInfo',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $addFields: {
+                    'productDetails.productName': '$productInfo.name',
+                    'productDetails.productImages': '$productInfo.images',
+                    'productDetails.manufacturer': '$productInfo.manufacturer',
+                    'productDetails.information': '$productInfo.information'
+                }
+            },
+            {
+                $group: {
+                    _id: '$_id',
+                    createdBy: { $first: '$userDetails' },
+                    cf_order_id: { $first: '$cf_order_id' },
+                    invoiceUrl: { $first: '$invoiceUrl' },
+                    address: { $first: '$address' },
+                    orderId: { $first: '$orderId' },
+                    status: { $first: '$status' },
+                    isReturn: { $first: '$isReturn' },
+                    returnStatus: { $first: '$returnStatus' },
+                    paymentStatus: { $first: '$paymentStatus' },
+                    estimatedDate: { $first: '$estimatedDate' },
+                    deliverdTime: { $first: '$deliverdTime' },
+                    summary: { $first: '$summary' },
+                    refund: { $first: '$refund' },
+                    refundId: { $first: '$refundId' },
+                    isPremiumPurchase: { $first: '$isPremiumPurchase' },
+                    createdAt: { $first: '$createdAt' },
+                    updatedAt: { $first: '$updatedAt' },
+                    productDetails: {
+                        $push: {
+                            $cond: [
+                                { $ne: ['$productDetails.productId', null] },
+                                '$productDetails',
+                                '$$REMOVE'
+                            ]
+                        }
+                    }
+                }
+            }
+        ]);
 
-        if (!order) {
+        if (!order || order.length === 0) {
             return res.status(status.NotFound).json({
                 status: jsonStatus.NotFound,
                 success: false,
@@ -1477,11 +1781,13 @@ export const onlineOrderDetails = async (req, res) => {
             });
         }
 
+        const orderData = order[0];
+
         return res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
             message: "Order details retrieved successfully",
-            data: order
+            data: orderData
         });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
@@ -2097,5 +2403,239 @@ export const syncSellerProductsToOnline = async (req, res) => {
             message: error.message
         });
         return catchError('syncSellerProductsToOnline', error, req, res);
+    }
+};
+
+// ✅ Fix Purse Products Category - Move from Clothes to Cosmetics
+export const fixPurseProductsCategory = async (req, res) => {
+    try {
+        // Find "Clothes" and "Cosmetics" categories
+        const clothesCategory = await ProductCategory.findOne({ 
+            name: { $regex: /^clothes?$/i }, 
+            deleted: false 
+        });
+        const cosmeticsCategory = await ProductCategory.findOne({ 
+            name: { $regex: /^cosmetics?$/i }, 
+            deleted: false 
+        });
+
+        if (!clothesCategory) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Clothes category not found"
+            });
+        }
+
+        if (!cosmeticsCategory) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Cosmetics category not found"
+            });
+        }
+
+        // Find all subcategories under Clothes category
+        const ProductSubCategory = mongoose.model('product_sub_category');
+        const clothesSubCategories = await ProductSubCategory.find({
+            categoryId: clothesCategory._id,
+            deleted: false
+        });
+
+        const clothesSubCategoryIds = clothesSubCategories.map(sc => sc._id);
+
+        // Find products with "purse" in name that are in Clothes category
+        const purseProducts = await OnlineProduct.find({
+            categoryId: clothesCategory._id,
+            name: { $regex: /purse|handbag|wallet|clutch/i },
+            deleted: false
+        });
+
+        // Also find products in Clothes subcategories that might be purses
+        const purseProductsInSubCategories = await OnlineProduct.find({
+            subCategoryId: { $in: clothesSubCategoryIds },
+            name: { $regex: /purse|handbag|wallet|clutch/i },
+            deleted: false
+        });
+
+        const allPurseProducts = [...purseProducts, ...purseProductsInSubCategories];
+        const uniquePurseProducts = Array.from(
+            new Map(allPurseProducts.map(p => [p._id.toString(), p])).values()
+        );
+
+        // Find Cosmetics subcategories to assign purse products
+        const cosmeticsSubCategories = await ProductSubCategory.find({
+            categoryId: cosmeticsCategory._id,
+            deleted: false
+        }).sort({ createdAt: 1 }); // Get first available subcategory
+
+        if (cosmeticsSubCategories.length === 0) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "No subcategories found in Cosmetics category. Please create a subcategory first."
+            });
+        }
+
+        const defaultCosmeticsSubCategory = cosmeticsSubCategories[0];
+
+        // Update products to Cosmetics category
+        let updated = 0;
+        let failed = 0;
+
+        for (const product of uniquePurseProducts) {
+            try {
+                await OnlineProduct.findByIdAndUpdate(product._id, {
+                    categoryId: cosmeticsCategory._id,
+                    subCategoryId: defaultCosmeticsSubCategory._id,
+                    updatedBy: req.user._id
+                });
+                updated++;
+            } catch (err) {
+                console.error(`Failed to update product ${product._id}:`, err);
+                failed++;
+            }
+        }
+
+        // Also update local products (Product model) if they exist
+        const localPurseProducts = await Product.find({
+            categoryId: clothesCategory._id,
+            productName: { $regex: /purse|handbag|wallet|clutch/i },
+            deleted: false
+        });
+
+        for (const product of localPurseProducts) {
+            try {
+                await Product.findByIdAndUpdate(product._id, {
+                    categoryId: cosmeticsCategory._id,
+                    subCategoryId: defaultCosmeticsSubCategory._id,
+                    updatedBy: req.user._id
+                });
+                updated++;
+            } catch (err) {
+                console.error(`Failed to update local product ${product._id}:`, err);
+                failed++;
+            }
+        }
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: `Successfully moved ${updated} purse products from Clothes to Cosmetics category`,
+            data: {
+                updated,
+                failed,
+                total: uniquePurseProducts.length + localPurseProducts.length,
+                cosmeticsCategory: {
+                    _id: cosmeticsCategory._id,
+                    name: cosmeticsCategory.name
+                },
+                defaultSubCategory: {
+                    _id: defaultCosmeticsSubCategory._id,
+                    name: defaultCosmeticsSubCategory.name
+                }
+            }
+        });
+    } catch (error) {
+        console.error("Error in fixPurseProductsCategory:", error);
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('fixPurseProductsCategory', error, req, res);
+    }
+};
+
+/* ===========================
+    APP THEME SETTINGS APIs
+=========================== */
+
+// Get current app theme settings (for admin panel and user app)
+export const getAppThemeSettings = async (req, res) => {
+    try {
+        const settings = await AppSettings.getSingleton();
+        
+        return res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Theme settings fetched successfully",
+            data: settings
+        });
+    } catch (error) {
+        console.error("❌ getAppThemeSettings error:", error.message);
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('getAppThemeSettings', error, req, res);
+    }
+};
+
+// Update app theme settings (admin only)
+export const updateAppThemeSettings = async (req, res) => {
+    try {
+        const adminId = req.user.id; // From authentication middleware
+        const {
+            primaryColor,
+            secondaryColor,
+            animations,
+            themeColors
+        } = req.body;
+
+        // Validate primary color format (hex color)
+        if (primaryColor && !/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(primaryColor)) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Invalid primary color format. Use hex format (e.g., #1F6728)"
+            });
+        }
+
+        // Validate secondary color format if provided
+        if (secondaryColor && !/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(secondaryColor)) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Invalid secondary color format. Use hex format (e.g., #1f67293e)"
+            });
+        }
+
+        // Get current settings to merge with new ones
+        const currentSettings = await AppSettings.getSingleton();
+        
+        // Prepare update data
+        const updateData = {
+            primaryColor: primaryColor || currentSettings.primaryColor,
+            secondaryColor: secondaryColor || currentSettings.secondaryColor,
+            animations: animations ? {
+                ...currentSettings.animations,
+                ...animations
+            } : currentSettings.animations,
+            themeColors: themeColors ? {
+                ...currentSettings.themeColors,
+                ...themeColors
+            } : currentSettings.themeColors,
+            updatedBy: adminId
+        };
+
+        // Update settings using singleton pattern
+        const updatedSettings = await AppSettings.updateSettings(updateData, adminId);
+
+        return res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: "Theme settings updated successfully",
+            data: updatedSettings
+        });
+    } catch (error) {
+        console.error("❌ updateAppThemeSettings error:", error.message);
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('updateAppThemeSettings', error, req, res);
     }
 };

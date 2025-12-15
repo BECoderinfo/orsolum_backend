@@ -104,6 +104,15 @@ const AdSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    paymentDeadline: {
+      type: Date,
+      // 48 hours deadline from approval - if not paid, ad will be deleted
+    },
+    isDead: {
+      type: Boolean,
+      default: false,
+      // Mark as dead if payment deadline passed without payment
+    },
 
     // Admin meta
     createdByAdmin: {

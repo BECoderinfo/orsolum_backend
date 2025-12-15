@@ -723,10 +723,18 @@ export const updateSellerStore = async (req, res) => {
     store.updatedBy = req.user._id;
     await store.save();
 
+    const responseData = store.toObject ? store.toObject() : store;
     return res.status(200).json({
       success: true,
       message: "Store details updated successfully" + (shouldUpdateShiprocket ? " with Shiprocket pickup address" : ""),
-      data: store,
+      data: {
+        ...responseData,
+        shiprocket: {
+          ...(responseData.shiprocket || {}),
+          pickup_address_id: store.shiprocket?.pickup_address_id || responseData.shiprocket?.pickup_address_id || null,
+          pickup_location: store.shiprocket?.pickup_location || responseData.shiprocket?.pickup_location || null,
+        },
+      },
     });
   } catch (error) {
     console.error("Update store error:", error.message);

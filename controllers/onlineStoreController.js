@@ -167,7 +167,8 @@ export const deleteCategory = async (req, res) => {
 export const listCategory = async (req, res) => {
     try {
 
-        const list = await Category.find({ deleted: false });
+        const list = await Category.find({ deleted: false })
+            .sort({ createdAt: -1 }); // Sort by creation date, newest first
 
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: list });
     } catch (error) {
@@ -2368,14 +2369,21 @@ export const createOnlineOrder = async (req, res) => {
   
       const savedOrder = await newOrder.save();
       console.log("Saved Order:", savedOrder);
-  
+
       if (!savedOrder || !savedOrder._id) {
         return res.status(500).json({
           success: false,
           message: "Order created but ID could not be retrieved. Check server logs."
         });
       }
-  
+
+      // ✅ Clear cart items immediately after order creation (before payment)
+      // This ensures cart doesn't show items that are already in an order
+      await OnlineStoreCart.updateMany(
+        { createdBy: userId, deleted: false },
+        { $set: { deleted: true } }
+      );
+
       return res.status(200).json({
         success: true,
         message: "Order created successfully",

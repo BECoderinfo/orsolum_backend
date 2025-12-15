@@ -1210,6 +1210,34 @@ export const productDetails = async (req, res) => {
         ]);
 
         const detailWithImage = applyPrimaryImageFallback(productDetails[0]);
+        
+        // ✅ Clean offPer to remove any "% OFF" text
+        if (detailWithImage && detailWithImage.offPer) {
+            const offPerValue = String(detailWithImage.offPer).replace(/%\s*OFF/gi, '').trim();
+            detailWithImage.offPer = offPerValue;
+        }
+        
+        // ✅ Clean offPer in units array if exists
+        if (detailWithImage && Array.isArray(detailWithImage.units)) {
+            detailWithImage.units = detailWithImage.units.map(unit => {
+                if (unit && unit.offPer) {
+                    const offPerValue = String(unit.offPer).replace(/%\s*OFF/gi, '').trim();
+                    return { ...unit, offPer: offPerValue };
+                }
+                return unit;
+            });
+        }
+        
+        // ✅ Clean offPer in similarProducts if exists
+        if (detailWithImage && Array.isArray(detailWithImage.similarProducts)) {
+            detailWithImage.similarProducts = detailWithImage.similarProducts.map(product => {
+                if (product && product.offPer) {
+                    const offPerValue = String(product.offPer).replace(/%\s*OFF/gi, '').trim();
+                    return { ...product, offPer: offPerValue };
+                }
+                return product;
+            });
+        }
 
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: detailWithImage });
     } catch (error) {
@@ -1320,9 +1348,15 @@ export const productList = async (req, res) => {
       ]);
   
       // ❌ Remove 404 for live search (should return empty list)
-      const listWithPrimaryImage = list.map((product) =>
-        applyPrimaryImageFallback(product)
-      );
+      const listWithPrimaryImage = list.map((product) => {
+        const productWithImage = applyPrimaryImageFallback(product);
+        // ✅ Clean offPer to remove any "% OFF" text
+        if (productWithImage && productWithImage.offPer) {
+          const offPerValue = String(productWithImage.offPer).replace(/%\s*OFF/gi, '').trim();
+          productWithImage.offPer = offPerValue;
+        }
+        return productWithImage;
+      });
   
       return res.status(status.OK).json({
         status: jsonStatus.OK,
@@ -2395,8 +2429,17 @@ export const getStoreProductList = async (req, res) => {
                 }
             }
         ]);
+        
+        // ✅ Clean offPer in all products to remove any "% OFF" text
+        const cleanedList = list.map(product => {
+            if (product && product.offPer) {
+                const offPerValue = String(product.offPer).replace(/%\s*OFF/gi, '').trim();
+                product.offPer = offPerValue;
+            }
+            return product;
+        });
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: list });
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: cleanedList });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('getStoreProductList', error, req, res);
@@ -2476,8 +2519,17 @@ export const getCategoryProductList = async (req, res) => {
                 }
             }
         ]);
+        
+        // ✅ Clean offPer in all products to remove any "% OFF" text
+        const cleanedList = list.map(product => {
+            if (product && product.offPer) {
+                const offPerValue = String(product.offPer).replace(/%\s*OFF/gi, '').trim();
+                product.offPer = offPerValue;
+            }
+            return product;
+        });
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: list });
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: cleanedList });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('getCategoryProductList', error, req, res);
