@@ -1046,12 +1046,22 @@ export const upsertAdminStore = async (req, res) => {
             city,
             state,
             pincode,
+            keepImages, // array or comma string of images to retain
         } = req.body;
 
         let store = await Store.findOne({ createdBy: adminId, type: "admin", deleted: { $ne: true } });
 
         // gather images
-        let images = store?.images || [];
+        let images = [];
+        if (keepImages) {
+            if (Array.isArray(keepImages)) {
+                images = keepImages.filter(Boolean);
+            } else if (typeof keepImages === "string") {
+                images = keepImages.split(",").map((v) => v.trim()).filter(Boolean);
+            }
+        } else if (store?.images) {
+            images = store.images;
+        }
         if (req.files && req.files.length) {
             images = req.files.map((f) => f.location || f.key).filter(Boolean);
         }

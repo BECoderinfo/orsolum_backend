@@ -2644,13 +2644,9 @@ export const updateDeliveryBoyProfile = async (req, res) => {
     try {
 
         let { id } = req.params;
-
-        // Debug logging to check what's being received
-        console.log("📝 Update Profile - Request Body Type:", typeof req.body);
-        console.log("📝 Update Profile - Request Body:", JSON.stringify(req.body, null, 2));
-        console.log("📝 Update Profile - Request Body Keys:", req.body ? Object.keys(req.body) : 'empty');
-        console.log("📝 Update Profile - Content-Type:", req.headers['content-type']);
-        console.log("📝 Update Profile - File uploaded:", req.file ? 'Yes - ' + req.file.key : 'No');
+        if ((!id || id === "undefined" || id === "null") && req.user?._id) {
+            id = req.user._id;
+        }
         
         // Extract fields from body (body might be empty if only image is being updated)
         let { firstName, lastName, email, phone, state, city, dob } = req.body || {};

@@ -664,6 +664,9 @@ export const createProduct = async (req, res) => {
           // Only sync if category and subcategory are valid (required for OnlineProduct)
           if (categoryParse.value && subCategoryParse.value) {
             // Create OnlineProduct
+            const rating = req.body.rating ? Number(req.body.rating) : 0;
+            const ratingCount = req.body.ratingCount ? Number(req.body.ratingCount) : 0;
+            
             const onlineProductPayload = {
               name: productName,
               information,
@@ -672,6 +675,8 @@ export const createProduct = async (req, res) => {
               details: parsedDetails,
               categoryId: categoryParse.value,
               subCategoryId: subCategoryParse.value,
+              rating: Math.max(0, Math.min(5, rating)), // Clamp between 0 and 5
+              ratingCount: Math.max(0, ratingCount), // Ensure non-negative
               createdBy: req.user._id, // although schema ref is admin, keep creator for trace
               updatedBy: req.user._id,
             };
@@ -1030,6 +1035,23 @@ export const editProduct = async (req, res) => {
                         manufacturer: editProduct.companyName
                     }).sort({ createdAt: -1 });
 
+                    // Handle rating and ratingCount
+                    let rating = 0;
+                    let ratingCount = 0;
+                    if (Object.prototype.hasOwnProperty.call(payload, "rating")) {
+                        rating = payload.rating ? Number(payload.rating) : 0;
+                        rating = Math.max(0, Math.min(5, rating)); // Clamp between 0 and 5
+                    } else if (existingOnlineProduct) {
+                        rating = existingOnlineProduct.rating || 0;
+                    }
+                    
+                    if (Object.prototype.hasOwnProperty.call(payload, "ratingCount")) {
+                        ratingCount = payload.ratingCount ? Number(payload.ratingCount) : 0;
+                        ratingCount = Math.max(0, ratingCount); // Ensure non-negative
+                    } else if (existingOnlineProduct) {
+                        ratingCount = existingOnlineProduct.ratingCount || 0;
+                    }
+                    
                     const onlineProductData = {
                         name: updateData.productName || editProduct.productName,
                         information: updateData.information || editProduct.information,
@@ -1038,6 +1060,8 @@ export const editProduct = async (req, res) => {
                         details: updateData.details || editProduct.details || [],
                         categoryId: finalCategoryId,
                         subCategoryId: finalSubCategoryId,
+                        rating: rating,
+                        ratingCount: ratingCount,
                         createdBy: req.user._id,
                         updatedBy: req.user._id,
                     };

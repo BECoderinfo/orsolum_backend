@@ -1418,7 +1418,7 @@ export const onlineStorePopularBrands = async (req, res) => {
 export const onlineProductsList = async (req, res) => {
     try {
 
-        const { category, subcategory, brand, search, skip } = req.query;
+        const { category, subcategory, brand, search, skip, sort } = req.query;
 
         const page = parseInt(skip) || 1; // Default to page 1 if not provided
         const offset = (page - 1) * limit; // Calculate the skip value
@@ -1440,12 +1440,20 @@ export const onlineProductsList = async (req, res) => {
             // If subcategory not provided, still ensure subCategoryId exists
             query.subCategoryId = { $exists: true, $ne: null };
         }
-        
-        if (brand) query.brandId = new ObjectId(brand);
 
         // Apply search filter on the name field using regex
         if (search) {
             query.name = { $regex: search, $options: 'i' };
+        }
+
+        // Determine sorting
+        let sortStage = { createdAt: -1 }; // default newest
+        if (sort === 'price_asc') {
+            sortStage = { "units.sellingPrice": 1, "units.price": 1, createdAt: -1 };
+        } else if (sort === 'price_desc') {
+            sortStage = { "units.sellingPrice": -1, "units.price": -1, createdAt: -1 };
+        } else if (sort === 'newest') {
+            sortStage = { createdAt: -1 };
         }
 
         // Fetch products with applied filters and pagination
@@ -1477,14 +1485,6 @@ export const onlineProductsList = async (req, res) => {
                 // Filter to only show products created by sellers
                 $match: {
                     creatorRole: "seller"
-                }
-            },
-            {
-                $lookup: {
-                    from: "product_brands",
-                    localField: "brandId",
-                    foreignField: "_id",
-                    as: "brand"
                 }
             },
             {
@@ -1540,20 +1540,18 @@ export const onlineProductsList = async (req, res) => {
                     details: 1,
                     categoryId: 1,
                     subCategoryId: 1,
-                    brandId: 1,
                     trending: 1,
                     rating: 1,
                     ratingCount: 1,
-                    coinCanUsed: 1,
                     units: 1,
                     category: 1,
                     subCategory: 1,
-                    brand: 1,
                     subCategoryPercentageOff: "$subCategory.percentageOff",
                     createdAt: 1,
                     updatedAt: 1
                 }
             },
+            { $sort: sortStage },
             { $skip: offset },
             { $limit: limit }
         ]);
