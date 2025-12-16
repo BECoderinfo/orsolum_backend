@@ -1572,7 +1572,7 @@ export const couponCodeList = async (req, res) => {
 
 export const createAddress = async (req, res) => {
   try {
-    const { address_1, flatHouse, name, pincode, mapLink, lat, long, city, state, landmark } =
+    const { address_1, flatHouse, name, pincode, mapLink, lat, long, city, state, landmark, type } =
       req.body;
 
     // Required fields validation with type safety
@@ -1602,6 +1602,19 @@ export const createAddress = async (req, res) => {
       });
     }
 
+    const allowedTypes = ["Home", "Work", "Other"];
+    const normalizedType = typeof type === "string"
+      ? allowedTypes.find((t) => t.toLowerCase() === type.toLowerCase())
+      : null;
+
+    if (type && !normalizedType) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "type must be Home, Work, or Other",
+      });
+    }
+
     // Generate default values for required fields if not provided
     const addressData = {
       address_1: typeof address_1 === 'string' ? address_1.trim() : address_1,
@@ -1616,6 +1629,7 @@ export const createAddress = async (req, res) => {
       long: long ? long.toString() : "0",
       number: req.user?.phone || "",
       createdBy: req.user._id,
+      type: normalizedType || "Home",
     };
 
     let newAddress = new Address(addressData);
@@ -1697,10 +1711,29 @@ export const editAddress = async (req, res) => {
       });
     }
 
+    // Normalize and validate type if provided
+    const allowedTypes = ["Home", "Work", "Other"];
+    let updatePayload = { ...req.body };
+
+    if (req.body.type !== undefined) {
+      const normalizedType = typeof req.body.type === "string"
+        ? allowedTypes.find((t) => t.toLowerCase() === req.body.type.toLowerCase())
+        : null;
+
+      if (!normalizedType) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "type must be Home, Work, or Other",
+        });
+      }
+      updatePayload.type = normalizedType;
+    }
+
     // Update address
     const updateAddress = await Address.findByIdAndUpdate(
       id,
-      { ...req.body },
+      updatePayload,
       {
         new: true,
         runValidators: true,

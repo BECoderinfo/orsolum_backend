@@ -1765,14 +1765,27 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
                 const lat = normalizeCoordinate(latCandidate);
                 const lng = normalizeCoordinate(lngCandidate);
 
+                // Derive customer details with sensible fallbacks
+                const customerName = formatFullName(
+                    order.createdBy?.firstName,
+                    order.createdBy?.lastName,
+                    order.address?.name || 'Customer'
+                );
+
+                const customerPhone =
+                    order.createdBy?.phone ||
+                    order.address?.number ||
+                    order.address?.phone ||
+                    '';
+
                 return {
                     taskId: order.orderId,
                     orderId: order._id,
                     orderDetails: order,
                     status: order.status,
                     customer: {
-                        name: formatFullName(order.createdBy?.firstName, order.createdBy?.lastName, 'Customer'),
-                        phone: order.createdBy?.phone || ''
+                        name: customerName,
+                        phone: customerPhone
                     },
                     pickup: {
                         storeName: pickupName || 'Store details unavailable',
@@ -1790,11 +1803,12 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
                         amount: order.summary?.grandTotal || 0
                     },
                     eta: order.estimatedDate,
-                    shiprocket: order.shiprocket ? {
-                        shipment_id: order.shiprocket.shipment_id || null,
-                        order_id: order.shiprocket.order_id || null,
-                        awb_code: order.shiprocket.awb_code || order.shiprocket.awb || null
-                    } : null
+                    // Always return a shiprocket object so FE doesn't have to null-check the container
+                    shiprocket: {
+                        shipment_id: order.shiprocket?.shipment_id || null,
+                        order_id: order.shiprocket?.order_id || null,
+                        awb_code: order.shiprocket?.awb_code || order.shiprocket?.awb || null
+                    }
                 };
             })
             .filter(task => {
@@ -2329,7 +2343,8 @@ export const uploadDeliveryBoyProfileImage = async (req, res) => {
 
 export const isDeliveryBoyExist = async (req, res) => {
     try {
-        const { phone } = req.body;
+        // Accept phone from either body (POST) or query params (GET) so Postman GET works
+        const phone = (req.body?.phone || req.query?.phone || '').trim();
 
         if (!phone) {
             return res.status(status.BadRequest).json({

@@ -167,7 +167,7 @@ export const deleteCategory = async (req, res) => {
 export const listCategory = async (req, res) => {
     try {
 
-        const list = await Category.find({ deleted: false })
+        const list = await Category.find({ deleted: false, storeType: 'online' }) // Only online store categories
             .sort({ createdAt: -1 }); // Sort by creation date, newest first
 
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: list });
@@ -243,6 +243,7 @@ export const listSubCategory = async (req, res) => {
             {
                 $match: {
                     deleted: false,
+                    storeType: 'online' // Only online store subcategories
                 }
             },
             {
@@ -273,6 +274,7 @@ export const listSubCategoryByCategory = async (req, res) => {
             {
                 $match: {
                     deleted: false,
+                    storeType: 'online', // Only online store subcategories
                     categoryId: new ObjectId(id)
                 }
             },
@@ -906,7 +908,8 @@ export const allCategories = async (req, res) => {
         const categories = await Category.aggregate([
             {
                 $match: {
-                    deleted: false
+                    deleted: false,
+                    storeType: 'online' // Only online store categories
                 }
             },
             {
@@ -919,6 +922,7 @@ export const allCategories = async (req, res) => {
                         {
                             $match: {
                                 deleted: false,
+                                storeType: 'online', // Only online store subcategories
                                 ...(search && {
                                     name: { $regex: search, $options: 'i' } // Search in subcategory names
                                 })
@@ -965,6 +969,7 @@ export const allSubCategories = async (req, res) => {
             {
                 $match: {
                     deleted: false,
+                    storeType: 'online', // Only online store subcategories
                     ...(search && {
                         name: { $regex: search, $options: 'i' }
                     })
@@ -1916,6 +1921,28 @@ export const addOnlineProductToCart = async (req, res) => {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "You can't add deleted product unit in to the Cart" });
         }
 
+        // Check stock availability for product unit
+        if (productUnit.stock !== undefined && productUnit.stock !== null) {
+            const requestedQty = quantity || 1;
+            const currentCartQty = await OnlineStoreCart.findOne({ 
+                createdBy: req.user._id, 
+                productId, 
+                unitId, 
+                deleted: false 
+            });
+            const totalRequestedQty = currentCartQty 
+                ? currentCartQty.quantity + requestedQty 
+                : requestedQty;
+            
+            if (totalRequestedQty > productUnit.stock) {
+                return res.status(status.BadRequest).json({ 
+                    status: jsonStatus.BadRequest, 
+                    success: false, 
+                    message: `Only ${productUnit.stock} unit(s) available in stock` 
+                });
+            }
+        }
+
         const findProductInCart = await OnlineStoreCart.findOne({ createdBy: req.user._id, productId, unitId, deleted: false });
         if (findProductInCart) {
             findProductInCart.quantity = quantity ? findProductInCart.quantity + quantity : findProductInCart.quantity + 1;
@@ -1945,7 +1972,12 @@ export const addOnlineProductToCart = async (req, res) => {
             res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: "Product added in to the Cart", count: newCart.quantity, totalCartCount });
         }
     } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        console.error('addOnlineProductToCart error:', error);
+        res.status(status.InternalServerError).json({ 
+            status: jsonStatus.InternalServerError, 
+            success: false, 
+            message: error.message || "Failed to add product to cart. Please try again." 
+        });
         return catchError('addOnlineProductToCart', error, req, res);
     }
 };

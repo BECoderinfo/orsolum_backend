@@ -1351,7 +1351,8 @@ export const listOfCategories = async (req, res) => {
         const listCategories = await StoreCategory.aggregate([
             {
                 $match: {
-                    deleted: false
+                    deleted: false,
+                    storeType: 'local' // Only local store categories
                 }
             }
         ]);

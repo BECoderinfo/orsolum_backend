@@ -2591,7 +2591,8 @@ export const updateAppThemeSettings = async (req, res) => {
             primaryColor,
             secondaryColor,
             animations,
-            themeColors
+            themeColors,
+            animationVideoUrl
         } = req.body;
 
         // Validate primary color format (hex color)
@@ -2604,11 +2605,12 @@ export const updateAppThemeSettings = async (req, res) => {
         }
 
         // Validate secondary color format if provided
-        if (secondaryColor && !/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(secondaryColor)) {
+        // Allow 3, 6 or 8 digit hex (8-digit supports alpha, e.g. #1f67293e)
+        if (secondaryColor && !/^#([A-Fa-f0-9]{3}|[A-Fa-f0-9]{6}|[A-Fa-f0-9]{8})$/.test(secondaryColor)) {
             return res.status(status.BadRequest).json({
                 status: jsonStatus.BadRequest,
                 success: false,
-                message: "Invalid secondary color format. Use hex format (e.g., #1f67293e)"
+                message: "Invalid secondary color format. Use hex format (e.g., #1F6728 or #1f67293e)"
             });
         }
 
@@ -2619,6 +2621,7 @@ export const updateAppThemeSettings = async (req, res) => {
         const updateData = {
             primaryColor: primaryColor || currentSettings.primaryColor,
             secondaryColor: secondaryColor || currentSettings.secondaryColor,
+            animationVideoUrl: animationVideoUrl || currentSettings.animationVideoUrl || null,
             animations: animations ? {
                 ...currentSettings.animations,
                 ...animations
@@ -2647,5 +2650,48 @@ export const updateAppThemeSettings = async (req, res) => {
             message: error.message
         });
         return catchError('updateAppThemeSettings', error, req, res);
+    }
+};
+
+// Upload theme media (images/videos) for app theme settings
+export const uploadThemeMedia = async (req, res) => {
+    try {
+        const files = req.files || [];
+
+        if (!Array.isArray(files) || files.length === 0) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "No file uploaded",
+            });
+        }
+
+        // Prefer video if present, otherwise first file
+        const videoFile = files.find(f => f.mimetype?.startsWith("video/"));
+        const chosenFile = videoFile || files[0];
+
+        const url = chosenFile.location || chosenFile.key;
+
+        if (!url) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Failed to get uploaded file URL",
+            });
+        }
+
+        return res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: { url },
+        });
+    } catch (error) {
+        console.error("uploadThemeMedia error:", error);
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message,
+        });
+        return catchError("uploadThemeMedia", error, req, res);
     }
 };

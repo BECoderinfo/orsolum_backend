@@ -24,6 +24,12 @@ const ProductSubCategorySchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    storeType: {
+        type: String,
+        enum: ['online', 'local'],
+        default: 'online',
+        required: true
+    },
     deleted: {
         type: Boolean,
         default: false

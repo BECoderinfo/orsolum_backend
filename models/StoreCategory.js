@@ -20,6 +20,12 @@ const StoreCategorySchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    storeType: {
+        type: String,
+        enum: ['online', 'local'],
+        default: 'local',
+        required: true
+    },
     deleted: {
         type: Boolean,
         default: false

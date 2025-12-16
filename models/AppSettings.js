@@ -73,6 +73,11 @@ const AppSettingsSchema = new mongoose.Schema(
         default: "#f4324c",
       },
     },
+    // Optional animation/video asset to be used in user app (e.g. intro animation)
+    animationVideoUrl: {
+      type: String,
+      default: null,
+    },
     // Active status
     isActive: {
       type: Boolean,
