@@ -21,6 +21,7 @@ import Admin from '../models/Admin.js';
 import PopularCategory from '../models/PopularCategory.js';
 import ProductSubCategory from '../models/OnlineStore/SubCategory.js';
 import CouponHistory from '../models/CouponHistory.js';
+import StoreCategory from '../models/StoreCategory.js';
 
 const { ObjectId } = mongoose.Types;
 
@@ -167,7 +168,7 @@ export const deleteCategory = async (req, res) => {
 export const listCategory = async (req, res) => {
     try {
 
-        const list = await Category.find({ deleted: false, storeType: 'online' }) // Only online store categories
+        const list = await Category.find({ deleted: false })
             .sort({ createdAt: -1 }); // Sort by creation date, newest first
 
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: list });
@@ -243,7 +244,6 @@ export const listSubCategory = async (req, res) => {
             {
                 $match: {
                     deleted: false,
-                    storeType: 'online' // Only online store subcategories
                 }
             },
             {
@@ -274,7 +274,6 @@ export const listSubCategoryByCategory = async (req, res) => {
             {
                 $match: {
                     deleted: false,
-                    storeType: 'online', // Only online store subcategories
                     categoryId: new ObjectId(id)
                 }
             },
@@ -908,8 +907,7 @@ export const allCategories = async (req, res) => {
         const categories = await Category.aggregate([
             {
                 $match: {
-                    deleted: false,
-                    storeType: 'online' // Only online store categories
+                    deleted: false
                 }
             },
             {
@@ -922,7 +920,6 @@ export const allCategories = async (req, res) => {
                         {
                             $match: {
                                 deleted: false,
-                                storeType: 'online', // Only online store subcategories
                                 ...(search && {
                                     name: { $regex: search, $options: 'i' } // Search in subcategory names
                                 })
@@ -974,7 +971,11 @@ export const allSubCategories = async (req, res) => {
                         name: { $regex: search, $options: 'i' }
                     })
                 }
+            },
+            {
+                $sort: { createdAt: -1 } // Sort by newest first - ensures all are included
             }
+            // ✅ NO LIMIT - Return all subcategories
         ]);
         
         // Normalize subcategories to ensure icon field is properly included
@@ -988,7 +989,15 @@ export const allSubCategories = async (req, res) => {
             })
         }
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: { data, totalCartCount } });
+        res.status(status.OK).json({ 
+            status: jsonStatus.OK, 
+            success: true, 
+            data: { 
+                data, 
+                totalCartCount,
+                total: data.length // ✅ Add total count for reference
+            } 
+        });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('allSubCategories', error, req, res);
@@ -1127,17 +1136,16 @@ export const onlineStoreDiscovery = async (req, res) => {
         const shouldSendBrands = requestedSections.has("popularBrands");
 
         const fetchExplore = async () => {
-            const [itemsRaw, total] = await Promise.all([
-                SubCategory.aggregate([
+            // Changed from SubCategory to Category as per user requirement - ads ke upar sirf Category show karni hai
+            const [items, total] = await Promise.all([
+                Category.aggregate([
                     { $match: exploreMatch },
                     { $sort: { createdAt: -1 } },
                     { $skip: skipCalc(explorePage, exploreLimitVal) },
                     { $limit: exploreLimitVal }
                 ]),
-                SubCategory.countDocuments(exploreMatch)
+                Category.countDocuments(exploreMatch)
             ]);
-            // Normalize subcategories to ensure icon field is properly included
-            const items = itemsRaw.map(normalizeSubCategory);
             return { items, total };
         };
 
@@ -1184,7 +1192,7 @@ export const onlineStoreDiscovery = async (req, res) => {
                 description: "Discover quick picks handpicked for you",
                 items: exploreData.items,
                 meta: buildMeta(exploreData.total, explorePage, exploreLimitVal),
-                viewAllEndpoint: "/api/online/store/all/sub/categories/v1"
+                viewAllEndpoint: "/api/online/store/all/categories/v1" // Changed to categories endpoint since we're showing categories now
             });
         }
 
@@ -1250,18 +1258,16 @@ export const onlineStoreExploreCards = async (req, res) => {
 
         const skip = (page - 1) * pageSize;
 
-        const [itemsRaw, total] = await Promise.all([
-            SubCategory.aggregate([
+        // Changed from SubCategory to Category as per user requirement - ads ke upar sirf Category show karni hai
+        const [items, total] = await Promise.all([
+            Category.aggregate([
                 { $match: match },
                 { $sort: { createdAt: -1 } },
                 { $skip: skip },
                 { $limit: pageSize }
             ]),
-            SubCategory.countDocuments(match)
+            Category.countDocuments(match)
         ]);
-        
-        // Normalize subcategories to ensure icon field is properly included
-        const items = itemsRaw.map(normalizeSubCategory);
 
         const totalCartCount = await fetchUserCartCount(req.user._id);
 
@@ -1278,7 +1284,7 @@ export const onlineStoreExploreCards = async (req, res) => {
                     total,
                     page,
                     pageSize,
-                    viewAllEndpoint: "/api/online/store/all/sub/categories/v1"
+                    viewAllEndpoint: "/api/online/store/all/categories/v1" // Changed to categories endpoint since we're showing categories now
                 })
             }
         });
@@ -1346,7 +1352,7 @@ export const onlineStorePopularCategoriesFromAdmin = async (req, res) => {
             ...(search ? { name: { $regex: search, $options: 'i' } } : {})
         };
 
-        const [items, total] = await Promise.all([
+        const [popularCategories, total] = await Promise.all([
             PopularCategory.aggregate([
                 { $match: match },
                 { $sort: { createdAt: -1 } },
@@ -1355,6 +1361,303 @@ export const onlineStorePopularCategoriesFromAdmin = async (req, res) => {
             ]),
             PopularCategory.countDocuments(match)
         ]);
+
+        // ✅ Get all seller user IDs to filter products
+        const sellerUsers = await User.find({ role: "seller", deleted: false }).select("_id").lean();
+        const sellerIds = sellerUsers.map(u => new ObjectId(u._id));
+
+        // ✅ Get all admin IDs
+        const adminUsers = await Admin.find({}).select("_id").lean();
+        const adminIds = adminUsers.map(a => new ObjectId(a._id));
+
+        // ✅ Combine seller and admin IDs
+        const allowedCreatorIds = [...sellerIds, ...adminIds];
+
+        // ✅ For each PopularCategory, find matching online Category by name and fetch products
+        const items = await Promise.all(
+            popularCategories.map(async (popularCat) => {
+                // Find matching online Category by name (case-insensitive, trim spaces, handle special characters)
+                const popularCatName = popularCat.name.trim();
+                
+                // Normalize names for better matching (remove extra spaces, handle special chars)
+                const normalizeName = (name) => {
+                    return name
+                        .toLowerCase()
+                        .trim()
+                        .replace(/\s+/g, ' ') // Multiple spaces to single space
+                        .replace(/&/g, 'and') // & to and
+                        .replace(/[^\w\s]/g, ''); // Remove special chars except spaces
+                };
+                
+                const normalizedPopularName = normalizeName(popularCatName);
+                
+                // Strategy 1: Try exact match first (do not restrict by storeType to ensure matching with all product categories)
+                let matchingCategory = await Category.findOne({
+                    deleted: false,
+                    $or: [
+                        { name: { $regex: new RegExp(`^${popularCatName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+                        { name: { $regex: new RegExp(popularCatName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } }
+                    ]
+                });
+                
+                // Strategy 2: If PopularCategory has storeCategoryId, try matching via StoreCategory name
+                if (!matchingCategory && popularCat.storeCategoryId) {
+                    const storeCategory = await StoreCategory.findById(popularCat.storeCategoryId).lean();
+                    if (storeCategory && storeCategory.name) {
+                        const storeCatName = storeCategory.name.trim();
+                        matchingCategory = await Category.findOne({
+                            deleted: false,
+                            $or: [
+                                { name: { $regex: new RegExp(`^${storeCatName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+                                { name: { $regex: new RegExp(storeCatName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } }
+                            ]
+                        });
+                    }
+                }
+                
+                // Strategy 3: If still not found, try normalized matching with all categories
+                if (!matchingCategory) {
+                    const allCategories = await Category.find({
+                        deleted: false
+                    }).lean();
+                    
+                    // Find best match using normalized names
+                    for (const cat of allCategories) {
+                        const normalizedCatName = normalizeName(cat.name);
+                        if (normalizedCatName === normalizedPopularName || 
+                            normalizedCatName.includes(normalizedPopularName) ||
+                            normalizedPopularName.includes(normalizedCatName)) {
+                            matchingCategory = cat;
+                            break;
+                        }
+                    }
+                }
+
+                let products = [];
+                let categoryInfo = null;
+
+                // ✅ Fetch products even if category match not found - match by category name in products
+                if (allowedCreatorIds.length > 0) {
+                    // If category matched, use categoryId
+                    if (matchingCategory) {
+                        categoryInfo = {
+                            _id: matchingCategory._id,
+                            name: matchingCategory.name,
+                            image: matchingCategory.image
+                        };
+                    }
+
+                    // ✅ Build product match query - always filter by createdBy
+                    const productMatchBase = {
+                        deleted: false,
+                        createdBy: { $in: allowedCreatorIds }
+                    };
+
+                    // ✅ If matching category found, use categoryId; otherwise, fetch all products and filter by category name
+                    const productMatch = matchingCategory 
+                        ? {
+                            ...productMatchBase,
+                            categoryId: matchingCategory._id
+                          }
+                        : productMatchBase;
+
+                    // ✅ Build aggregation pipeline
+                    const pipeline = [
+                        {
+                            $match: productMatch
+                        },
+                        {
+                            $lookup: {
+                                from: "product_categories",
+                                localField: "categoryId",
+                                foreignField: "_id",
+                                as: "category"
+                            }
+                        },
+                        {
+                            $addFields: {
+                                category: { $arrayElemAt: ["$category", 0] }
+                            }
+                        }
+                    ];
+
+                    // ✅ If no category match, filter by category name matching PopularCategory name
+                    if (!matchingCategory) {
+                        pipeline.push({
+                            $match: {
+                                "category": { $ne: null },
+                                "category.deleted": false,
+                                $or: [
+                                    { "category.name": { $regex: new RegExp(`^${popularCatName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+                                    { "category.name": { $regex: new RegExp(popularCatName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } },
+                                    { "category.name": { $regex: new RegExp(normalizedPopularName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } },
+                                    // ✅ Add more flexible matching - check if category name contains popular category name or vice versa
+                                    { "category.name": { $regex: new RegExp(popularCatName.split(' ')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } }
+                                ]
+                            }
+                        });
+                    } else {
+                        // ✅ Even if category matched, ensure category is not null and valid
+                        pipeline.push({
+                            $match: {
+                                "category": { $ne: null },
+                                "category.deleted": false
+                            }
+                        });
+                    }
+
+                    // ✅ Continue with units lookup
+                    pipeline.push(
+                        {
+                            $lookup: {
+                                from: "product_units",
+                                localField: "_id",
+                                foreignField: "parentProduct",
+                                as: "units",
+                                pipeline: [
+                                    { $match: { deleted: false } }
+                                ]
+                            }
+                        },
+                        {
+                            $addFields: {
+                                units: { $ifNull: [{ $arrayElemAt: ["$units", 0] }, null] }
+                            }
+                        },
+                        {
+                            $match: {
+                                units: { $ne: null }
+                            }
+                        },
+                        {
+                            $lookup: {
+                                from: "product_sub_categories",
+                                localField: "subCategoryId",
+                                foreignField: "_id",
+                                as: "subCategory"
+                            }
+                        },
+                        {
+                            $addFields: {
+                                subCategory: { $arrayElemAt: ["$subCategory", 0] },
+                                subCategoryPercentageOff: { $ifNull: [{ $arrayElemAt: ["$subCategory.percentageOff", 0] }, 0] }
+                            }
+                        },
+                        {
+                            $project: {
+                                _id: 1,
+                                name: 1,
+                                manufacturer: 1,
+                                information: 1,
+                                images: 1,
+                                details: 1,
+                                categoryId: 1,
+                                subCategoryId: 1,
+                                trending: 1,
+                                rating: 1,
+                                ratingCount: 1,
+                                units: 1,
+                                category: 1,
+                                subCategory: 1,
+                                subCategoryPercentageOff: 1,
+                                createdAt: 1,
+                                updatedAt: 1
+                            }
+                        },
+                        { $sort: { createdAt: -1 } }
+                    );
+
+                    products = await OnlineProduct.aggregate(pipeline);
+
+                    // ✅ If products found but category info not set, set it from first product's category
+                    if (products.length > 0 && !categoryInfo && products[0].category) {
+                        categoryInfo = {
+                            _id: products[0].category._id,
+                            name: products[0].category.name,
+                            image: products[0].category.image
+                        };
+                    }
+
+                    // Modify unit details if user is premium and percentageOff > 0
+                    if (req.user.isPremium) {
+                        products.forEach(product => {
+                            if (product.units) {
+                                const { sellingPrice, mrp } = product.units;
+                                const subcategoryPercentage = product.subCategoryPercentageOff || 0;
+
+                                if (subcategoryPercentage > 0) {
+                                    const discountPrice = Math.round(sellingPrice * (1 - subcategoryPercentage / 100));
+                                    const calculatedOffPer = calculateOffPer(sellingPrice, discountPrice);
+
+                                    product.units = {
+                                        ...product.units,
+                                        mrp: sellingPrice,
+                                        sellingPrice: discountPrice,
+                                        offPer: calculatedOffPer
+                                    };
+                                } else if (product.units.offPer) {
+                                    // Clean offPer for non-premium users too
+                                    const offPerValue = String(product.units.offPer).replace(/%\s*OFF/gi, '').trim();
+                                    product.units.offPer = offPerValue;
+                                }
+                            }
+                        });
+                    } else {
+                        // For non-premium users, ensure offPer is clean
+                        products.forEach(product => {
+                            if (product.units && product.units.offPer) {
+                                const offPerValue = String(product.units.offPer).replace(/%\s*OFF/gi, '').trim();
+                                product.units.offPer = offPerValue;
+                            }
+                        });
+                    }
+
+                    // Get cart counts for products
+                    const productIds = products.map(p => p._id);
+                    const unitIds = products.map(p => p.units?._id).filter(Boolean);
+
+                    if (productIds.length > 0) {
+                        const cartItems = await OnlineStoreCart.find({
+                            deleted: false,
+                            createdBy: req.user._id,
+                            productId: { $in: productIds },
+                            ...(unitIds.length > 0 ? { unitId: { $in: unitIds } } : {})
+                        });
+
+                        const cartCountMap = new Map();
+                        cartItems.forEach(cart => {
+                            cartCountMap.set(`${cart.productId}_${cart.unitId}`, cart.quantity);
+                        });
+
+                        products.forEach(product => {
+                            if (product.units) {
+                                product.units.cartCount = cartCountMap.get(`${product._id}_${product.units._id}`) || 0;
+                            }
+                        });
+                    }
+                }
+
+                // ✅ Return popular category with products
+                return {
+                    _id: popularCat._id,
+                    name: popularCat.name,
+                    image: popularCat.image,
+                    storeCategoryId: popularCat.storeCategoryId,
+                    createdAt: popularCat.createdAt,
+                    updatedAt: popularCat.updatedAt,
+                    category: categoryInfo, // ✅ Category information (null if no match found)
+                    products: products, // ✅ All products for this category
+                    productCount: products.length,
+                    // Debug info (can be removed in production)
+                    _debug: {
+                        matchingCategoryFound: !!matchingCategory,
+                        matchingCategoryName: matchingCategory?.name || null,
+                        allowedCreatorIdsCount: allowedCreatorIds.length,
+                        productsFound: products.length
+                    }
+                };
+            })
+        );
 
         const totalCartCount = await fetchUserCartCount(req.user._id);
 
@@ -1921,28 +2224,6 @@ export const addOnlineProductToCart = async (req, res) => {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "You can't add deleted product unit in to the Cart" });
         }
 
-        // Check stock availability for product unit
-        if (productUnit.stock !== undefined && productUnit.stock !== null) {
-            const requestedQty = quantity || 1;
-            const currentCartQty = await OnlineStoreCart.findOne({ 
-                createdBy: req.user._id, 
-                productId, 
-                unitId, 
-                deleted: false 
-            });
-            const totalRequestedQty = currentCartQty 
-                ? currentCartQty.quantity + requestedQty 
-                : requestedQty;
-            
-            if (totalRequestedQty > productUnit.stock) {
-                return res.status(status.BadRequest).json({ 
-                    status: jsonStatus.BadRequest, 
-                    success: false, 
-                    message: `Only ${productUnit.stock} unit(s) available in stock` 
-                });
-            }
-        }
-
         const findProductInCart = await OnlineStoreCart.findOne({ createdBy: req.user._id, productId, unitId, deleted: false });
         if (findProductInCart) {
             findProductInCart.quantity = quantity ? findProductInCart.quantity + quantity : findProductInCart.quantity + 1;
@@ -1972,12 +2253,7 @@ export const addOnlineProductToCart = async (req, res) => {
             res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: "Product added in to the Cart", count: newCart.quantity, totalCartCount });
         }
     } catch (error) {
-        console.error('addOnlineProductToCart error:', error);
-        res.status(status.InternalServerError).json({ 
-            status: jsonStatus.InternalServerError, 
-            success: false, 
-            message: error.message || "Failed to add product to cart. Please try again." 
-        });
+        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('addOnlineProductToCart', error, req, res);
     }
 };

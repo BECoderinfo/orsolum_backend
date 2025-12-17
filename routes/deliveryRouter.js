@@ -134,11 +134,22 @@ const conditionalMulterUpload = (req, res, next) => {
     }
 };
 
+// Allow updating profile with or without explicit :id in path.
+// Frontend/mobile clients can safely call either:
+// - PUT /deliveryboy/update/profile/v1          (ID inferred from token)
+// - PUT /deliveryboy/update/profile/v1/:id     (ID from params, fallback to token)
 deliveryRouter.put(
-    '/deliveryboy/update/profile/v1/:id',
-    deliveryBoyAuthentication,
-    conditionalMulterUpload,
-    updateDeliveryBoyProfile
+  "/deliveryboy/update/profile/v1/:id",
+  deliveryBoyAuthentication,
+  conditionalMulterUpload,
+  updateDeliveryBoyProfile
+);
+
+deliveryRouter.put(
+  "/deliveryboy/update/profile/v1",
+  deliveryBoyAuthentication,
+  conditionalMulterUpload,
+  updateDeliveryBoyProfile
 );
 
 /* ===========================
