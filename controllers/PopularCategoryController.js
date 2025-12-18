@@ -2,6 +2,9 @@ import PopularCategory from "../models/PopularCategory.js";
 import { signedUrl } from '../helper/s3.config.js';
 import { jsonStatus, status } from '../helper/api.responses.js';
 import { catchError } from '../helper/service.js';
+import OnlineOrder from "../models/OnlineStore/OnlineOrder.js";
+import Product from "../models/Product.js";
+import Category from "../models/OnlineStore/Category.js";
 
 export const uploadPopularCategoryImage = async (req, res) => {
   try {
@@ -135,25 +138,56 @@ export const deletePopularCategory = async (req, res) => {
 
 export const listPopularCategory = async (req, res) => {
   try {
-    const list = await PopularCategory.aggregate([
-      { $match: { deleted: false } },
+    // ✅ Dynamic Popular Categories: most ordered categories from delivered ONLINE orders
+    const pipeline = [
+      { $match: { status: "Delivered" } },
+      { $unwind: "$productDetails" },
+      {
+        $group: {
+          _id: "$productDetails.productId",
+          orderCount: { $sum: { $toInt: "$productDetails.quantity" } }
+        }
+      },
       {
         $lookup: {
-          from: "store_categories",
-          localField: "storeCategoryId",
+          from: "products",
+          localField: "_id",
           foreignField: "_id",
-          as: "storeCategory",
-        },
+          as: "product"
+        }
+      },
+      { $unwind: "$product" },
+      { $match: { "product.deleted": { $ne: true } } },
+      {
+        $group: {
+          _id: "$product.categoryId",
+          orderCount: { $sum: "$orderCount" }
+        }
       },
       {
-        $addFields: {
-          storeCategory: {
-            $ifNull: [{ $arrayElemAt: ["$storeCategory", 0] }, null],
-          },
-        },
+        $lookup: {
+          from: "product_categories",
+          localField: "_id",
+          foreignField: "_id",
+          as: "category"
+        }
       },
-      { $sort: { createdAt: -1 } },
-    ]);
+      { $unwind: "$category" },
+      { $match: { "category.deleted": false } },
+      { $sort: { orderCount: -1, "category.name": 1 } },
+      {
+        $project: {
+          _id: "$category._id",
+          name: "$category.name",
+          image: "$category.image",
+          orderCount: 1,
+          createdAt: "$category.createdAt",
+          updatedAt: "$category.updatedAt"
+        }
+      }
+    ];
+
+    const list = await OnlineOrder.aggregate(pipeline);
 
     res.status(status.OK).json({
       status: jsonStatus.OK,

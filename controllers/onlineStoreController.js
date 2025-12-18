@@ -575,14 +575,23 @@ export const listProducts = async (req, res) => {
         pipeline.push({
             $lookup: {
                 from: "online_orders",
-                let: { pid: "$_id" },
+                let: { onlinePid: "$_id" }, // $$onlinePid is the OnlineProduct _id
                 as: "orderStats",
                 pipeline: [
                     { $match: { status: "Delivered" } },
                     { $unwind: "$productDetails" },
                     {
+                        $lookup: {
+                            from: "products",
+                            localField: "productDetails.productId",
+                            foreignField: "_id",
+                            as: "localProduct"
+                        }
+                    },
+                    { $unwind: "$localProduct" },
+                    {
                         $match: {
-                            $expr: { $eq: ["$productDetails.productId", "$$pid"] }
+                            $expr: { $eq: ["$localProduct.onlineProductId", "$$onlinePid"] }
                         }
                     },
                     {
@@ -836,16 +845,62 @@ export const onlineStoreHomePage = async (req, res) => {
         const trendingMatch = allowedCreatorIds.length > 0 
             ? { 
                 deleted: false, 
-                trending: true,
+                autoTrending: true, // ✅ Use autoTrending instead of manual trending flag
                 createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
             }
-            : { deleted: false, trending: true, _id: { $in: [] } }; // Empty match if no creators
+            : { deleted: false, autoTrending: true, _id: { $in: [] } }; // Empty match if no creators
 
         // Fetch trending products (limit 5) - only seller and admin products
+        // We now calculate trending automatically based on Delivered orders
         const trendingProducts = await OnlineProduct.aggregate([
             { 
-                $match: trendingMatch
+                $match: {
+                    deleted: false,
+                    createdBy: { $in: allowedCreatorIds }
+                }
             },
+            {
+                $lookup: {
+                    from: "online_orders",
+                    let: { onlinePid: "$_id" },
+                    as: "orderStats",
+                    pipeline: [
+                        { $match: { status: "Delivered" } },
+                        { $unwind: "$productDetails" },
+                        {
+                            $lookup: {
+                                from: "products",
+                                localField: "productDetails.productId",
+                                foreignField: "_id",
+                                as: "localProduct"
+                            }
+                        },
+                        { $unwind: "$localProduct" },
+                        {
+                            $match: {
+                                $expr: { $eq: ["$localProduct.onlineProductId", "$$onlinePid"] }
+                            }
+                        },
+                        {
+                            $group: {
+                                _id: null,
+                                orderCount: { $sum: 1 }
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    orderCount: { $ifNull: [{ $arrayElemAt: ["$orderStats.orderCount", 0] }, 0] }
+                }
+            },
+            {
+                $match: {
+                    orderCount: { $gt: 0 } // ✅ Only show products with at least 1 delivered order
+                }
+            },
+            { $sort: { orderCount: -1, createdAt: -1 } },
             {
                 $lookup: {
                     from: "product_units",
@@ -950,10 +1005,10 @@ export const allTrendingProducts = async (req, res) => {
         const matchConditions = allowedCreatorIds.length > 0
             ? { 
                 deleted: false, 
-                trending: true,
+                autoTrending: true, // ✅ Use autoTrending instead of manual trending flag
                 createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
             }
-            : { deleted: false, trending: true, _id: { $in: [] } }; // Empty match if no creators
+            : { deleted: false, autoTrending: true, _id: { $in: [] } }; // Empty match if no creators
         
         // Add search filter if provided
         if (search) {
@@ -961,7 +1016,46 @@ export const allTrendingProducts = async (req, res) => {
         }
 
         const trendingProducts = await OnlineProduct.aggregate([
-            { $match: matchConditions },
+            { 
+                $match: {
+                    deleted: false,
+                    createdBy: { $in: allowedCreatorIds },
+                    ...(search ? { name: { $regex: search, $options: 'i' } } : {})
+                }
+            },
+            {
+                $lookup: {
+                    from: "online_orders",
+                    let: { pid: "$_id" },
+                    as: "orderStats",
+                    pipeline: [
+                        { $match: { status: "Delivered" } },
+                        { $unwind: "$productDetails" },
+                        {
+                            $match: {
+                                $expr: { $eq: ["$productDetails.productId", "$$pid"] }
+                            }
+                        },
+                        {
+                            $group: {
+                                _id: null,
+                                orderCount: { $sum: 1 }
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    orderCount: { $ifNull: [{ $arrayElemAt: ["$orderStats.orderCount", 0] }, 0] }
+                }
+            },
+            {
+                $match: {
+                    orderCount: { $gt: 0 } // ✅ Only show products with at least 1 delivered order
+                }
+            },
+            { $sort: { orderCount: -1, createdAt: -1 } },
             {
                 $lookup: {
                     from: "product_units",
@@ -1018,19 +1112,46 @@ export const allTrendingProducts = async (req, res) => {
             });
         }
 
-        // Build count match conditions (same as main query)
-        const countMatchConditions = allowedCreatorIds.length > 0
-            ? { 
-                deleted: false, 
-                trending: true,
-                createdBy: { $in: allowedCreatorIds } // ✅ Only count seller and admin products
-            }
-            : { deleted: false, trending: true, _id: { $in: [] } }; // Empty match if no creators
-        if (search) {
-            countMatchConditions.name = { $regex: search, $options: 'i' };
-        }
+        // Build count match conditions (same as main query - must match only those with orders)
+        const trendingStats = await OnlineProduct.aggregate([
+            { 
+                $match: {
+                    deleted: false,
+                    createdBy: { $in: allowedCreatorIds },
+                    ...(search ? { name: { $regex: search, $options: 'i' } } : {})
+                }
+            },
+            {
+                $lookup: {
+                    from: "online_orders",
+                    let: { pid: "$_id" },
+                    as: "orderStats",
+                    pipeline: [
+                        { $match: { status: "Delivered" } },
+                        { $unwind: "$productDetails" },
+                        {
+                            $match: {
+                                $expr: { $eq: ["$productDetails.productId", "$$pid"] }
+                            }
+                        },
+                        { $group: { _id: null, orderCount: { $sum: 1 } } }
+                    ]
+                }
+            },
+            {
+                $addFields: {
+                    orderCount: { $ifNull: [{ $arrayElemAt: ["$orderStats.orderCount", 0] }, 0] }
+                }
+            },
+            {
+                $match: {
+                    orderCount: { $gt: 0 }
+                }
+            },
+            { $count: "total" }
+        ]);
 
-        const totalCount = await OnlineProduct.countDocuments(countMatchConditions);
+        const totalCount = trendingStats[0]?.total || 0;
 
         // Fetch cart items
         let totalCartCount = 0;

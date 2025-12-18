@@ -3,7 +3,11 @@ import mongoose from "mongoose";
 const OtpSchema = new mongoose.Schema({
     phone: {
         type: String,
-        required: true,
+        required: false,
+    },
+    email: {
+        type: String,
+        required: false,
     },
     otp: {
         type: String,
@@ -12,7 +16,11 @@ const OtpSchema = new mongoose.Schema({
     expiresAt: {
         type: Date,
         required: true,
-    }
+    },
+    verified: {
+        type: Boolean,
+        default: false,
+    },
 }, { timestamps: true });
 
 const OtpModel = mongoose.model('otp', OtpSchema);

@@ -16,6 +16,9 @@ import {
   getSellerOrderDetails,
   checkSellerStatus,
   updateStoreInfo,
+  sendForgotPasswordOtp,
+  verifyForgotPasswordOtp,
+  resetForgotPassword,
 } from "../controllers/sellerController.js";
 import { getSellerNotifications, markSellerNotificationRead, clearSellerNotifications, dismissSellerNotification } from "../controllers/notificationController.js";
 import { orderChangeStatus } from "../controllers/orderController.js";
@@ -36,6 +39,11 @@ sellerRouter.get("/seller/profile/details/v1", sellerAuthentication, getSellerPr
 
 // 📊 Seller Dashboard
 sellerRouter.get("/seller/dashboard/v1", sellerAuthentication, getSellerDashboard);
+
+// 🔐 Forgot Password Flow
+sellerRouter.post("/seller/forgot-password/send-otp/v1", sendForgotPasswordOtp);
+sellerRouter.post("/seller/forgot-password/verify-otp/v1", verifyForgotPasswordOtp);
+sellerRouter.post("/seller/forgot-password/reset/v1", resetForgotPassword);
 
 // 📦 Seller Orders
 sellerRouter.get("/seller/orders/list/v1", sellerAuthentication, getSellerOrderList);

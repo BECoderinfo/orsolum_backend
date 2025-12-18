@@ -89,6 +89,11 @@ const ProductSchema = new mongoose.Schema({
         default: 0,
         min: 0
     },
+    onlineProductId: {
+        type: ObjectId,
+        ref: 'online_product',
+        default: null
+    },
     lowStockThreshold: {
         type: Number,
         default: 5,

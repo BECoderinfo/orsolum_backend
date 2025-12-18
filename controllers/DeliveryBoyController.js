@@ -390,6 +390,15 @@ export const acceptOrder = async (req, res) => {
             });
         }
 
+        // ✅ Block if already ongoing or delivered
+        if (["Out for delivery", "Your Destination", "Delivered", "Cancelled"].includes(order.status)) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: `Cannot accept order with status: ${order.status}`
+            });
+        }
+
         const allowedAcceptStatuses = ["Pending", "Product shipped"];
         if (!allowedAcceptStatuses.includes(order.status)) {
             return res.status(status.BadRequest).json({
@@ -546,6 +555,15 @@ export const pickupOrder = async (req, res) => {
             });
         }
 
+        // ✅ Ensure status is correct for pickup
+        if (order.status !== "On the way") {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: `Cannot pickup order. Current status: ${order.status}`
+            });
+        }
+
         order.status = "On the way";
         order.pickedUpAt = new Date();
         await order.save();
@@ -601,6 +619,24 @@ export const startNavigation = async (req, res) => {
             });
         }
 
+        // ✅ Ensure order is picked up before starting navigation
+        if (!order.pickedUpAt) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Please pickup the order from store first"
+            });
+        }
+
+        // ✅ Block if already ongoing or delivered
+        if (["Out for delivery", "Your Destination", "Delivered", "Cancelled"].includes(order.status)) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: `Cannot start navigation. Current status: ${order.status}`
+            });
+        }
+
         order.status = "Out for delivery";
         order.navigationStartedAt = new Date();
         await order.save();
@@ -653,6 +689,15 @@ export const reachedLocation = async (req, res) => {
                 status: jsonStatus.Forbidden,
                 success: false,
                 message: "You are not assigned to this order"
+            });
+        }
+
+        // ✅ Ensure status is correct for reaching destination
+        if (order.status !== "Out for delivery") {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: `Cannot mark as reached. Current status: ${order.status}`
             });
         }
 
@@ -716,6 +761,15 @@ export const completeDelivery = async (req, res) => {
                 status: jsonStatus.Forbidden,
                 success: false,
                 message: "You are not assigned to this order"
+            });
+        }
+
+        // ✅ Ensure status is correct for completion
+        if (order.status !== "Your Destination") {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: `Cannot complete delivery. Current status: ${order.status}`
             });
         }
 

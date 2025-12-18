@@ -686,6 +686,9 @@ export const createProduct = async (req, res) => {
             const onlineProduct = await OnlineProduct.create(onlineProductPayload);
             console.log("✅ OnlineProduct created for seller:", onlineProduct._id);
 
+            // ✅ Save onlineProductId to local Product for reliable sync
+            await Product.findByIdAndUpdate(savedProduct._id, { onlineProductId: onlineProduct._id });
+
             // Create units for online product
             const unitsForOnline = (normalizedUnits && normalizedUnits.length)
               ? normalizedUnits
@@ -938,7 +941,9 @@ export const editProduct = async (req, res) => {
         }
 
         if (Object.prototype.hasOwnProperty.call(payload, "variantGroups")) {
+            console.log("📝 Received variantGroups from seller:", payload.variantGroups);
             updateData.variantGroups = parseVariantGroupsField(payload.variantGroups);
+            console.log("✅ Parsed variantGroups:", updateData.variantGroups);
         }
 
         if (
@@ -1046,29 +1051,26 @@ export const editProduct = async (req, res) => {
                 const finalSubCategoryId = updateData.subCategoryId || editProduct.subCategoryId;
 
                 if (finalCategoryId && finalSubCategoryId) {
-                    // Check if OnlineProduct already exists for this Product
-                    const existingOnlineProduct = await OnlineProduct.findOne({
-                        createdBy: req.user._id,
-                        name: editProduct.productName,
-                        manufacturer: editProduct.companyName
-                    }).sort({ createdAt: -1 });
+                    // ✅ Check if OnlineProduct already exists via onlineProductId link first
+                    let existingOnlineProduct = null;
+                    if (editProduct.onlineProductId) {
+                        existingOnlineProduct = await OnlineProduct.findById(editProduct.onlineProductId);
+                    }
 
-                    // Handle rating and ratingCount
-                    let rating = 0;
-                    let ratingCount = 0;
-                    if (Object.prototype.hasOwnProperty.call(payload, "rating")) {
-                        rating = payload.rating ? Number(payload.rating) : 0;
-                        rating = Math.max(0, Math.min(5, rating)); // Clamp between 0 and 5
-                    } else if (existingOnlineProduct) {
-                        rating = existingOnlineProduct.rating || 0;
+                    // Fallback to name/manufacturer match if no link exists (for older products)
+                    if (!existingOnlineProduct) {
+                        existingOnlineProduct = await OnlineProduct.findOne({
+                            createdBy: req.user._id,
+                            name: editProduct.productName,
+                            manufacturer: editProduct.companyName,
+                            deleted: false
+                        }).sort({ createdAt: -1 });
                     }
-                    
-                    if (Object.prototype.hasOwnProperty.call(payload, "ratingCount")) {
-                        ratingCount = payload.ratingCount ? Number(payload.ratingCount) : 0;
-                        ratingCount = Math.max(0, ratingCount); // Ensure non-negative
-                    } else if (existingOnlineProduct) {
-                        ratingCount = existingOnlineProduct.ratingCount || 0;
-                    }
+
+                    // Handle rating and ratingCount - Keep existing values from OnlineProduct
+                    // Ratings should ONLY update via customer feedback flow, not here.
+                    const rating = existingOnlineProduct ? (existingOnlineProduct.rating || 0) : 0;
+                    const ratingCount = existingOnlineProduct ? (existingOnlineProduct.ratingCount || 0) : 0;
                     
                     const onlineProductData = {
                         name: updateData.productName || editProduct.productName,
@@ -1129,7 +1131,10 @@ export const editProduct = async (req, res) => {
                     } else {
                         // Create new OnlineProduct
                         const newOnlineProduct = await OnlineProduct.create(onlineProductData);
-                        console.log("✅ OnlineProduct created for seller:", newOnlineProduct._id);
+                        console.log("✅ OnlineProduct created for seller during edit:", newOnlineProduct._id);
+
+                        // ✅ Save onlineProductId link back to local Product
+                        await Product.findByIdAndUpdate(id, { onlineProductId: newOnlineProduct._id });
 
                         const unitsForOnline = normalizedUnitsForOnline && normalizedUnitsForOnline.length
                             ? normalizedUnitsForOnline

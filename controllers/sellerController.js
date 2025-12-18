@@ -5,6 +5,7 @@ import OtpModel from '../models/Otp.js';
 import { generateToken } from '../helper/generateToken.js';
 import OTP_GENERATOR from "otp-generator";
 import { sendSms } from '../helper/sendSms.js';
+import { sendEmail } from '../helper/sendEmail.js';
 import bcrypt from "bcryptjs";
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
@@ -1285,5 +1286,226 @@ export const getSellerOrderDetails = async (req, res) => {
       message: error.message,
     });
     return catchError("getSellerOrderDetails", error, req, res);
+  }
+};
+
+// ---------------- Forgot Password Flow ----------------
+
+/**
+ * STEP 1: Send OTP to Email
+ */
+export const sendForgotPasswordOtp = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Please enter your email address",
+      });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase(), role: "seller" });
+    if (!user) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "No seller account found with this email",
+      });
+    }
+
+    const otp = OTP_GENERATOR.generate(6, {
+      upperCaseAlphabets: false,
+      specialChars: false,
+      lowerCaseAlphabets: false,
+      digits: true,
+    });
+
+    // Hash OTP for secure storage
+    const salt = await bcrypt.genSalt(10);
+    const hashedOtp = await bcrypt.hash(otp, salt);
+
+    // Set expiry (10 minutes)
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    // Store in OtpModel
+    await OtpModel.deleteMany({ email: email.toLowerCase() }); // Clear old ones
+    const otpRecord = new OtpModel({ 
+      email: email.toLowerCase(), 
+      otp: hashedOtp, 
+      expiresAt 
+    });
+    await otpRecord.save();
+
+    // Send via email
+    const emailSent = await sendEmail({
+      to: email,
+      subject: "Orsolum Seller - Password Reset OTP",
+      text: `Your OTP for password reset is: ${otp}. It is valid for 10 minutes.`
+    });
+
+    if (!emailSent) {
+      return res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: "Failed to send OTP email. Please try again.",
+      });
+    }
+
+    res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      message: "OTP has been sent to your email.",
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("sendForgotPasswordOtp", error, req, res);
+  }
+};
+
+/**
+ * STEP 2: Verify OTP
+ */
+export const verifyForgotPasswordOtp = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Email and OTP are required",
+      });
+    }
+
+    const otpRecord = await OtpModel.findOne({ email: email.toLowerCase() }).sort({ createdAt: -1 });
+
+    if (!otpRecord) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "OTP not found or expired",
+      });
+    }
+
+    if (new Date() > otpRecord.expiresAt) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "OTP has expired",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(otp, otpRecord.otp);
+    if (!isMatch) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid OTP",
+      });
+    }
+
+    // Mark as verified (optional: can use a flag, but for now we just allow the reset step to proceed if we find a valid record)
+    // We'll keep the record until the actual reset happens.
+    
+    res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      message: "OTP verified successfully.",
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("verifyForgotPasswordOtp", error, req, res);
+  }
+};
+
+/**
+ * STEP 3: Reset Password
+ */
+export const resetForgotPassword = async (req, res) => {
+  try {
+    const { email, otp, password, confirmPassword } = req.body;
+
+    if (!email || !otp || !password || !confirmPassword) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "All fields are required",
+      });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Passwords do not match",
+      });
+    }
+
+    if (password.length < 8) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Password must be at least 8 characters",
+      });
+    }
+
+    // Re-verify OTP for security
+    const otpRecord = await OtpModel.findOne({ email: email.toLowerCase() }).sort({ createdAt: -1 });
+    if (!otpRecord || new Date() > otpRecord.expiresAt) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "OTP session expired. Please start again.",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(otp, otpRecord.otp);
+    if (!isMatch) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid OTP verification",
+      });
+    }
+
+    // Update user password
+    const user = await User.findOne({ email: email.toLowerCase(), role: "seller" });
+    if (!user) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(password, salt);
+    await user.save();
+
+    // Delete OTP record
+    await OtpModel.deleteMany({ email: email.toLowerCase() });
+
+    res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      message: "Password reset successfully.",
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("resetForgotPassword", error, req, res);
   }
 };
