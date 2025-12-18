@@ -675,6 +675,8 @@ export const createProduct = async (req, res) => {
               details: parsedDetails,
               categoryId: categoryParse.value,
               subCategoryId: subCategoryParse.value,
+              variantTemplate: variantTemplateKey,
+              variantGroups,
               rating: Math.max(0, Math.min(5, rating)), // Clamp between 0 and 5
               ratingCount: Math.max(0, ratingCount), // Ensure non-negative
               createdBy: req.user._id, // although schema ref is admin, keep creator for trace
@@ -684,16 +686,29 @@ export const createProduct = async (req, res) => {
             const onlineProduct = await OnlineProduct.create(onlineProductPayload);
             console.log("✅ OnlineProduct created for seller:", onlineProduct._id);
 
-            // Create primary unit for online product (using primaryUnit or base prices)
-            const primaryUnitPayload = {
-              qty: primaryUnit?.qty || "1",
-              mrp: parsedMrp,
-              sellingPrice: parsedSellingPrice,
-              offPer: offPer,
+            // Create units for online product
+            const unitsForOnline = (normalizedUnits && normalizedUnits.length)
+              ? normalizedUnits
+              : [{
+                  qty: primaryUnit?.qty || "1",
+                  mrp: parsedMrp,
+                  sellingPrice: parsedSellingPrice,
+                  offPer: offPer
+                }];
+
+            const onlineUnitsPayload = unitsForOnline.map(u => ({
+              qty: u.qty || "1",
+              mrp: u.mrp,
+              sellingPrice: u.sellingPrice,
+              offPer: u.offPer,
               parentProduct: onlineProduct._id,
-            };
-            await ProductUnitOnline.create(primaryUnitPayload);
-            console.log("✅ ProductUnit created for OnlineProduct:", onlineProduct._id);
+              deleted: false
+            }));
+
+            if (onlineUnitsPayload.length) {
+              await ProductUnitOnline.insertMany(onlineUnitsPayload);
+              console.log(`✅ ProductUnit(s) created for OnlineProduct: ${onlineUnitsPayload.length}`);
+            }
           } else {
             console.warn("⚠️ Skipping OnlineProduct sync: category or subcategory missing", {
               categoryId: categoryParse.value,
@@ -753,6 +768,8 @@ export const editProduct = async (req, res) => {
             updateData.details = parsedDetails;
         }
 
+        let normalizedUnitsForOnline = null;
+
         if (Object.prototype.hasOwnProperty.call(payload, "units")) {
             const parsedUnits = parseUnitsField(payload.units);
             if (parsedUnits.length === 0) {
@@ -767,6 +784,7 @@ export const editProduct = async (req, res) => {
                     });
                 }
                 updateData.units = normalizedUnits;
+                normalizedUnitsForOnline = normalizedUnits; // keep for online sync
                 priceUpdatedViaUnits = true;
                 updateData.mrp = normalizedUnits[0].mrp;
                 updateData.sellingPrice = normalizedUnits[0].sellingPrice;
@@ -1060,6 +1078,8 @@ export const editProduct = async (req, res) => {
                         details: updateData.details || editProduct.details || [],
                         categoryId: finalCategoryId,
                         subCategoryId: finalSubCategoryId,
+                        variantTemplate: updateData.variantTemplate ?? editProduct.variantTemplate ?? null,
+                        variantGroups: updateData.variantGroups ?? editProduct.variantGroups ?? [],
                         rating: rating,
                         ratingCount: ratingCount,
                         createdBy: req.user._id,
@@ -1075,33 +1095,34 @@ export const editProduct = async (req, res) => {
                         );
 
                         // Update or create ProductUnit
-                        const primaryUnit = editProduct.units && editProduct.units.length > 0 
-                            ? editProduct.units[0] 
-                            : {
-                                qty: editProduct.qty || "1",
-                                mrp: editProduct.mrp,
-                                sellingPrice: editProduct.sellingPrice,
-                                offPer: editProduct.offPer
-                            };
+                        const unitsForOnline = normalizedUnitsForOnline && normalizedUnitsForOnline.length
+                            ? normalizedUnitsForOnline
+                            : (Array.isArray(editProduct.units) && editProduct.units.length
+                                ? editProduct.units
+                                : [{
+                                    qty: editProduct.qty || "1",
+                                    mrp: editProduct.mrp,
+                                    sellingPrice: editProduct.sellingPrice,
+                                    offPer: editProduct.offPer
+                                }]);
 
-                        const unitData = {
-                            qty: primaryUnit.qty || "1",
-                            mrp: primaryUnit.mrp || editProduct.mrp,
-                            sellingPrice: primaryUnit.sellingPrice || editProduct.sellingPrice,
-                            offPer: primaryUnit.offPer || editProduct.offPer,
+                        // Soft-delete old units then insert fresh copies to mirror seller data
+                        await ProductUnitOnline.updateMany(
+                            { parentProduct: existingOnlineProduct._id },
+                            { $set: { deleted: true } }
+                        );
+
+                        const onlineUnitsPayload = unitsForOnline.map(u => ({
+                            qty: u.qty || "1",
+                            mrp: u.mrp || editProduct.mrp,
+                            sellingPrice: u.sellingPrice || editProduct.sellingPrice,
+                            offPer: u.offPer || editProduct.offPer,
                             parentProduct: existingOnlineProduct._id,
                             deleted: false
-                        };
+                        }));
 
-                        const existingUnit = await ProductUnitOnline.findOne({
-                            parentProduct: existingOnlineProduct._id,
-                            deleted: false
-                        });
-
-                        if (existingUnit) {
-                            await ProductUnitOnline.findByIdAndUpdate(existingUnit._id, unitData, { new: true });
-                        } else {
-                            await ProductUnitOnline.create(unitData);
+                        if (onlineUnitsPayload.length) {
+                            await ProductUnitOnline.insertMany(onlineUnitsPayload);
                         }
 
                         console.log("✅ OnlineProduct updated for seller:", existingOnlineProduct._id);
@@ -1110,25 +1131,30 @@ export const editProduct = async (req, res) => {
                         const newOnlineProduct = await OnlineProduct.create(onlineProductData);
                         console.log("✅ OnlineProduct created for seller:", newOnlineProduct._id);
 
-                        // Create primary unit
-                        const primaryUnit = editProduct.units && editProduct.units.length > 0 
-                            ? editProduct.units[0] 
-                            : {
-                                qty: editProduct.qty || "1",
-                                mrp: editProduct.mrp,
-                                sellingPrice: editProduct.sellingPrice,
-                                offPer: editProduct.offPer
-                            };
+                        const unitsForOnline = normalizedUnitsForOnline && normalizedUnitsForOnline.length
+                            ? normalizedUnitsForOnline
+                            : (Array.isArray(editProduct.units) && editProduct.units.length
+                                ? editProduct.units
+                                : [{
+                                    qty: editProduct.qty || "1",
+                                    mrp: editProduct.mrp,
+                                    sellingPrice: editProduct.sellingPrice,
+                                    offPer: editProduct.offPer
+                                }]);
 
-                        const unitPayload = {
-                            qty: primaryUnit.qty || "1",
-                            mrp: primaryUnit.mrp || editProduct.mrp,
-                            sellingPrice: primaryUnit.sellingPrice || editProduct.sellingPrice,
-                            offPer: primaryUnit.offPer || editProduct.offPer,
+                        const unitPayloads = unitsForOnline.map(u => ({
+                            qty: u.qty || "1",
+                            mrp: u.mrp || editProduct.mrp,
+                            sellingPrice: u.sellingPrice || editProduct.sellingPrice,
+                            offPer: u.offPer || editProduct.offPer,
                             parentProduct: newOnlineProduct._id,
-                        };
-                        await ProductUnitOnline.create(unitPayload);
-                        console.log("✅ ProductUnit created for OnlineProduct:", newOnlineProduct._id);
+                            deleted: false
+                        }));
+
+                        if (unitPayloads.length) {
+                            await ProductUnitOnline.insertMany(unitPayloads);
+                            console.log("✅ ProductUnit(s) created for OnlineProduct:", unitPayloads.length);
+                        }
                     }
                 } else {
                     console.warn("⚠️ Skipping OnlineProduct sync: category or subcategory missing", {
@@ -1234,6 +1260,32 @@ export const productDetails = async (req, res) => {
         ]);
 
         const detailWithImage = applyPrimaryImageFallback(productDetails[0]);
+
+        // ✅ Attach online store rating & ratingCount for seller products
+        if (detailWithImage && req.user?.role === "seller") {
+            try {
+                const linkedOnlineProduct = await OnlineProduct.findOne({
+                    createdBy: req.user._id,
+                    name: detailWithImage.productName,
+                    manufacturer: detailWithImage.companyName
+                })
+                    .sort({ createdAt: -1 })
+                    .lean();
+
+                if (linkedOnlineProduct) {
+                    detailWithImage.rating =
+                        typeof linkedOnlineProduct.rating === "number"
+                            ? linkedOnlineProduct.rating
+                            : 0;
+                    detailWithImage.ratingCount =
+                        typeof linkedOnlineProduct.ratingCount === "number"
+                            ? linkedOnlineProduct.ratingCount
+                            : 0;
+                }
+            } catch (innerErr) {
+                console.warn("⚠️ Failed to attach online product rating:", innerErr?.message || innerErr);
+            }
+        }
         
         // ✅ Clean offPer to remove any "% OFF" text
         if (detailWithImage && detailWithImage.offPer) {
@@ -1273,26 +1325,46 @@ export const productDetails = async (req, res) => {
 export const deleteProductImage = async (req, res) => {
     try {
         const { id } = req.params;
-        const { index } = req.body;
-
-        if (typeof index !== "number" || index < 0) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Invalid index provided." });
-        }
+        const { index, imageKey, image } = req.body || {};
 
         const product = await Product.findOne({ _id: id, createdBy: req.user._id });
         if (!product) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: `Product not found` });
         }
 
-        if (index >= product.productImages.length) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Index out of bounds." });
+        const imagesArray = Array.isArray(product.productImages) ? product.productImages : [];
+        const keyToRemove = (typeof imageKey === "string" && imageKey.trim().length)
+            ? imageKey.trim()
+            : (typeof image === "string" && image.trim().length)
+                ? image.trim()
+                : null;
+
+        let imageValueToPull = null;
+
+        // ✅ Prefer key-based delete (safe even after reordering/removing images)
+        if (keyToRemove) {
+            imageValueToPull = imagesArray.find((k) => k === keyToRemove) || null;
+        }
+        // Fallback to index-based delete (legacy clients)
+        if (!imageValueToPull) {
+            if (typeof index !== "number" || index < 0) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: "Provide imageKey (preferred) or valid index."
+                });
+            }
+            if (index >= imagesArray.length) {
+                return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Index out of bounds." });
+            }
+            imageValueToPull = imagesArray[index];
         }
 
         let updatedProduct = await Product.findByIdAndUpdate(
             id,
             {
                 $pull: {
-                    productImages: product.productImages[index]
+                    productImages: imageValueToPull
                 }
             },
             { new: true, runValidators: true }
@@ -1344,6 +1416,37 @@ export const productList = async (req, res) => {
   
       const list = await Product.aggregate([
         { $match: matchQuery },
+        // ✅ Attach online store rating/ratingCount by mapping to latest linked OnlineProduct
+        {
+          $lookup: {
+            from: "online_products",
+            let: { sellerId: "$createdBy", pname: "$productName", mfg: "$companyName" },
+            as: "linkedOnline",
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$createdBy", "$$sellerId"] },
+                      { $eq: ["$name", "$$pname"] },
+                      { $eq: ["$manufacturer", "$$mfg"] },
+                      { $eq: ["$deleted", false] }
+                    ]
+                  }
+                }
+              },
+              { $sort: { createdAt: -1 } },
+              { $limit: 1 },
+              { $project: { rating: 1, ratingCount: 1 } }
+            ]
+          }
+        },
+        {
+          $addFields: {
+            rating: { $ifNull: [{ $arrayElemAt: ["$linkedOnline.rating", 0] }, 0] },
+            ratingCount: { $ifNull: [{ $arrayElemAt: ["$linkedOnline.ratingCount", 0] }, 0] }
+          }
+        },
         {
           $lookup: {
             from: "product_categories",
@@ -1369,6 +1472,7 @@ export const productList = async (req, res) => {
         { $sort: { createdAt: -1 } },
         { $skip: (Number(skip) - 1) * limit },
         { $limit: limit },
+        { $project: { linkedOnline: 0 } }
       ]);
   
       // ❌ Remove 404 for live search (should return empty list)

@@ -50,19 +50,35 @@ export const processGoogleMapsLink = async (url) => {
 
     const getCoordinatesFromGoogleMapsApi = async (query) => {
       try {
+        if (!GOOGLE_MAPS_API_KEY) {
+          console.error("Google Maps API key is not configured");
+          return { lat: null, lng: null };
+        }
+        
         const apiUrl = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(
           query
         )}&inputtype=textquery&fields=geometry&key=${GOOGLE_MAPS_API_KEY}`;
+        
         const response = await fetch(apiUrl);
         const data = await response.json();
 
-        if (data.status === "OK" && data.candidates.length > 0) {
+        if (data.status === "OK" && data.candidates && data.candidates.length > 0) {
           const { lat, lng } = data.candidates[0].geometry.location;
           return { lat, lng };
-        } else {
-          console.warn("Google Maps API returned:", data.status);
-          return { lat: null, lng: null };
+        } else if (data.status === "ZERO_RESULTS") {
+          // Try Geocoding API as fallback
+          const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${GOOGLE_MAPS_API_KEY}`;
+          const geocodeResponse = await fetch(geocodeUrl);
+          const geocodeData = await geocodeResponse.json();
+          
+          if (geocodeData.status === "OK" && geocodeData.results && geocodeData.results.length > 0) {
+            const { lat, lng } = geocodeData.results[0].geometry.location;
+            return { lat, lng };
+          }
         }
+        
+        console.warn("Google Maps API returned:", data.status);
+        return { lat: null, lng: null };
       } catch (error) {
         console.error("Error fetching coordinates from Google Maps API:", error);
         return { lat: null, lng: null };

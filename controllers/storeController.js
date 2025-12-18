@@ -6,6 +6,7 @@ import Product from '../models/Product.js';
 import StorePopularProduct from '../models/StorePopularProduct.js';
 import StoreOffer from '../models/StoreOffer.js';
 import StoreCategory from '../models/StoreCategory.js';
+import OnlineStoreCategory from '../models/OnlineStore/Category.js';
 import Notification from '../models/Notification.js';
 import mongoose from 'mongoose';
 import { signedUrl } from '../helper/s3.config.js';
@@ -1348,14 +1349,57 @@ export const deleteStoreImage = async (req, res) => {
 export const listOfCategories = async (req, res) => {
     try {
 
-        const listCategories = await StoreCategory.aggregate([
+        // Retailer store uses 'local' store categories.
+        // Seller store: return ALL available store categories (online + local) so dropdown never stays empty.
+        const storeTypeMatch =
+            req?.user?.role === "seller"
+                ? { $in: ["online", "local"] }
+                : "local";
+
+        let listCategories = await StoreCategory.aggregate([
             {
                 $match: {
                     deleted: false,
-                    storeType: 'local' // Only local store categories
+                    storeType: storeTypeMatch
                 }
             }
         ]);
+
+        // If seller has no store categories yet, auto-seed from online store categories
+        if (req?.user?.role === "seller" && (!listCategories || listCategories.length === 0)) {
+            const onlineCats = await OnlineStoreCategory.find({ deleted: false })
+                .select("name image")
+                .lean();
+
+            if (onlineCats && onlineCats.length) {
+                const bulk = onlineCats.map((c) => ({
+                    updateOne: {
+                        filter: { name: c.name, storeType: "online" },
+                        update: {
+                            $setOnInsert: {
+                                name: c.name,
+                                image: c.image,
+                                storeType: "online",
+                                deleted: false,
+                                createdBy: req.user._id,
+                                updatedBy: req.user._id
+                            }
+                        },
+                        upsert: true
+                    }
+                }));
+                await StoreCategory.bulkWrite(bulk, { ordered: false });
+
+                listCategories = await StoreCategory.aggregate([
+                    {
+                        $match: {
+                            deleted: false,
+                            storeType: storeTypeMatch
+                        }
+                    }
+                ]);
+            }
+        }
 
         res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: listCategories });
     } catch (error) {

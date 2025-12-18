@@ -51,6 +51,29 @@ const OnlineProductSchema = new mongoose.Schema({
         ref: 'product_sub_category',
         required: true
     },
+    // Optional variant metadata (mirrors local Product.variantTemplate / variantGroups)
+    variantTemplate: {
+        type: String,
+        default: null
+    },
+    variantGroups: [
+        {
+            key: {
+                type: String,
+                trim: true
+            },
+            name: {
+                type: String,
+                trim: true
+            },
+            options: [
+                {
+                    type: String,
+                    trim: true
+                }
+            ]
+        }
+    ],
     rating: {
         type: Number,
         min: 0,

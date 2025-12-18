@@ -1288,6 +1288,68 @@ export const submitCustomerRating = async (req, res) => {
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
+        // ✅ Automatically update linked store & product ratings (order-driven)
+        try {
+            // Update Store rating using weighted average
+            if (order.storeId) {
+                const store = await Store.findById(order.storeId).select("rating ratingCount");
+                if (store) {
+                    const existingCount = typeof store.ratingCount === "number" ? store.ratingCount : 0;
+                    const existingRating = typeof store.rating === "number" ? store.rating : 0;
+                    const newCount = existingCount + 1;
+                    const newAverage = ((existingRating * existingCount) + rating) / newCount;
+
+                    await Store.findByIdAndUpdate(order.storeId, {
+                        rating: Number(newAverage.toFixed(2)),
+                        ratingCount: newCount
+                    });
+                }
+            }
+
+            // Update each ordered Product + linked OnlineProduct rating
+            const orderedItems = Array.isArray(order.productDetails) ? order.productDetails : [];
+            for (const item of orderedItems) {
+                const productId = item?.productId;
+                if (!productId) continue;
+
+                const productDoc = await Product.findById(productId).select("rating ratingCount productName companyName createdBy").lean();
+                if (!productDoc) continue;
+
+                // Update local Product rating
+                const pExistingCount = typeof productDoc.ratingCount === "number" ? productDoc.ratingCount : 0;
+                const pExistingRating = typeof productDoc.rating === "number" ? productDoc.rating : 0;
+                const pNewCount = pExistingCount + 1;
+                const pNewAverage = ((pExistingRating * pExistingCount) + rating) / pNewCount;
+
+                await Product.findByIdAndUpdate(productId, {
+                    rating: Number(pNewAverage.toFixed(2)),
+                    ratingCount: pNewCount
+                });
+
+                // Sync to linked OnlineProduct (same seller, same name/manufacturer)
+                const linkedOnline = await OnlineProduct.findOne({
+                    createdBy: productDoc.createdBy,
+                    name: productDoc.productName,
+                    manufacturer: productDoc.companyName,
+                    deleted: false
+                }).sort({ createdAt: -1 }).select("rating ratingCount").lean();
+
+                if (linkedOnline?._id) {
+                    const oExistingCount = typeof linkedOnline.ratingCount === "number" ? linkedOnline.ratingCount : 0;
+                    const oExistingRating = typeof linkedOnline.rating === "number" ? linkedOnline.rating : 0;
+                    const oNewCount = oExistingCount + 1;
+                    const oNewAverage = ((oExistingRating * oExistingCount) + rating) / oNewCount;
+
+                    await OnlineProduct.findByIdAndUpdate(linkedOnline._id, {
+                        rating: Number(oNewAverage.toFixed(2)),
+                        ratingCount: oNewCount
+                    });
+                }
+            }
+        } catch (aggErr) {
+            console.warn("⚠️ Failed to aggregate store/online product rating from delivery feedback:", aggErr?.message || aggErr);
+        }
+
         const [average] = await DeliveryFeedback.aggregate([
             {
                 $match: {

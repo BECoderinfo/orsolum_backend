@@ -1,6 +1,6 @@
 import express from "express";
 import { body } from 'express-validator';
-import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, listSellerProducts, productDetails, acceptProduct, rejectProduct, deleteLocalProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus, createOffer, listOffers, updateOffer, deleteOffer, getWelcomeImage, uploadWelcomeImage, deleteWelcomeImage, saveStorePopularProducts, updateStoreRating, syncSellerProductsToOnline, fixPurseProductsCategory, getAppThemeSettings, updateAppThemeSettings, getAdminStore, upsertAdminStore, deleteAdminStore, listAdminProducts, createAdminProduct, updateAdminProduct, deleteAdminProduct, uploadThemeMedia } from "../controllers/adminController.js";
+import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, listSellerProducts, productDetails, acceptProduct, rejectProduct, deleteLocalProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus, createOffer, listOffers, updateOffer, deleteOffer, getWelcomeImage, uploadWelcomeImage, deleteWelcomeImage, saveStorePopularProducts, updateStoreRating, resetAllRatings, syncSellerProductsToOnline, fixPurseProductsCategory, getAppThemeSettings, updateAppThemeSettings, getAdminStore, upsertAdminStore, deleteAdminStore, listAdminProducts, createAdminProduct, updateAdminProduct, deleteAdminProduct, uploadThemeMedia } from "../controllers/adminController.js";
 import { uploadAdMediaAny, uploadAdMediaMulter, uploadStoreImagesMulter, uploadPopularCategoryImageMulter } from "../helper/uploadImage.js";
 import { adminAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { createWorkHours, getAllWorkHours, updateWorkHours, deleteWorkHours } from "../controllers/workHoursController.js";
@@ -61,6 +61,9 @@ adminRouter.get(
   adminAuthentication,
   listPopularCategory
 );
+
+// ✅ Admin utility: reset ratings to 0 (run once after removing manual ratings)
+adminRouter.post("/admin/reset/all/ratings/v1", adminAuthentication, resetAllRatings);
 
 // Local Popular Category
 adminRouter.post(

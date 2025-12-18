@@ -22,6 +22,7 @@ import PopularCategory from '../models/PopularCategory.js';
 import ProductSubCategory from '../models/OnlineStore/SubCategory.js';
 import CouponHistory from '../models/CouponHistory.js';
 import StoreCategory from '../models/StoreCategory.js';
+import Product from '../models/Product.js';
 
 const { ObjectId } = mongoose.Types;
 
@@ -33,6 +34,36 @@ const calculateOffPer = (mrp, sellingPrice) => {
     const discount = ((mrp - sellingPrice) / mrp) * 100;
     const returnedValue = discount % 1 === 0 ? discount.toFixed(0) : discount.toFixed(2);
     return `${returnedValue}`; // numeric string; UI can append "% OFF"
+};
+
+// Helper: resolve an OnlineProduct when caller might send either
+// - direct OnlineProduct _id, or
+// - local Product _id (retailer product)
+const resolveOnlineProductByAnyId = async (id) => {
+    if (!id || !ObjectId.isValid(id)) {
+        return null;
+    }
+
+    // Try OnlineProduct directly first
+    let onlineProduct = await OnlineProduct.findById(id);
+    if (onlineProduct) {
+        return onlineProduct;
+    }
+
+    // If not found, treat id as local Product _id and try to find linked OnlineProduct
+    const localProduct = await Product.findById(id);
+    if (!localProduct) {
+        return null;
+    }
+
+    // Match by seller + name + manufacturer (same logic as sync in productController)
+    onlineProduct = await OnlineProduct.findOne({
+        createdBy: localProduct.createdBy,
+        name: localProduct.productName,
+        manufacturer: localProduct.companyName
+    }).sort({ createdAt: -1 });
+
+    return onlineProduct;
 };
 
 export const uploadBrandImage = async (req, res) => {
@@ -432,21 +463,31 @@ export const listProducts = async (req, res) => {
         const { search = "" } = req.query;
         const regex = new RegExp(search, "i");
 
-        // If the caller is a seller, only return products created by that seller
-        let sellerIds = [];
+        // Determine which creators' products to show
+        // - Seller: only own products
+        // - Admin/Superadmin: all seller + admin created products
+        // - Others (if any): fallback to seller products
+        let allowedCreatorIds = [];
+
         if (req?.user && req.user.role === "seller") {
-            sellerIds = [req.user._id];
+            // Seller can see only their own products
+            allowedCreatorIds = [req.user._id];
         } else {
-            // For admin panel, fetch all seller user IDs
-            const sellers = await User.find({ role: "seller" }).select("_id");
-            sellerIds = sellers.map(seller => seller._id);
+            // Admin / superadmin or other roles accessing this endpoint
+            const sellers = await User.find({ role: "seller", deleted: false }).select("_id");
+            const admins = await Admin.find({}).select("_id");
+
+            const sellerIds = sellers.map(seller => seller._id);
+            const adminIds = admins.map(admin => admin._id);
+
+            allowedCreatorIds = [...sellerIds, ...adminIds];
         }
 
         const pipeline = [
             {
                 $match: {
                     deleted: false,
-                    createdBy: { $in: sellerIds }
+                    createdBy: { $in: allowedCreatorIds }
                 }
             }
         ];
@@ -479,6 +520,105 @@ export const listProducts = async (req, res) => {
             }
         });
 
+        // Add helpful fields for UI (full units array + primaryUnit for quick display)
+        pipeline.push({
+            $addFields: {
+                primaryUnit: { $arrayElemAt: ["$units", 0] }
+            }
+        });
+
+        // ✅ Identify product creator type (seller vs admin) for UI filtering
+        pipeline.push(
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "creatorUser",
+                    pipeline: [{ $project: { role: 1 } }]
+                }
+            },
+            {
+                $lookup: {
+                    from: "admins",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "creatorAdmin",
+                    pipeline: [{ $project: { _id: 1 } }]
+                }
+            },
+            {
+                $addFields: {
+                    creatorType: {
+                        $cond: [
+                            { $gt: [{ $size: "$creatorAdmin" }, 0] },
+                            "admin",
+                            {
+                                $cond: [
+                                    {
+                                        $eq: [
+                                            { $ifNull: [{ $arrayElemAt: ["$creatorUser.role", 0] }, null] },
+                                            "seller"
+                                        ]
+                                    },
+                                    "seller",
+                                    "unknown"
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
+        );
+
+        // ✅ Attach all-time delivered order counts for automatic trending
+        pipeline.push({
+            $lookup: {
+                from: "online_orders",
+                let: { pid: "$_id" },
+                as: "orderStats",
+                pipeline: [
+                    { $match: { status: "Delivered" } },
+                    { $unwind: "$productDetails" },
+                    {
+                        $match: {
+                            $expr: { $eq: ["$productDetails.productId", "$$pid"] }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: null,
+                            orderCount: { $sum: 1 },
+                            totalQuantity: { $sum: "$productDetails.quantity" }
+                        }
+                    }
+                ]
+            }
+        });
+
+        pipeline.push({
+            $addFields: {
+                orderCount: {
+                    $ifNull: [{ $arrayElemAt: ["$orderStats.orderCount", 0] }, 0]
+                },
+                totalQuantity: {
+                    $ifNull: [{ $arrayElemAt: ["$orderStats.totalQuantity", 0] }, 0]
+                }
+            }
+        });
+
+        // No manual flag: trending comes from orders (all-time)
+        pipeline.push({
+            $addFields: {
+                autoTrending: { $gt: ["$orderCount", 0] }
+            }
+        });
+
+        // Remove helper array
+        pipeline.push({
+            $project: { orderStats: 0, creatorUser: 0, creatorAdmin: 0 }
+        });
+
         const list = await OnlineProduct.aggregate(pipeline);
         
         // Debug: Log the pipeline and results
@@ -486,7 +626,7 @@ export const listProducts = async (req, res) => {
             totalProducts: list.length,
             searchTerm: search,
             userRole: req?.user?.role,
-            sellerIdsCount: sellerIds.length,
+            allowedCreatorIdsCount: allowedCreatorIds.length,
             sampleProduct: list.length > 0 ? {
                 id: list[0]._id,
                 name: list[0].name,
@@ -556,12 +696,41 @@ export const adminProductDetails = async (req, res) => {
                 $addFields: {
                     subCategory: { $arrayElemAt: ["$subCategory", 0] },
                     productBrand: { $arrayElemAt: ["$productBrand", 0] },
-                    productCategory: { $arrayElemAt: ["$productCategory", 0] }
+                    productCategory: { $arrayElemAt: ["$productCategory", 0] },
+                    units: "$productUnits",
+                    primaryUnit: { $arrayElemAt: ["$productUnits", 0] }
                 }
             }
         ]);
         if (!details[0]) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product not found with this ID" });
+        }
+
+        // If variants are missing (common for older seller-synced products),
+        // attach them from the linked local Product document.
+        try {
+            const hasVariants =
+                (details[0].variantTemplate && String(details[0].variantTemplate).trim().length) ||
+                (Array.isArray(details[0].variantGroups) && details[0].variantGroups.length);
+
+            if (!hasVariants) {
+                const linkedLocalProduct = await Product.findOne({
+                    createdBy: details[0].createdBy,
+                    productName: details[0].name,
+                    companyName: details[0].manufacturer
+                })
+                    .select("variantTemplate variantGroups")
+                    .lean();
+
+                if (linkedLocalProduct) {
+                    details[0].variantTemplate = linkedLocalProduct.variantTemplate || null;
+                    details[0].variantGroups = Array.isArray(linkedLocalProduct.variantGroups)
+                        ? linkedLocalProduct.variantGroups
+                        : [];
+                }
+            }
+        } catch (variantErr) {
+            console.warn("⚠️ Failed to attach variant groups in admin product details:", variantErr?.message || variantErr);
         }
 
         res.status(status.OK).json({
@@ -623,7 +792,7 @@ const normalizeSubCategory = (subCategory) => {
     // Ensure icon field exists, use image as fallback if icon is missing
     return {
         ...subCategory,
-        icon: subCategory.icon || null,
+        icon: subCategory.icon || subCategory.image || null,
         displayIcon: subCategory.icon || subCategory.image || null, // Preferred: icon, fallback: image
         hasSvgIcon: subCategory.icon && subCategory.icon.endsWith('.svg')
     };
@@ -634,16 +803,16 @@ export const onlineStoreHomePage = async (req, res) => {
         // Fetch subcategories (limit 8)
         const subCategoriesRaw = await SubCategory.aggregate([
             { $match: { deleted: false } },
-            { $limit: 8 }
+            { $sort: { createdAt: -1 } }
         ]);
         
         // Normalize subcategories to ensure icon field is properly included
         const subCategories = subCategoriesRaw.map(normalizeSubCategory);
 
-        // Fetch categories (limit 8)
+        // Fetch all categories (sorted by latest)
         const categories = await Category.aggregate([
             { $match: { deleted: false } },
-            { $limit: 8 }
+            { $sort: { createdAt: -1 } }
         ]);
 
         // Fetch brands (limit 8)
@@ -1136,15 +1305,26 @@ export const onlineStoreDiscovery = async (req, res) => {
         const shouldSendBrands = requestedSections.has("popularBrands");
 
         const fetchExplore = async () => {
-            // Changed from SubCategory to Category as per user requirement - ads ke upar sirf Category show karni hai
+            // ✅ User requirement: Admin panel me subcategory hai, User app me Category hai
+            // So we need to return SubCategories as Categories for user app
             const [items, total] = await Promise.all([
-                Category.aggregate([
-                    { $match: exploreMatch },
+                SubCategory.aggregate([
+                    { 
+                        $match: {
+                            ...exploreMatch,
+                            deleted: false,
+                            storeType: 'online' // Only online store subcategories
+                        }
+                    },
                     { $sort: { createdAt: -1 } },
                     { $skip: skipCalc(explorePage, exploreLimitVal) },
                     { $limit: exploreLimitVal }
                 ]),
-                Category.countDocuments(exploreMatch)
+                SubCategory.countDocuments({
+                    ...exploreMatch,
+                    deleted: false,
+                    storeType: 'online'
+                })
             ]);
             return { items, total };
         };
@@ -1258,15 +1438,26 @@ export const onlineStoreExploreCards = async (req, res) => {
 
         const skip = (page - 1) * pageSize;
 
-        // Changed from SubCategory to Category as per user requirement - ads ke upar sirf Category show karni hai
+        // ✅ User requirement: Admin panel me subcategory hai, User app me Category hai
+        // So we need to return SubCategories as Categories for user app
         const [items, total] = await Promise.all([
-            Category.aggregate([
-                { $match: match },
+            SubCategory.aggregate([
+                { 
+                    $match: {
+                        ...match,
+                        deleted: false,
+                        storeType: 'online' // Only online store subcategories
+                    }
+                },
                 { $sort: { createdAt: -1 } },
                 { $skip: skip },
                 { $limit: pageSize }
             ]),
-            Category.countDocuments(match)
+            SubCategory.countDocuments({
+                ...match,
+                deleted: false,
+                storeType: 'online'
+            })
         ]);
 
         const totalCartCount = await fetchUserCartCount(req.user._id);
@@ -1299,19 +1490,136 @@ export const onlineStorePopularCategories = async (req, res) => {
         const search = req.query.search?.trim() || req.query.categorySearch?.trim() || '';
         const page = parsePositiveInt(req.query.skip || req.query.page, 1);
         const pageSize = parsePositiveInt(req.query.limit || req.query.categoryLimit, limit || 10);
-
-        const match = buildMatchStage(search);
         const skip = (page - 1) * pageSize;
 
-        const [items, total] = await Promise.all([
-            Category.aggregate([
-                { $match: match },
+        // ✅ Build pipeline: most ordered categories from delivered ONLINE orders
+        const baseMatch = {
+            status: "Delivered"
+        };
+
+        const pipeline = [
+            { $match: baseMatch },
+            { $unwind: "$productDetails" },
+            {
+                $group: {
+                    _id: "$productDetails.productId",
+                    orderCount: { $sum: { $toInt: "$productDetails.quantity" } }
+                }
+            },
+            {
+                $lookup: {
+                    from: "products",
+                    localField: "_id",
+                    foreignField: "_id",
+                    as: "product"
+                }
+            },
+            { $unwind: "$product" },
+            {
+                $match: {
+                    "product.deleted": { $ne: true }
+                }
+            },
+            {
+                $group: {
+                    _id: "$product.categoryId",
+                    orderCount: { $sum: "$orderCount" }
+                }
+            },
+            {
+                $lookup: {
+                    from: "product_categories",
+                    localField: "_id",
+                    foreignField: "_id",
+                    as: "category"
+                }
+            },
+            { $unwind: "$category" },
+            {
+                $match: {
+                    "category.deleted": false,
+                    ...(search
+                        ? { "category.name": { $regex: search, $options: "i" } }
+                        : {})
+                }
+            },
+            {
+                $sort: {
+                    orderCount: -1,
+                    "category.name": 1
+                }
+            },
+            {
+                $facet: {
+                    paginated: [
+                        { $skip: skip },
+                        { $limit: pageSize },
+                        {
+                            $project: {
+                                _id: "$category._id",
+                                name: "$category.name",
+                                image: "$category.image",
+                                orderCount: 1,
+                                createdAt: "$category.createdAt",
+                                updatedAt: "$category.updatedAt"
+                            }
+                        }
+                    ],
+                    total: [
+                        { $count: "count" }
+                    ]
+                }
+            }
+        ];
+
+        const aggResult = await OnlineOrder.aggregate(pipeline);
+        let items = aggResult[0]?.paginated || [];
+        const total = aggResult[0]?.total?.[0]?.count || 0;
+
+        // ✅ Attach up to 2 sample product images per category for UI tiles
+        if (items.length) {
+            const categoryIds = items.map((c) => c._id);
+
+            const sampleProducts = await Product.aggregate([
+                {
+                    $match: {
+                        deleted: { $ne: true },
+                        categoryId: { $in: categoryIds }
+                    }
+                },
                 { $sort: { createdAt: -1 } },
-                { $skip: skip },
-                { $limit: pageSize }
-            ]),
-            Category.countDocuments(match)
-        ]);
+                {
+                    $group: {
+                        _id: "$categoryId",
+                        products: {
+                            $push: {
+                                _id: "$_id",
+                                image: {
+                                    $ifNull: [
+                                        { $arrayElemAt: ["$productImages", 0] },
+                                        "$primaryImage"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    $project: {
+                        products: { $slice: ["$products", 2] }
+                    }
+                }
+            ]);
+
+            const sampleMap = new Map(
+                sampleProducts.map((p) => [p._id.toString(), p.products])
+            );
+
+            items = items.map((cat) => ({
+                ...cat,
+                sampleProducts: sampleMap.get(cat._id.toString()) || []
+            }));
+        }
 
         const totalCartCount = await fetchUserCartCount(req.user._id);
 
@@ -1323,7 +1631,7 @@ export const onlineStorePopularCategories = async (req, res) => {
                 ...buildSectionResponse({
                     key: "popularCategories",
                     title: "Popular Categories",
-                    description: "Top categories users are browsing right now",
+                    description: "Top categories users are ordering the most",
                     items,
                     total,
                     page,
@@ -1333,7 +1641,11 @@ export const onlineStorePopularCategories = async (req, res) => {
             }
         });
     } catch (error) {
-        res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
         return catchError('onlineStorePopularCategories', error, req, res);
     }
 };
@@ -1994,10 +2306,19 @@ export const onlineProductsDetails = async (req, res) => {
                 ? Number(req.query.similarLimit)
                 : 8;
 
+        const onlineProduct = await resolveOnlineProductByAnyId(id);
+        if (!onlineProduct) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Product not found with this ID"
+            });
+        }
+
         const details = await OnlineProduct.aggregate([
             {
                 $match: {
-                    _id: new ObjectId(id)
+                    _id: new ObjectId(onlineProduct._id)
                 }
             },
             {
@@ -2036,6 +2357,29 @@ export const onlineProductsDetails = async (req, res) => {
         ]);
         if (!details[0]) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product not found with this ID" });
+        }
+
+        // Attach variant template & groups from linked local Product (created via retailer panel)
+        try {
+            const linkedLocalProduct = await Product.findOne({
+                createdBy: onlineProduct.createdBy,
+                productName: onlineProduct.name,
+                companyName: onlineProduct.manufacturer
+            })
+                .select("variantTemplate variantGroups")
+                .lean();
+
+            if (linkedLocalProduct) {
+                details[0].variantTemplate = linkedLocalProduct.variantTemplate || null;
+                details[0].variantGroups = Array.isArray(linkedLocalProduct.variantGroups)
+                    ? linkedLocalProduct.variantGroups
+                    : [];
+            } else {
+                details[0].variantTemplate = details[0].variantTemplate || null;
+                details[0].variantGroups = details[0].variantGroups || [];
+            }
+        } catch (variantErr) {
+            console.warn("⚠️ Failed to attach variant groups in online product details:", variantErr?.message || variantErr);
         }
 
         // Fetch cart items
@@ -2206,16 +2550,22 @@ export const addOnlineProductToCart = async (req, res) => {
             return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter Product ID and Unit ID` });
         }
 
-        const productDetails = await OnlineProduct.findById(productId);
+        const productDetails = await resolveOnlineProductByAnyId(productId);
         if (!productDetails) {
-            return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product not found" });
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Product not found"
+            });
         }
 
         if (productDetails.deleted) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "You can't add deleted product in to the Cart" });
         }
 
-        const productUnit = await ProductUnit.findOne({ parentProduct: productId, _id: unitId });
+        const onlineProductId = productDetails._id;
+
+        const productUnit = await ProductUnit.findOne({ parentProduct: onlineProductId, _id: unitId });
         if (!productUnit) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product Unit not found" });
         }
@@ -2224,7 +2574,12 @@ export const addOnlineProductToCart = async (req, res) => {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "You can't add deleted product unit in to the Cart" });
         }
 
-        const findProductInCart = await OnlineStoreCart.findOne({ createdBy: req.user._id, productId, unitId, deleted: false });
+        const findProductInCart = await OnlineStoreCart.findOne({
+            createdBy: req.user._id,
+            productId: onlineProductId,
+            unitId,
+            deleted: false
+        });
         if (findProductInCart) {
             findProductInCart.quantity = quantity ? findProductInCart.quantity + quantity : findProductInCart.quantity + 1;
             await findProductInCart.save();
@@ -2237,9 +2592,20 @@ export const addOnlineProductToCart = async (req, res) => {
                 })
             }
 
-            res.status(status.OK).json({ status: jsonStatus.OK, success: true, message: "Product added in to the Cart", count: findProductInCart.quantity, totalCartCount });
+            res.status(status.OK).json({
+                status: jsonStatus.OK,
+                success: true,
+                message: "Product added in to the Cart",
+                count: findProductInCart.quantity,
+                totalCartCount
+            });
         } else {
-            let newCart = new OnlineStoreCart({ productId, unitId, createdBy: req.user._id, quantity: quantity || 1 });
+            let newCart = new OnlineStoreCart({
+                productId: onlineProductId,
+                unitId,
+                createdBy: req.user._id,
+                quantity: quantity || 1
+            });
             newCart = await newCart.save();
 
             let totalCartCount = 0;
@@ -2266,19 +2632,31 @@ export const incrementOnlineProductQuantityInCart = async (req, res) => {
             return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter Product and Unit ID` });
         }
 
-        const findProduct = await OnlineProduct.findById(productId);
+        const findProduct = await resolveOnlineProductByAnyId(productId);
         if (!findProduct) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product is not found with this ID" });
         }
 
-        const findProductUnit = await ProductUnit.findOne({ parentProduct: productId, _id: unitId });
+        const onlineProductId = findProduct._id;
+
+        const findProductUnit = await ProductUnit.findOne({ parentProduct: onlineProductId, _id: unitId });
         if (!findProductUnit) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product unit is not found with this ID" });
         }
 
-        const findCart = await OnlineStoreCart.findOne({ productId, unitId, createdBy: req.user._id, deleted: false });
+        const findCart = await OnlineStoreCart.findOne({
+            productId: onlineProductId,
+            unitId,
+            createdBy: req.user._id,
+            deleted: false
+        });
         if (!findCart) {
-            let newCart = new OnlineStoreCart({ productId, unitId, createdBy: req.user._id, quantity: 1 });
+            let newCart = new OnlineStoreCart({
+                productId: onlineProductId,
+                unitId,
+                createdBy: req.user._id,
+                quantity: 1
+            });
             newCart = await newCart.save();
 
             let totalCartCount = 0;
@@ -2318,17 +2696,24 @@ export const decrementOnlineProductQuantityInCart = async (req, res) => {
             return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter IDs` });
         }
 
-        const findProduct = await OnlineProduct.findById(productId);
+        const findProduct = await resolveOnlineProductByAnyId(productId);
         if (!findProduct) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product is not found with this ID" });
         }
 
-        const findProductUnit = await ProductUnit.findOne({ parentProduct: productId, _id: unitId });
+        const onlineProductId = findProduct._id;
+
+        const findProductUnit = await ProductUnit.findOne({ parentProduct: onlineProductId, _id: unitId });
         if (!findProductUnit) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product unit is not found with this ID" });
         }
 
-        const findCart = await OnlineStoreCart.findOne({ productId, unitId, createdBy: req.user._id, deleted: false });
+        const findCart = await OnlineStoreCart.findOne({
+            productId: onlineProductId,
+            unitId,
+            createdBy: req.user._id,
+            deleted: false
+        });
         if (!findCart) {
             res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: true, message: "Cart is not exist", count: 0 });
         } else {
@@ -2373,7 +2758,16 @@ export const deleteOnlineProductFromCart = async (req, res) => {
             return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter IDs` });
         }
 
-        const findCart = await OnlineStoreCart.findOne({ productId, unitId, deleted: false, createdBy: req.user._id });
+        // Normalize productId to the resolved online product id (so local Product ids also work)
+        const onlineProduct = await resolveOnlineProductByAnyId(productId);
+        const normalizedProductId = onlineProduct ? onlineProduct._id : productId;
+
+        const findCart = await OnlineStoreCart.findOne({
+            productId: normalizedProductId,
+            unitId,
+            deleted: false,
+            createdBy: req.user._id
+        });
         if (!findCart) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product is not found with this ID" });
         }

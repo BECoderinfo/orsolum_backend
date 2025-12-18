@@ -649,6 +649,35 @@ export const updateStoreRating = async (req, res) => {
     }
 };
 
+// ✅ One-time utility: reset all product/store ratings to 0 (so UI starts from 0 until order-driven ratings come)
+export const resetAllRatings = async (req, res) => {
+  try {
+    const [stores, products, onlineProducts] = await Promise.all([
+      Store.updateMany({}, { $set: { rating: 0, ratingCount: 0 } }),
+      Product.updateMany({}, { $set: { rating: 0, ratingCount: 0 } }),
+      OnlineProduct.updateMany({}, { $set: { rating: 0, ratingCount: 0 } }),
+    ]);
+
+    return res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      message: "All ratings reset to 0",
+      data: {
+        storesModified: stores?.modifiedCount ?? stores?.nModified ?? 0,
+        productsModified: products?.modifiedCount ?? products?.nModified ?? 0,
+        onlineProductsModified: onlineProducts?.modifiedCount ?? onlineProducts?.nModified ?? 0,
+      },
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("resetAllRatings", error, req, res);
+  }
+};
+
 export const createStore = async (req, res) => {
     try {
         const { name, category, information, phone, address, email, directMe } = req.body;
@@ -927,7 +956,60 @@ export const listSellerProducts = async (req, res) => {
                 $addFields: {
                     categoryName: { $arrayElemAt: ["$category.name", 0] },
                     subCategoryName: { $arrayElemAt: ["$subCategory.name", 0] },
-                    storeName: { $arrayElemAt: ["$store.name", 0] }
+                    storeName: { $arrayElemAt: ["$store.name", 0] },
+                    // Ensure offPer is calculated if missing
+                    offPer: {
+                        $cond: {
+                            if: { $and: [{ $gt: ["$mrp", 0] }, { $gt: ["$sellingPrice", 0] }] },
+                            then: {
+                                $cond: {
+                                    if: "$offPer",
+                                    then: {
+                                        $toString: {
+                                            $round: {
+                                                $multiply: [
+                                                    { $divide: [{ $subtract: ["$mrp", "$sellingPrice"] }, "$mrp"] },
+                                                    100
+                                                ]
+                                            }
+                                        }
+                                    },
+                                    else: {
+                                        $toString: {
+                                            $round: {
+                                                $multiply: [
+                                                    { $divide: [{ $subtract: ["$mrp", "$sellingPrice"] }, "$mrp"] },
+                                                    100
+                                                ]
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            else: "$offPer"
+                        }
+                    }
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    productName: 1,
+                    companyName: 1,
+                    mrp: 1,
+                    sellingPrice: 1,
+                    qty: 1,
+                    offPer: 1,
+                    categoryName: 1,
+                    subCategoryName: 1,
+                    storeName: 1,
+                    variantGroups: 1,
+                    variantTemplate: 1,
+                    units: 1,
+                    productImages: 1,
+                    primaryImage: 1,
+                    createdAt: 1,
+                    updatedAt: 1
                 }
             },
             {
