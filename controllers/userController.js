@@ -10,7 +10,6 @@ import { sendSms } from '../helper/sendSms.js';
 import axios from 'axios';
 import mongoose from 'mongoose';
 
-
 export const uploadProfileImage = async (req, res) => {
     try {
         signedUrl(req, res, 'Users/')
@@ -159,7 +158,7 @@ export const sendLoginOtp = async (req, res) => {
 
 export const registerUser = async (req, res) => {
     try {
-        const { phone, otp, state, city, name, latitude, longitude } = req.body;
+        const { phone, otp, state, city, name } = req.body;
 
         if (!phone || !otp || !state || !city || !name) {
             return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter details` });
@@ -179,64 +178,15 @@ export const registerUser = async (req, res) => {
             return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Phone number is already exists" });
         }
 
-        // Prepare user data
-        const userData = { ...req.body };
-
-        // Handle location coordinates
-        if (latitude !== undefined && longitude !== undefined) {
-            const lat = parseFloat(latitude);
-            const lng = parseFloat(longitude);
-
-            // Validate coordinates
-            if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                userData.lat = lat.toString();
-                userData.long = lng.toString();
-                console.log(`✅ User location saved: lat=${lat}, lng=${lng}`);
-            } else {
-                console.warn(`⚠️ Invalid user coordinates received: lat=${latitude}, lng=${longitude}`);
-                console.log(`🔄 Attempting to fetch coordinates from city/state...`);
-
-                // Try to fetch coordinates from city/state
-                const geoResult = await getCoordinatesFromAddress(city, state);
-                if (geoResult && geoResult.lat && geoResult.lng) {
-                    userData.lat = geoResult.lat.toString();
-                    userData.long = geoResult.lng.toString();
-                    console.log(`✅ User location fetched from address: lat=${geoResult.lat}, lng=${geoResult.lng}`);
-                } else {
-                    console.warn(`⚠️ Could not fetch user coordinates from address`);
-                }
-            }
-        } else {
-            console.log(`ℹ️ No location coordinates provided for user registration`);
-            console.log(`🔄 Attempting to fetch coordinates from city/state...`);
-
-            // Try to fetch coordinates from city/state
-            const geoResult = await getCoordinatesFromAddress(city, state);
-            if (geoResult && geoResult.lat && geoResult.lng) {
-                userData.lat = geoResult.lat.toString();
-                userData.long = geoResult.lng.toString();
-                console.log(`✅ User location fetched from address: lat=${geoResult.lat}, lng=${geoResult.lng}`);
-            } else {
-                console.warn(`⚠️ Could not fetch user coordinates from address`);
-            }
-        }
-
-        const user = new User(userData);
+        const user = new User(req.body);
         await user.save();
 
         await OtpModel.deleteOne({ _id: otpRecord._id });
 
         const token = generateToken(user._id);
 
-        res.status(status.Create).json({
-            status: jsonStatus.Create,
-            success: true,
-            data: user,
-            token,
-            message: "Registration successful"
-        });
+        res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: user, token });
     } catch (error) {
-        console.error("❌ registerUser Error:", error);
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('registerUser', error, req, res);
     }

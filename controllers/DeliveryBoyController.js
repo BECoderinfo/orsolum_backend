@@ -15,7 +15,6 @@ import WalletTransaction from '../models/WalletTransaction.js';
 import Deduction from '../models/Deduction.js';
 
 
-
 import Order from '../models/Order.js';
 import Store from '../models/Store.js';
 import User from '../models/User.js';
@@ -2654,7 +2653,7 @@ export const sendDeliveryBoyLoginOtp = async (req, res) => {
 
 export const registerDeliveryBoy = async (req, res) => {
     try {
-        const { phone, otp, state, city, latitude, longitude } = req.body;
+        const { phone, otp, state, city } = req.body;
 
         if (!phone || !otp || !state || !city) {
             return res.status(status.BadRequest).json({
@@ -2690,59 +2689,7 @@ export const registerDeliveryBoy = async (req, res) => {
             });
         }
 
-        // Create delivery boy object with location if provided
-        const deliveryBoyData = {
-            phone,
-            state,
-            city
-        };
-
-        // Add location coordinates if provided
-        if (latitude !== undefined && longitude !== undefined) {
-            const lat = parseFloat(latitude);
-            const lng = parseFloat(longitude);
-
-            // Validate coordinates
-            if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                deliveryBoyData.currentLocation = {
-                    lat: lat,
-                    lng: lng
-                };
-                console.log(`✅ Location saved for delivery boy: lat=${lat}, lng=${lng}`);
-            } else {
-                console.warn(`⚠️ Invalid coordinates received: lat=${latitude}, lng=${longitude}`);
-                console.log(`🔄 Attempting to fetch coordinates from city/state...`);
-
-                // Try to fetch coordinates from city/state
-                const geoResult = await getCoordinatesFromAddress(city, state);
-                if (geoResult && geoResult.lat && geoResult.lng) {
-                    deliveryBoyData.currentLocation = {
-                        lat: geoResult.lat,
-                        lng: geoResult.lng
-                    };
-                    console.log(`✅ Location fetched from address: lat=${geoResult.lat}, lng=${geoResult.lng}`);
-                } else {
-                    console.warn(`⚠️ Could not fetch coordinates from address`);
-                }
-            }
-        } else {
-            console.log(`ℹ️ No location coordinates provided during registration`);
-            console.log(`🔄 Attempting to fetch coordinates from city/state...`);
-
-            // Try to fetch coordinates from city/state
-            const geoResult = await getCoordinatesFromAddress(city, state);
-            if (geoResult && geoResult.lat && geoResult.lng) {
-                deliveryBoyData.currentLocation = {
-                    lat: geoResult.lat,
-                    lng: geoResult.lng
-                };
-                console.log(`✅ Location fetched from address: lat=${geoResult.lat}, lng=${geoResult.lng}`);
-            } else {
-                console.warn(`⚠️ Could not fetch coordinates from address`);
-            }
-        }
-
-        const deliveryBoy = new DeliveryBoy(deliveryBoyData);
+        const deliveryBoy = new DeliveryBoy({ phone, state, city });
         await deliveryBoy.save();
 
         await OtpModel.deleteOne({ _id: otpRecord._id });
@@ -2753,11 +2700,9 @@ export const registerDeliveryBoy = async (req, res) => {
             status: jsonStatus.Create,
             success: true,
             data: deliveryBoy,
-            token,
-            message: "Registration successful"
+            token
         });
     } catch (error) {
-        console.error("❌ registerDeliveryBoy Error:", error);
         res.status(status.InternalServerError).json({
             status: jsonStatus.InternalServerError,
             success: false,
