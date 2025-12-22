@@ -3213,19 +3213,22 @@ export const goOnlineSocket = async (io, socket, body, callback) => {
     try {
         const { deliveryBoyId } = body;
         let deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
-        if (!deliveryBoy) return callback({ success: false, message: "DeliveryBoy not found" });
+        if (!deliveryBoy) {
+            if (typeof callback === 'function') callback({ success: false, message: "DeliveryBoy not found" });
+            return;
+        }
 
         deliveryBoy.availabilityStatus = "available";
         await deliveryBoy.save();
 
         const workLog = await WorkLog.create({ deliveryBoy: deliveryBoyId, checkIn: new Date() });
 
-        callback({ success: true, message: "Online & work started", data: workLog });
+        if (typeof callback === 'function') callback({ success: true, message: "Online & work started", data: workLog });
 
         // Notify admins in realtime
         io.emit("deliveryBoyStatus", { deliveryBoyId, isOnline: true });
     } catch (err) {
-        callback({ success: false, message: err.message });
+        if (typeof callback === 'function') callback({ success: false, message: err.message });
     }
 };
 
@@ -3233,7 +3236,10 @@ export const goOfflineSocket = async (io, socket, body, callback) => {
     try {
         const { deliveryBoyId } = body;
         let deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
-        if (!deliveryBoy) return callback({ success: false, message: "DeliveryBoy not found" });
+        if (!deliveryBoy) {
+            if (typeof callback === 'function') callback({ success: false, message: "DeliveryBoy not found" });
+            return;
+        }
 
         deliveryBoy.availabilityStatus = "offline";
         await deliveryBoy.save();
@@ -3246,12 +3252,12 @@ export const goOfflineSocket = async (io, socket, body, callback) => {
             await workLog.save();
         }
 
-        callback({ success: true, message: "Offline & work ended", data: workLog });
+        if (typeof callback === 'function') callback({ success: true, message: "Offline & work ended", data: workLog });
 
         // Notify admins in realtime
         io.emit("deliveryBoyStatus", { deliveryBoyId, isOnline: false });
     } catch (err) {
-        callback({ success: false, message: err.message });
+        if (typeof callback === 'function') callback({ success: false, message: err.message });
     }
 };
 
@@ -3307,27 +3313,29 @@ export const getWorkSummarySocket = async (io, socket, body, callback) => {
         const weekMinutes = weekLogs.reduce((sum, log) => sum + (log.totalMinutes || 0), 0);
         const monthMinutes = monthLogs.reduce((sum, log) => sum + (log.totalMinutes || 0), 0);
 
-        callback({
-            success: true,
-            message: "Work summary fetched",
-            data: {
-                today: {
-                    totalMinutes: todayMinutes,
-                    totalHours: (todayMinutes / 60).toFixed(2),
-                },
-                thisWeek: {
-                    totalMinutes: weekMinutes,
-                    totalHours: (weekMinutes / 60).toFixed(2),
-                },
-                thisMonth: {
-                    totalMinutes: monthMinutes,
-                    totalHours: (monthMinutes / 60).toFixed(2),
+        if (typeof callback === 'function') {
+            callback({
+                success: true,
+                message: "Work summary fetched",
+                data: {
+                    today: {
+                        totalMinutes: todayMinutes,
+                        totalHours: (todayMinutes / 60).toFixed(2),
+                    },
+                    thisWeek: {
+                        totalMinutes: weekMinutes,
+                        totalHours: (weekMinutes / 60).toFixed(2),
+                    },
+                    thisMonth: {
+                        totalMinutes: monthMinutes,
+                        totalHours: (monthMinutes / 60).toFixed(2),
+                    }
                 }
-            }
-        });
+            });
+        }
 
     } catch (err) {
-        callback({ success: false, message: err.message });
+        if (typeof callback === 'function') callback({ success: false, message: err.message });
     }
 };
 
