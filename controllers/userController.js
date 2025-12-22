@@ -9,6 +9,8 @@ import OTP_GENERATOR from "otp-generator";
 import { sendSms } from '../helper/sendSms.js';
 import axios from 'axios';
 import mongoose from 'mongoose';
+import { getCoordinatesFromAddress } from '../helper/latAndLong.js';
+
 
 export const uploadProfileImage = async (req, res) => {
     try {
@@ -24,28 +26,28 @@ export const sendRegisterOtp = async (req, res) => {
         const { phone } = req.body;
 
         if (!phone) {
-            return res.status(status.BadRequest).json({ 
-                status: jsonStatus.BadRequest, 
-                success: false, 
-                message: `Please enter phone number` 
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: `Please enter phone number`
             });
         }
 
         const userRecord = await User.findOne({ phone });
         if (userRecord) {
-            return res.status(status.BadRequest).json({ 
-                status: jsonStatus.BadRequest, 
-                success: false, 
-                message: `${userRecord.role === 'user' ? 'User account' : 'Retailer account'}  Already exists with ${phone} mobile number.` 
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: `${userRecord.role === 'user' ? 'User account' : 'Retailer account'}  Already exists with ${phone} mobile number.`
             });
         }
 
         // Generate OTP
-        const otp = OTP_GENERATOR.generate(6, { 
-            upperCaseAlphabets: false, 
-            specialChars: false, 
-            lowerCaseAlphabets: false, 
-            digits: true 
+        const otp = OTP_GENERATOR.generate(6, {
+            upperCaseAlphabets: false,
+            specialChars: false,
+            lowerCaseAlphabets: false,
+            digits: true
         });
 
         // Save OTP first (don't wait for SMS to complete)
@@ -71,17 +73,17 @@ export const sendRegisterOtp = async (req, res) => {
             });
 
         // Send response immediately without waiting for SMS
-        res.status(status.OK).json({ 
-            status: jsonStatus.OK, 
-            success: true, 
-            message: `OTP has been sent to ${phone}` 
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: `OTP has been sent to ${phone}`
         });
     } catch (error) {
         console.error("sendRegisterOtp Error:", error);
-        res.status(status.InternalServerError).json({ 
-            status: jsonStatus.InternalServerError, 
-            success: false, 
-            message: error.message 
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
         });
         return catchError('sendRegisterOtp', error, req, res);
     }
@@ -115,11 +117,11 @@ export const sendLoginOtp = async (req, res) => {
         await OtpModel.deleteMany({ phone });
 
         // Generate OTP
-        const otp = OTP_GENERATOR.generate(6, { 
-            upperCaseAlphabets: false, 
-            specialChars: false, 
-            lowerCaseAlphabets: false, 
-            digits: true 
+        const otp = OTP_GENERATOR.generate(6, {
+            upperCaseAlphabets: false,
+            specialChars: false,
+            lowerCaseAlphabets: false,
+            digits: true
         });
 
         // Save OTP first (don't wait for SMS to complete)
@@ -145,10 +147,10 @@ export const sendLoginOtp = async (req, res) => {
             });
 
         // Send response immediately without waiting for SMS
-        res.status(status.OK).json({ 
-            status: jsonStatus.OK, 
-            success: true, 
-            message: `OTP has been sent to ${phone}` 
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            message: `OTP has been sent to ${phone}`
         });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
@@ -158,7 +160,7 @@ export const sendLoginOtp = async (req, res) => {
 
 export const registerUser = async (req, res) => {
     try {
-        const { phone, otp, state, city, name } = req.body;
+        const { phone, otp, state, city, name, latitude, longitude } = req.body;
 
         if (!phone || !otp || !state || !city || !name) {
             return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter details` });
@@ -178,15 +180,64 @@ export const registerUser = async (req, res) => {
             return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: "Phone number is already exists" });
         }
 
-        const user = new User(req.body);
+        // Prepare user data
+        const userData = { ...req.body };
+
+        // Handle location coordinates
+        if (latitude !== undefined && longitude !== undefined) {
+            const lat = parseFloat(latitude);
+            const lng = parseFloat(longitude);
+
+            // Validate coordinates
+            if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+                userData.lat = lat.toString();
+                userData.long = lng.toString();
+                console.log(`✅ User location saved: lat=${lat}, lng=${lng}`);
+            } else {
+                console.warn(`⚠️ Invalid user coordinates received: lat=${latitude}, lng=${longitude}`);
+                console.log(`🔄 Attempting to fetch coordinates from city/state...`);
+
+                // Try to fetch coordinates from city/state
+                const geoResult = await getCoordinatesFromAddress(city, state);
+                if (geoResult && geoResult.lat && geoResult.lng) {
+                    userData.lat = geoResult.lat.toString();
+                    userData.long = geoResult.lng.toString();
+                    console.log(`✅ User location fetched from address: lat=${geoResult.lat}, lng=${geoResult.lng}`);
+                } else {
+                    console.warn(`⚠️ Could not fetch user coordinates from address`);
+                }
+            }
+        } else {
+            console.log(`ℹ️ No location coordinates provided for user registration`);
+            console.log(`🔄 Attempting to fetch coordinates from city/state...`);
+
+            // Try to fetch coordinates from city/state
+            const geoResult = await getCoordinatesFromAddress(city, state);
+            if (geoResult && geoResult.lat && geoResult.lng) {
+                userData.lat = geoResult.lat.toString();
+                userData.long = geoResult.lng.toString();
+                console.log(`✅ User location fetched from address: lat=${geoResult.lat}, lng=${geoResult.lng}`);
+            } else {
+                console.warn(`⚠️ Could not fetch user coordinates from address`);
+            }
+        }
+
+        const user = new User(userData);
         await user.save();
 
         await OtpModel.deleteOne({ _id: otpRecord._id });
 
         const token = generateToken(user._id);
 
-        res.status(status.Create).json({ status: jsonStatus.Create, success: true, data: user, token });
+        res.status(status.Create).json({
+            status: jsonStatus.Create,
+            success: true,
+            data: user,
+            token,
+            message: "Registration successful"
+        });
     } catch (error) {
+        console.error("❌ registerUser Error:", error);
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('registerUser', error, req, res);
     }
@@ -794,10 +845,10 @@ export const logoutUser = async (req, res) => {
         // In a token-based system, logout is typically handled client-side by removing the token
         // However, we can add server-side logic here if needed (e.g., token blacklisting)
         // For now, we just confirm the logout was successful
-        
+
         // Optional: You can add token blacklisting logic here if needed
         // For example, store the token in a blacklist cache/database
-        
+
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,

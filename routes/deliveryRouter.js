@@ -89,13 +89,52 @@ deliveryRouter.post('/deliveryboy/register/v1', registerDeliveryBoy);
 deliveryRouter.post('/deliveryboy/login/v1', loginDeliveryBoy);
 deliveryRouter.get('/deliveryboy/is/exist/v1', isDeliveryBoyExist);
 
+// Test endpoint for location geocoding
+deliveryRouter.get('/deliveryboy/test/geocode/v1', async (req, res) => {
+    try {
+        const { city, state } = req.query;
+
+        if (!city || !state) {
+            return res.status(400).json({
+                success: false,
+                message: "Please provide city and state query parameters"
+            });
+        }
+
+        // Import the helper function
+        const { getCoordinatesFromAddress } = await import('../helper/latAndLong.js');
+
+        const result = await getCoordinatesFromAddress(city, state);
+
+        if (result && result.lat && result.lng) {
+            return res.status(200).json({
+                success: true,
+                message: "Geocoding successful",
+                data: result
+            });
+        } else {
+            return res.status(404).json({
+                success: false,
+                message: "Could not fetch coordinates for the given address"
+            });
+        }
+    } catch (error) {
+        console.error("Test geocode error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+
 // Image is optional - user can update profile with or without image
 const conditionalMulterUpload = (req, res, next) => {
     const contentType = req.headers['content-type'] || '';
-    
+
     // Debug logging for troubleshooting
     console.log("📦 Update Profile - Content-Type:", contentType);
-    
+
     if (contentType.includes('multipart/form-data')) {
         uploadDeliveryBoyImage.single('image')(req, res, (err) => {
             if (err) {
@@ -139,17 +178,17 @@ const conditionalMulterUpload = (req, res, next) => {
 // - PUT /deliveryboy/update/profile/v1          (ID inferred from token)
 // - PUT /deliveryboy/update/profile/v1/:id     (ID from params, fallback to token)
 deliveryRouter.put(
-  "/deliveryboy/update/profile/v1/:id",
-  deliveryBoyAuthentication,
-  conditionalMulterUpload,
-  updateDeliveryBoyProfile
+    "/deliveryboy/update/profile/v1/:id",
+    deliveryBoyAuthentication,
+    conditionalMulterUpload,
+    updateDeliveryBoyProfile
 );
 
 deliveryRouter.put(
-  "/deliveryboy/update/profile/v1",
-  deliveryBoyAuthentication,
-  conditionalMulterUpload,
-  updateDeliveryBoyProfile
+    "/deliveryboy/update/profile/v1",
+    deliveryBoyAuthentication,
+    conditionalMulterUpload,
+    updateDeliveryBoyProfile
 );
 
 /* ===========================

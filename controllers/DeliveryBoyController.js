@@ -13,6 +13,8 @@ import { signedUrl } from '../helper/s3.config.js';
 import Settlement from '../models/Settlement.js';
 import WalletTransaction from '../models/WalletTransaction.js';
 import Deduction from '../models/Deduction.js';
+import { getCoordinatesFromAddress } from '../helper/latAndLong.js';
+
 
 
 import Order from '../models/Order.js';
@@ -29,8 +31,8 @@ const formatFullName = (firstName, lastName, fallback = '') => {
 
 // Helper function to format currentLocation - returns null if empty or invalid
 const formatCurrentLocation = (currentLocation) => {
-    if (!currentLocation || 
-        typeof currentLocation.lat !== 'number' || 
+    if (!currentLocation ||
+        typeof currentLocation.lat !== 'number' ||
         typeof currentLocation.lng !== 'number' ||
         isNaN(currentLocation.lat) ||
         isNaN(currentLocation.lng)) {
@@ -799,7 +801,7 @@ export const completeDelivery = async (req, res) => {
         const deliveryBoy = await DeliveryBoy.findById(deliveryBoyId);
         deliveryBoy.totalDeliveries += 1;
         deliveryBoy.availabilityStatus = "available";
-        
+
         // Credit delivery earning (₹50 per delivery)
         const deliveryEarning = 50;
         const newWalletBalance = (deliveryBoy.walletBalance || 0) + deliveryEarning;
@@ -1482,14 +1484,14 @@ export const getAssignedDeliveries = async (req, res) => {
 
         // Backfill pickup_addresses from Store if order has empty pickup_addresses
         // Get unique storeIds that need backfilling
-        const ordersNeedingBackfill = allAssignedDeliveries.filter(order => 
-            (!order.shiprocket?.pickup_addresses || order.shiprocket.pickup_addresses.length === 0) && 
+        const ordersNeedingBackfill = allAssignedDeliveries.filter(order =>
+            (!order.shiprocket?.pickup_addresses || order.shiprocket.pickup_addresses.length === 0) &&
             order.storeId
         );
 
         if (ordersNeedingBackfill.length > 0) {
             // Get unique storeIds
-            const storeIds = [...new Set(ordersNeedingBackfill.map(order => 
+            const storeIds = [...new Set(ordersNeedingBackfill.map(order =>
                 order.storeId?._id || order.storeId
             ).filter(Boolean))];
 
@@ -1538,12 +1540,12 @@ export const getAssignedDeliveries = async (req, res) => {
                     if (!order.shiprocket) {
                         order.shiprocket = {};
                     }
-                    
+
                     // Populate pickup_addresses from Store using the map
                     order.shiprocket.pickup_addresses = store.shiprocket.pickup_addresses
                         .map(id => pickupAddressMap.get(id.toString()))
                         .filter(Boolean);
-                    
+
                     // Populate default_pickup_address if exists
                     if (store.shiprocket.default_pickup_address) {
                         const defaultPickup = pickupAddressMap.get(store.shiprocket.default_pickup_address.toString());
@@ -1747,11 +1749,11 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
             acc[status.toLowerCase()] = status;
             return acc;
         }, {});
-        
+
         let statusFilter = allowedStatuses;
         if (statusQuery !== 'all') {
             const normalizedQuery = statusQuery.toLowerCase();
-            
+
             if (statusAliasMap[normalizedQuery]) {
                 statusFilter = statusAliasMap[normalizedQuery];
             } else {
@@ -1817,35 +1819,35 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
 
         const formatAddress = (address = {}) => {
             if (!address || typeof address !== 'object') return '';
-            
+
             // Build address from available fields
             const parts = [];
-            
+
             // Primary address line
             if (address.address_1) {
                 parts.push(address.address_1);
             }
-            
+
             // Flat/House number
             if (address.flatHouse) {
                 parts.push(address.flatHouse);
             }
-            
+
             // Landmark
             if (address.landmark) {
                 parts.push(address.landmark);
             }
-            
+
             // City, State, Pincode
             const cityStatePincode = [];
             if (address.city) cityStatePincode.push(address.city);
             if (address.state) cityStatePincode.push(address.state);
             if (address.pincode) cityStatePincode.push(address.pincode);
-            
+
             if (cityStatePincode.length > 0) {
                 parts.push(cityStatePincode.join(', '));
             }
-            
+
             // Fallback to other possible fields
             if (parts.length === 0) {
                 return address.formattedAddress ||
@@ -1854,7 +1856,7 @@ export const getDashboardAssignedDeliveries = async (req, res) => {
                     address.street ||
                     '';
             }
-            
+
             return parts.join(', ');
         };
 
@@ -2653,7 +2655,7 @@ export const sendDeliveryBoyLoginOtp = async (req, res) => {
 
 export const registerDeliveryBoy = async (req, res) => {
     try {
-        const { phone, otp, state, city } = req.body;
+        const { phone, otp, state, city, latitude, longitude } = req.body;
 
         if (!phone || !otp || !state || !city) {
             return res.status(status.BadRequest).json({
@@ -2689,7 +2691,59 @@ export const registerDeliveryBoy = async (req, res) => {
             });
         }
 
-        const deliveryBoy = new DeliveryBoy({ phone, state, city });
+        // Create delivery boy object with location if provided
+        const deliveryBoyData = {
+            phone,
+            state,
+            city
+        };
+
+        // Add location coordinates if provided
+        if (latitude !== undefined && longitude !== undefined) {
+            const lat = parseFloat(latitude);
+            const lng = parseFloat(longitude);
+
+            // Validate coordinates
+            if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+                deliveryBoyData.currentLocation = {
+                    lat: lat,
+                    lng: lng
+                };
+                console.log(`✅ Location saved for delivery boy: lat=${lat}, lng=${lng}`);
+            } else {
+                console.warn(`⚠️ Invalid coordinates received: lat=${latitude}, lng=${longitude}`);
+                console.log(`🔄 Attempting to fetch coordinates from city/state...`);
+
+                // Try to fetch coordinates from city/state
+                const geoResult = await getCoordinatesFromAddress(city, state);
+                if (geoResult && geoResult.lat && geoResult.lng) {
+                    deliveryBoyData.currentLocation = {
+                        lat: geoResult.lat,
+                        lng: geoResult.lng
+                    };
+                    console.log(`✅ Location fetched from address: lat=${geoResult.lat}, lng=${geoResult.lng}`);
+                } else {
+                    console.warn(`⚠️ Could not fetch coordinates from address`);
+                }
+            }
+        } else {
+            console.log(`ℹ️ No location coordinates provided during registration`);
+            console.log(`🔄 Attempting to fetch coordinates from city/state...`);
+
+            // Try to fetch coordinates from city/state
+            const geoResult = await getCoordinatesFromAddress(city, state);
+            if (geoResult && geoResult.lat && geoResult.lng) {
+                deliveryBoyData.currentLocation = {
+                    lat: geoResult.lat,
+                    lng: geoResult.lng
+                };
+                console.log(`✅ Location fetched from address: lat=${geoResult.lat}, lng=${geoResult.lng}`);
+            } else {
+                console.warn(`⚠️ Could not fetch coordinates from address`);
+            }
+        }
+
+        const deliveryBoy = new DeliveryBoy(deliveryBoyData);
         await deliveryBoy.save();
 
         await OtpModel.deleteOne({ _id: otpRecord._id });
@@ -2700,9 +2754,11 @@ export const registerDeliveryBoy = async (req, res) => {
             status: jsonStatus.Create,
             success: true,
             data: deliveryBoy,
-            token
+            token,
+            message: "Registration successful"
         });
     } catch (error) {
+        console.error("❌ registerDeliveryBoy Error:", error);
         res.status(status.InternalServerError).json({
             status: jsonStatus.InternalServerError,
             success: false,
@@ -2778,7 +2834,7 @@ export const updateDeliveryBoyProfile = async (req, res) => {
         if ((!id || id === "undefined" || id === "null") && req.user?._id) {
             id = req.user._id;
         }
-        
+
         // Extract fields from body (body might be empty if only image is being updated)
         let { firstName, lastName, email, phone, state, city, dob } = req.body || {};
 
@@ -2808,7 +2864,7 @@ export const updateDeliveryBoyProfile = async (req, res) => {
 
         // Build update object with only provided fields
         const updateData = {};
-        
+
         // Improved validation: check if field exists and is not empty after trimming
         if (firstName !== undefined && firstName !== null && String(firstName).trim() !== '') {
             updateData.firstName = String(firstName).trim();
@@ -2863,15 +2919,15 @@ export const updateDeliveryBoyProfile = async (req, res) => {
                     message: "Please enter a valid email address."
                 });
             }
-            
+
             // Check if email is being changed
             if (existingDeliveryBoy.email && existingDeliveryBoy.email.toLowerCase() !== newEmail) {
                 // Email is being changed, check if new email already exists for another delivery boy
-                const emailExists = await DeliveryBoy.findOne({ 
+                const emailExists = await DeliveryBoy.findOne({
                     email: newEmail,
                     _id: { $ne: id } // Exclude current delivery boy
                 });
-                
+
                 if (emailExists) {
                     return res.status(400).json({
                         success: false,
@@ -2880,11 +2936,11 @@ export const updateDeliveryBoyProfile = async (req, res) => {
                 }
             } else if (!existingDeliveryBoy.email) {
                 // Current delivery boy doesn't have email, check if new email exists
-                const emailExists = await DeliveryBoy.findOne({ 
+                const emailExists = await DeliveryBoy.findOne({
                     email: newEmail,
                     _id: { $ne: id } // Exclude current delivery boy
                 });
-                
+
                 if (emailExists) {
                     return res.status(400).json({
                         success: false,
@@ -2897,15 +2953,15 @@ export const updateDeliveryBoyProfile = async (req, res) => {
         }
         if (phone !== undefined && phone !== null && String(phone).trim() !== '') {
             const newPhone = String(phone).trim();
-            
+
             // Check if phone is being changed
             if (existingDeliveryBoy.phone && existingDeliveryBoy.phone !== newPhone) {
                 // Phone is being changed, check if new phone already exists for another delivery boy
-                const phoneExists = await DeliveryBoy.findOne({ 
+                const phoneExists = await DeliveryBoy.findOne({
                     phone: newPhone,
                     _id: { $ne: id } // Exclude current delivery boy
                 });
-                
+
                 if (phoneExists) {
                     return res.status(400).json({
                         success: false,
@@ -2965,14 +3021,14 @@ export const updateDeliveryBoyProfile = async (req, res) => {
         if (error.code === 11000 || error.message.includes('duplicate key')) {
             const field = error.keyPattern ? Object.keys(error.keyPattern)[0] : 'field';
             const value = error.keyValue ? Object.values(error.keyValue)[0] : 'value';
-            
+
             let message = `This ${field} is already registered with another account.`;
             if (field === 'email') {
                 message = `Email "${value}" is already registered with another account. Please use a different email.`;
             } else if (field === 'phone') {
                 message = `Phone number "${value}" is already registered with another account. Please use a different phone number.`;
             }
-            
+
             return res.status(400).json({
                 success: false,
                 message: message,
@@ -2980,7 +3036,7 @@ export const updateDeliveryBoyProfile = async (req, res) => {
                 value: value
             });
         }
-        
+
         // Handle other errors
         console.error("❌ Update Profile Error:", error);
         return res.status(500).json({

@@ -54,11 +54,11 @@ export const processGoogleMapsLink = async (url) => {
           console.error("Google Maps API key is not configured");
           return { lat: null, lng: null };
         }
-        
+
         const apiUrl = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(
           query
         )}&inputtype=textquery&fields=geometry&key=${GOOGLE_MAPS_API_KEY}`;
-        
+
         const response = await fetch(apiUrl);
         const data = await response.json();
 
@@ -70,13 +70,13 @@ export const processGoogleMapsLink = async (url) => {
           const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${GOOGLE_MAPS_API_KEY}`;
           const geocodeResponse = await fetch(geocodeUrl);
           const geocodeData = await geocodeResponse.json();
-          
+
           if (geocodeData.status === "OK" && geocodeData.results && geocodeData.results.length > 0) {
             const { lat, lng } = geocodeData.results[0].geometry.location;
             return { lat, lng };
           }
         }
-        
+
         console.warn("Google Maps API returned:", data.status);
         return { lat: null, lng: null };
       } catch (error) {
@@ -144,21 +144,21 @@ export const getDistanceAndTime = async (origin, destination) => {
 
     const origins = `${origin.lat},${origin.lng}`;
     const destinations = `${destination.lat},${destination.lng}`;
-    
+
     const apiUrl = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${origins}&destinations=${destinations}&mode=driving&key=${GOOGLE_MAPS_API_KEY}`;
-    
+
     const response = await fetch(apiUrl);
     const data = await response.json();
 
     if (data.status === "OK" && data.rows && data.rows[0] && data.rows[0].elements && data.rows[0].elements[0]) {
       const element = data.rows[0].elements[0];
-      
+
       if (element.status === "OK") {
         // Distance in meters, convert to km
         const distanceKm = element.distance.value / 1000;
         // Duration in seconds, convert to minutes
         const durationMinutes = element.duration.value / 60;
-        
+
         return {
           distance: Math.round(distanceKm * 10) / 10, // Round to 1 decimal place
           duration: Math.ceil(durationMinutes), // Round up to nearest minute
@@ -175,6 +175,62 @@ export const getDistanceAndTime = async (origin, destination) => {
     }
   } catch (error) {
     console.error("Error fetching distance and time from Google Maps:", error);
+    return null;
+  }
+};
+
+/**
+ * Get coordinates from address (city, state, country)
+ * @param {string} city - City name
+ * @param {string} state - State name
+ * @param {string} country - Country name (optional, defaults to India)
+ * @returns {Promise<{lat: number, lng: number, formattedAddress: string} | null>}
+ */
+export const getCoordinatesFromAddress = async (city, state, country = "India") => {
+  try {
+    if (!GOOGLE_MAPS_API_KEY) {
+      console.warn("Google Maps API key not configured");
+      return null;
+    }
+
+    if (!city || !state) {
+      console.warn("City and state are required");
+      return null;
+    }
+
+    // Build address string
+    const addressParts = [city, state, country].filter(Boolean);
+    const address = addressParts.join(", ");
+
+    const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${GOOGLE_MAPS_API_KEY}`;
+
+    console.log(`🔍 Geocoding address: "${address}"`);
+
+    const response = await fetch(geocodeUrl);
+    const data = await response.json();
+
+    if (data.status === "OK" && data.results && data.results.length > 0) {
+      const result = data.results[0];
+      const { lat, lng } = result.geometry.location;
+      const formattedAddress = result.formatted_address;
+
+      console.log(`✅ Geocoding successful: lat=${lat}, lng=${lng}`);
+      console.log(`📍 Formatted address: ${formattedAddress}`);
+
+      return {
+        lat,
+        lng,
+        formattedAddress
+      };
+    } else {
+      console.warn(`⚠️ Geocoding failed with status: ${data.status}`);
+      if (data.error_message) {
+        console.warn(`Error message: ${data.error_message}`);
+      }
+      return null;
+    }
+  } catch (error) {
+    console.error("❌ Error fetching coordinates from address:", error);
     return null;
   }
 };
