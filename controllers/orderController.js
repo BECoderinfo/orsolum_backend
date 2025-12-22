@@ -31,6 +31,8 @@ import User from "../models/User.js";
 
 const { ObjectId } = mongoose.Types;
 
+import { processGoogleMapsLink } from "../helper/latAndLong.js";
+
 let limit = process.env.LIMIT;
 limit = limit ? Number(limit) : 10;
 
@@ -130,9 +132,9 @@ const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(toRadians(lat1)) *
-      Math.cos(toRadians(lat2)) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
+    Math.cos(toRadians(lat2)) *
+    Math.sin(dLon / 2) *
+    Math.sin(dLon / 2);
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   const distance = earthRadiusKm * c;
@@ -252,7 +254,7 @@ export const createOrder = async (req, res) => {
 
         // Get store to copy pickup_addresses
         const store = await Store.findById(item.storeId);
-        
+
         const newOrder = new Order({
           address,
           createdBy: req.user._id,
@@ -412,11 +414,11 @@ export const addProductToCart = async (req, res) => {
 
     // ✅ Validate product belongs to the specified store
     // Handle both populated and non-populated storeId
-    const productStoreId = productDetails.storeId?._id 
-      ? productDetails.storeId._id.toString() 
-      : productDetails.storeId?.toString() 
-      ? productDetails.storeId.toString() 
-      : null;
+    const productStoreId = productDetails.storeId?._id
+      ? productDetails.storeId._id.toString()
+      : productDetails.storeId?.toString()
+        ? productDetails.storeId.toString()
+        : null;
 
     if (!productStoreId || productStoreId !== storeId.toString()) {
       return res.status(status.BadRequest).json({
@@ -987,9 +989,9 @@ export const cartDetails = async (req, res) => {
 
     const addressDistanceKm =
       storeLat !== null &&
-      storeLong !== null &&
-      Number.isFinite(addressLat) &&
-      Number.isFinite(addressLong)
+        storeLong !== null &&
+        Number.isFinite(addressLat) &&
+        Number.isFinite(addressLong)
         ? calculateDistanceKm(storeLat, storeLong, addressLat, addressLong)
         : null;
 
@@ -1615,6 +1617,22 @@ export const createAddress = async (req, res) => {
       });
     }
 
+    let finalLat = lat ? lat.toString() : "0";
+    let finalLong = long ? long.toString() : "0";
+
+    // Extract coordinates from mapLink if lat/long are not provided and link exists
+    if (mapLink && (finalLat === "0" || finalLong === "0")) {
+      try {
+        const coords = await processGoogleMapsLink(mapLink);
+        if (coords && coords.lat && coords.lng) {
+          finalLat = coords.lat.toString();
+          finalLong = coords.lng.toString();
+        }
+      } catch (err) {
+        console.warn("Failed to extract coordinates from mapLink in createAddress:", err.message);
+      }
+    }
+
     // Generate default values for required fields if not provided
     const addressData = {
       address_1: typeof address_1 === 'string' ? address_1.trim() : address_1,
@@ -1624,9 +1642,9 @@ export const createAddress = async (req, res) => {
       city: city ? (typeof city === 'string' ? city.trim() : city.toString()) : "",
       state: state ? (typeof state === 'string' ? state.trim() : state.toString()) : "",
       landmark: landmark ? (typeof landmark === 'string' ? landmark.trim() : landmark.toString()) : "",
-      mapLink: mapLink ? (typeof mapLink === 'string' ? mapLink.trim() : mapLink.toString()) : `https://maps.google.com/?q=${lat || ""},${long || ""}`,
-      lat: lat ? lat.toString() : "0",
-      long: long ? long.toString() : "0",
+      mapLink: mapLink ? (typeof mapLink === 'string' ? mapLink.trim() : mapLink.toString()) : `https://maps.google.com/?q=${finalLat},${finalLong}`,
+      lat: finalLat,
+      long: finalLong,
       number: req.user?.phone || "",
       createdBy: req.user._id,
       type: normalizedType || "Home",
@@ -1637,11 +1655,11 @@ export const createAddress = async (req, res) => {
 
     return res
       .status(status.OK)
-      .json({ 
-        status: jsonStatus.OK, 
-        success: true, 
+      .json({
+        status: jsonStatus.OK,
+        success: true,
         message: "Address created successfully",
-        data: newAddress 
+        data: newAddress
       });
   } catch (error) {
     // Handle validation errors
@@ -1652,7 +1670,7 @@ export const createAddress = async (req, res) => {
         message: error.message || "Validation error",
       });
     }
-    
+
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
@@ -1730,6 +1748,19 @@ export const editAddress = async (req, res) => {
       updatePayload.type = normalizedType;
     }
 
+    // Process mapLink to extract coordinates if it's being updated
+    if (req.body.mapLink && (!req.body.lat || !req.body.long)) {
+      try {
+        const coords = await processGoogleMapsLink(req.body.mapLink);
+        if (coords && coords.lat && coords.lng) {
+          updatePayload.lat = coords.lat.toString();
+          updatePayload.long = coords.lng.toString();
+        }
+      } catch (err) {
+        console.warn("Failed to extract coordinates from mapLink in editAddress:", err.message);
+      }
+    }
+
     // Update address
     const updateAddress = await Address.findByIdAndUpdate(
       id,
@@ -1750,11 +1781,11 @@ export const editAddress = async (req, res) => {
 
     return res
       .status(status.OK)
-      .json({ 
-        status: jsonStatus.OK, 
-        success: true, 
+      .json({
+        status: jsonStatus.OK,
+        success: true,
         message: "Address updated successfully",
-        data: updateAddress 
+        data: updateAddress
       });
   } catch (error) {
     // Handle validation errors
@@ -1765,7 +1796,7 @@ export const editAddress = async (req, res) => {
         message: error.message || "Validation error",
       });
     }
-    
+
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
@@ -1994,25 +2025,25 @@ export const createOrderV2 = async (req, res) => {
     // ✅ Validate all products exist and are available
     const validCarts = [];
     const invalidProducts = [];
-    
+
     for (const cart of carts) {
       if (!cart.productId) {
         invalidProducts.push(`Product ID: ${cart.productId || 'Unknown'}`);
         continue;
       }
-      
+
       // Check if product is deleted or not active
       if (cart.productId.deleted || cart.productId.status !== "A") {
         invalidProducts.push(cart.productId.productName || 'Unknown Product');
         continue;
       }
-      
+
       // Validate required fields
       if (typeof cart.productId.sellingPrice !== 'number' || cart.productId.sellingPrice <= 0) {
         invalidProducts.push(`${cart.productId.productName || 'Product'}: Invalid price`);
         continue;
       }
-      
+
       validCarts.push(cart);
     }
 
@@ -2020,7 +2051,7 @@ export const createOrderV2 = async (req, res) => {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
-        message: invalidProducts.length > 0 
+        message: invalidProducts.length > 0
           ? `Some products are no longer available: ${invalidProducts.join(', ')}`
           : "No valid products found in cart",
       });
@@ -2171,7 +2202,7 @@ export const createOrderV2 = async (req, res) => {
     let cashFreeSession;
     let cf_order_id;
     let paymentSessionId;
-    
+
     try {
       cashFreeSession = await axios.post(
         process.env.CF_CREATE_PRODUCT_URL,
@@ -2316,10 +2347,10 @@ export const createOrderV2 = async (req, res) => {
   } catch (error) {
     console.error("Error in createOrderV2:", error);
     console.error("Error stack:", error.stack);
-    
+
     // ✅ Provide more descriptive error messages
     let errorMessage = "Failed to create order. Please try again.";
-    
+
     if (error.name === 'ValidationError') {
       errorMessage = "Invalid order data. Please check your cart and address.";
     } else if (error.name === 'CastError') {
@@ -2327,7 +2358,7 @@ export const createOrderV2 = async (req, res) => {
     } else if (error.message) {
       errorMessage = error.message;
     }
-    
+
     return res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
@@ -2611,16 +2642,18 @@ export const orderListV2 = async (req, res) => {
                   { $ne: ["$storeId", null] },
                   { $ne: [{ $toString: "$storeId" }, ""] },
                   { $ne: [{ $toString: "$storeId" }, "0"] },
-                  { $or: [
-                    { $eq: [{ $type: "$storeId" }, "objectId"] },
-                    {
-                      $and: [
-                        { $eq: [{ $type: "$storeId" }, "string"] },
-                        { $eq: [{ $strLenCP: { $toString: "$storeId" } }, 24] },
-                        { $regexMatch: { input: { $toString: "$storeId" }, regex: /^[0-9a-fA-F]{24}$/ } }
-                      ]
-                    }
-                  ]}
+                  {
+                    $or: [
+                      { $eq: [{ $type: "$storeId" }, "objectId"] },
+                      {
+                        $and: [
+                          { $eq: [{ $type: "$storeId" }, "string"] },
+                          { $eq: [{ $strLenCP: { $toString: "$storeId" } }, 24] },
+                          { $regexMatch: { input: { $toString: "$storeId" }, regex: /^[0-9a-fA-F]{24}$/ } }
+                        ]
+                      }
+                    ]
+                  }
                 ]
               },
               then: {
@@ -2678,16 +2711,18 @@ export const orderListV2 = async (req, res) => {
                   { $ne: ["$productDetails.productId", null] },
                   { $ne: [{ $toString: "$productDetails.productId" }, ""] },
                   { $ne: [{ $toString: "$productDetails.productId" }, "0"] },
-                  { $or: [
-                    { $eq: [{ $type: "$productDetails.productId" }, "objectId"] },
-                    {
-                      $and: [
-                        { $eq: [{ $type: "$productDetails.productId" }, "string"] },
-                        { $eq: [{ $strLenCP: { $toString: "$productDetails.productId" } }, 24] },
-                        { $regexMatch: { input: { $toString: "$productDetails.productId" }, regex: /^[0-9a-fA-F]{24}$/ } }
-                      ]
-                    }
-                  ]}
+                  {
+                    $or: [
+                      { $eq: [{ $type: "$productDetails.productId" }, "objectId"] },
+                      {
+                        $and: [
+                          { $eq: [{ $type: "$productDetails.productId" }, "string"] },
+                          { $eq: [{ $strLenCP: { $toString: "$productDetails.productId" } }, 24] },
+                          { $regexMatch: { input: { $toString: "$productDetails.productId" }, regex: /^[0-9a-fA-F]{24}$/ } }
+                        ]
+                      }
+                    ]
+                  }
                 ]
               },
               then: {
@@ -3205,7 +3240,7 @@ export const reOrder = async (req, res) => {
       // Try to get any address of user
       address = await Address.findOne({ createdBy: req.user._id });
     }
-    
+
     // If still no address, use original order address (but need to convert to Address format)
     if (!address && originalOrder.address) {
       // Create a temporary address object from order address
@@ -3216,7 +3251,7 @@ export const reOrder = async (req, res) => {
         city: originalOrder.address.city || "",
         state: originalOrder.address.state || "",
         pincode: originalOrder.address.pincode || "",
-        toObject: function() { return this; }
+        toObject: function () { return this; }
       };
     }
 
@@ -3325,8 +3360,8 @@ export const reOrder = async (req, res) => {
     // But for simplicity, we'll create the order directly here
     const donateValue = Number(donate || 0);
     const validPaymentTypes = ["CARD", "WALLET", "BANK", "COD", "QR"];
-    const finalPaymentType = (paymentType && validPaymentTypes.includes(paymentType.toUpperCase())) 
-      ? paymentType.toUpperCase() 
+    const finalPaymentType = (paymentType && validPaymentTypes.includes(paymentType.toUpperCase()))
+      ? paymentType.toUpperCase()
       : "COD";
 
     // Calculate totals
@@ -4037,12 +4072,12 @@ export const retailerAssignedDeliveries = async (req, res) => {
 
       const deliveryBoy = order.assignedDeliveryBoy
         ? {
-            id: order.assignedDeliveryBoy._id,
-            name: [order.assignedDeliveryBoy.firstName, order.assignedDeliveryBoy.lastName].filter(Boolean).join(" ").trim(),
-            phone: order.assignedDeliveryBoy.phone,
-            availabilityStatus: order.assignedDeliveryBoy.availabilityStatus,
-            vehicleType: order.assignedDeliveryBoy.vehicleType,
-          }
+          id: order.assignedDeliveryBoy._id,
+          name: [order.assignedDeliveryBoy.firstName, order.assignedDeliveryBoy.lastName].filter(Boolean).join(" ").trim(),
+          phone: order.assignedDeliveryBoy.phone,
+          availabilityStatus: order.assignedDeliveryBoy.availabilityStatus,
+          vehicleType: order.assignedDeliveryBoy.vehicleType,
+        }
         : null;
 
       const formattedAddress = [
@@ -4443,14 +4478,14 @@ export const retailerDeliveryBoyDashboard = async (req, res) => {
       createdAt: order.createdAt,
       assignedDeliveryBoy: order.assignedDeliveryBoy
         ? {
-            _id: order.assignedDeliveryBoy._id,
-            name: [order.assignedDeliveryBoy.firstName, order.assignedDeliveryBoy.lastName]
-              .filter(Boolean)
-              .join(" ")
-              .trim(),
-            phone: order.assignedDeliveryBoy.phone,
-            availabilityStatus: order.assignedDeliveryBoy.availabilityStatus,
-          }
+          _id: order.assignedDeliveryBoy._id,
+          name: [order.assignedDeliveryBoy.firstName, order.assignedDeliveryBoy.lastName]
+            .filter(Boolean)
+            .join(" ")
+            .trim(),
+          phone: order.assignedDeliveryBoy.phone,
+          availabilityStatus: order.assignedDeliveryBoy.availabilityStatus,
+        }
         : null,
     }));
 
@@ -4522,16 +4557,16 @@ export const retailerDeliveryBoyHistory = async (req, res) => {
     const deliveryHistory = orders.map((order) => {
       const deliveryBoy = order.assignedDeliveryBoy
         ? {
-            id: order.assignedDeliveryBoy._id,
-            name: [order.assignedDeliveryBoy.firstName, order.assignedDeliveryBoy.lastName]
-              .filter(Boolean)
-              .join(" ")
-              .trim(),
-            phone: order.assignedDeliveryBoy.phone,
-            vehicleType: order.assignedDeliveryBoy.vehicleType,
-            rating: order.assignedDeliveryBoy.rating,
-            totalDeliveries: order.assignedDeliveryBoy.totalDeliveries,
-          }
+          id: order.assignedDeliveryBoy._id,
+          name: [order.assignedDeliveryBoy.firstName, order.assignedDeliveryBoy.lastName]
+            .filter(Boolean)
+            .join(" ")
+            .trim(),
+          phone: order.assignedDeliveryBoy.phone,
+          vehicleType: order.assignedDeliveryBoy.vehicleType,
+          rating: order.assignedDeliveryBoy.rating,
+          totalDeliveries: order.assignedDeliveryBoy.totalDeliveries,
+        }
         : null;
 
       const formattedAddress = [
@@ -5378,9 +5413,9 @@ export const retailerCreateOrder = async (req, res) => {
       deliveryNotes: notes || "",
       shiprocket: store?.shiprocket?.pickup_addresses
         ? {
-            pickup_addresses: store.shiprocket.pickup_addresses || [],
-            default_pickup_address: store.shiprocket.default_pickup_address || null,
-          }
+          pickup_addresses: store.shiprocket.pickup_addresses || [],
+          default_pickup_address: store.shiprocket.default_pickup_address || null,
+        }
         : {},
     });
 
