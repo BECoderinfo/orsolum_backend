@@ -13,7 +13,6 @@ import { signedUrl } from '../helper/s3.config.js';
 import Settlement from '../models/Settlement.js';
 import WalletTransaction from '../models/WalletTransaction.js';
 import Deduction from '../models/Deduction.js';
-import { getCoordinatesFromAddress } from '../helper/latAndLong.js';
 
 
 
