@@ -398,20 +398,9 @@ export const getWeatherDetails = async (req, res) => {
         const { lat, long } = req.params;
 
         const weatherResponse = await axios.get(`https://api.tomorrow.io/v4/weather/forecast?location=${lat},${long}&apikey=${process.env.TOMORROW_IO_API_KEY}`);
-        const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${long}&key=${process.env.GOOGLE_MAPS_API_KEY}`;
 
+        // Set default city name without Google Maps API
         let cityName = "Unknown Location";
-        const cityResponse = await axios.get(url);
-        const results = cityResponse.data.results;
-
-        if (results.length > 0) {
-            const locality = results[0].address_components.find(component =>
-                component.types.includes("locality")
-            );
-            if (locality) {
-                cityName = locality.long_name;
-            }
-        }
 
         res.status(status.OK).json({
             status: jsonStatus.OK,
