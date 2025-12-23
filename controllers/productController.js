@@ -1650,8 +1650,9 @@ const extractAreaFromAddress = (address) => {
 
     const addressLower = address.toLowerCase().trim();
 
-    // Common Surat areas with their variations - normalized to standard names
+    // Common areas in various cities with their variations - normalized to standard names
     const areaMappings = [
+        // Surat areas
         { patterns: ['mota varachcha', 'mota varachha', 'mota-varachcha', 'mota-varachha', 'mota varachha'], normalized: 'mota varachcha' },
         { patterns: ['katargam', 'katargam'], normalized: 'katargam' },
         { patterns: ['vesu'], normalized: 'vesu' },
@@ -1661,7 +1662,16 @@ const extractAreaFromAddress = (address) => {
         { patterns: ['udhna'], normalized: 'udhna' },
         { patterns: ['piplod'], normalized: 'piplod' },
         { patterns: ['althan'], normalized: 'althan' },
-        { patterns: ['sarthana'], normalized: 'sarthana' }
+        { patterns: ['sarthana'], normalized: 'sarthana' },
+        // Morbi areas
+        { patterns: ['cotton city', 'cottoncity', 'textile city', 'textilecity'], normalized: 'cotton city' },
+        { patterns: ['rajkot road', 'rajkot highway', 'rajkot main road'], normalized: 'rajkot road' },
+        { patterns: ['city center', 'citycentre', 'city centre'], normalized: 'city center' },
+        { patterns: ['bus stand', 'busstand', 'bus station'], normalized: 'bus stand' },
+        { patterns: ['railway station', 'railway', 'station'], normalized: 'railway station' },
+        { patterns: ['market yard', 'marketyard', 'market area'], normalized: 'market yard' },
+        // Generic area patterns
+        { patterns: ['north', 'nagar', 'extension', 'society', 'colony', 'chowk', 'circle'], normalized: 'local area' }
     ];
 
     // Check each area mapping
@@ -1725,18 +1735,42 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             searchArea = extractAreaFromAddress(userDetails.address);
         }
 
-        const categories = await fetchCategoriesWithLocation({
-            lat: searchLat,
-            long: searchLong,
-            limitCount: 8,
-            fallbackToAll: false
-        });
-        const popularCategories = await fetchLocalPopularCategories({ lat: searchLat, long: searchLong, limitCount: null });
+        // Fetch categories - always return consistent data regardless of location
+        let categories = [];
+        let popularCategories = [];
+        
+        try {
+            categories = await fetchCategoriesWithLocation({
+                lat: searchLat,
+                long: searchLong,
+                limitCount: 8,
+                // Use fallbackToAll: true to ensure we always get categories even if no stores exist in location
+                fallbackToAll: true
+            });
+        } catch (catError) {
+            console.warn("Failed to fetch categories with location:", catError.message);
+            // Fallback to all categories if location-based fetch fails
+            categories = await fetchCategoriesWithLocation({
+                lat: null,
+                long: null,
+                limitCount: 8,
+                fallbackToAll: true
+            });
+        }
+        
+        try {
+            popularCategories = await fetchLocalPopularCategories({ lat: searchLat, long: searchLong, limitCount: null });
+        } catch (popCatError) {
+            console.warn("Failed to fetch popular categories with location:", popCatError.message);
+            popularCategories = [];
+        }
 
         let stores = [];
 
-        // Require coordinates or city/area to avoid showing far stores
-        if (searchLat !== null && searchLong !== null) {
+        // Try to fetch stores with location-based filtering, but always return consistent response
+        try {
+            // Require coordinates or city/area to avoid showing far stores
+            if (searchLat !== null && searchLong !== null) {
             // Build match conditions
             let matchConditions = {
                 status: "A"
@@ -1893,8 +1927,73 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                 { $sort: { createdAt: -1 } },
                 { $limit: 5 } // Only 5 for home section
             ]);
-        } else {
-            // No coords and no city/area: do not show far stores
+            } else {
+                // No coords and no city/area: return empty array but ensure consistent response structure
+                stores = [];
+            }
+            
+            // If still no stores found, try to get ANY stores as final fallback (for new locations)
+            if (!stores || stores.length === 0) {
+                console.log(`No stores found for location (${searchCity || 'N/A'}, ${searchArea || 'N/A'}), trying global fallback`);
+                
+                stores = await Store.aggregate([
+                    { $match: { status: "A" } },
+                    {
+                        $lookup: {
+                            from: "users",
+                            localField: "createdBy",
+                            foreignField: "_id",
+                            as: "owner",
+                            pipeline: [{ $project: { role: 1 } }]
+                        }
+                    },
+                    {
+                        $addFields: {
+                            ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+                        }
+                    },
+                    {
+                        // Show only retailer-owned stores
+                        $match: {
+                            ownerRole: "retailer"
+                        }
+                    },
+                    {
+                        $lookup: {
+                            from: "store_categories",
+                            localField: "category",
+                            foreignField: "_id",
+                            as: "category_name"
+                        }
+                    },
+                    {
+                        $addFields: {
+                            category_name: {
+                                $ifNull: [
+                                    { $arrayElemAt: ["$category_name.name", 0] },
+                                    null
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        $project: {
+                            _id: 1,
+                            productImages: 1,
+                            category_name: 1,
+                            name: 1,
+                            address: 1,
+                            images: 1,
+                            location: 1
+                        }
+                    },
+                    { $sort: { createdAt: -1 } },
+                    { $limit: 5 } // Only 5 for home section
+                ]);
+            }
+        } catch (storeError) {
+            console.warn("Failed to fetch stores with location, returning empty array:", storeError.message);
+            // Always return empty array instead of null or throwing error
             stores = [];
         }
 

@@ -1755,11 +1755,11 @@ export const createAddress = async (req, res) => {
     const userAddressCount = await Address.countDocuments({ createdBy: req.user._id });
     console.log("User address count:", userAddressCount);
     
-    if (userAddressCount === 1 && lat && long) {
+    if (userAddressCount === 1 && finalLat !== "0" && finalLong !== "0") {
       console.log("Updating user default location");
       await User.findByIdAndUpdate(req.user._id, {
-        lat: lat.toString(),
-        long: long.toString(),
+        lat: finalLat,
+        long: finalLong,
         city: city || "",
         state: state || "",
         country: country || "India"
@@ -3098,7 +3098,12 @@ export const orderDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const order = await Order.findById(id);
+    // Check if order exists and belongs to user
+    const order = await Order.findOne({
+      _id: new ObjectId(id),
+      createdBy: new ObjectId(req.user._id)
+    });
+    
     if (!order) {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
@@ -3146,6 +3151,47 @@ export const orderDetails = async (req, res) => {
       },
     ]);
 
+    if (details.length > 0) {
+      // Calculate enhanced summary fields for consistency
+      const summary = details[0].summary || {};
+      
+      // For this simple version, use the existing productDetails structure
+      const product = details[0].productDetails || {};
+      const item_total = (product.sellingPrice || 0) * (product.quantity || 1);
+      
+      // Calculate additional fields based on existing summary data
+      const total_discount = summary.discountAmount || 0;
+      const shipping_fee = summary.shippingFee || 0;
+      const grandTotal = summary.grandTotal || 0;
+      
+      // Calculate total_payable as grandTotal (the final amount user paid)
+      const total_payable = grandTotal;
+      
+      // Calculate saved as the difference between total MRP and final price
+      const total_mrp = (product.mrp || product.sellingPrice || 0) * (product.quantity || 1);
+      const saved = total_mrp - grandTotal;
+      
+      // Calculate coupon discount separately if available in summary
+      const coupon_discount = summary.couponCodeDiscount || summary.discountAmount || 0;
+      
+      // Plant a tree - this would be a fixed value or calculated based on your business logic
+      const plant_a_tree = 0;
+      
+      const enhancedSummary = {
+        ...summary,
+        item_total,
+        plant_a_tree,
+        total_discount,
+        coupon_discount,
+        shipping_fee,
+        total_payable,
+        saved,
+      };
+      
+      // Update the details with enhanced summary
+      details[0].summary = enhancedSummary;
+    }
+
     res
       .status(status.OK)
       .json({ status: jsonStatus.OK, success: true, data: details[0] || {} });
@@ -3162,18 +3208,38 @@ export const orderDetails = async (req, res) => {
 export const orderDetailsV2 = async (req, res) => {
   try {
     const { id } = req.params;
+    console.log('Order ID requested:', id);
+    console.log('User ID from token:', req.user._id);
 
     // 1️⃣ Try to find order by _id or alternate IDs (orderId / cf_order_id)
     let orderExists = null;
 
     if (mongoose.isValidObjectId(id)) {
+      console.log('Looking up by ObjectId');
       orderExists = await Order.findOne({
         _id: new mongoose.Types.ObjectId(id),
         createdBy: new mongoose.Types.ObjectId(req.user._id),
       });
+      
+      if (!orderExists) {
+        // Let's check if order exists but belongs to different user
+        const orderCheck = await Order.findById(new mongoose.Types.ObjectId(id));
+        if (orderCheck) {
+          console.log('Order exists but belongs to different user:', orderCheck.createdBy.toString());
+          console.log('Expected user:', req.user._id.toString());
+          console.log('Order created by:', orderCheck.createdBy.toString());
+          // Return error indicating ownership issue
+          return res.status(404).json({
+            status: 404,
+            success: false,
+            message: "Order not found with this ID",
+          });
+        }
+      }
     }
 
     if (!orderExists) {
+      console.log('Looking up by orderId or cf_order_id');
       orderExists = await Order.findOne({
         createdBy: new mongoose.Types.ObjectId(req.user._id),
         $or: [{ orderId: id }, { cf_order_id: id }],
@@ -3182,6 +3248,7 @@ export const orderDetailsV2 = async (req, res) => {
 
     // 2️⃣ If no order found, return clean message
     if (!orderExists) {
+      console.log('Order not found for user:', req.user._id, 'with ID:', id);
       return res.status(404).json({
         status: 404,
         success: false,
@@ -3189,12 +3256,14 @@ export const orderDetailsV2 = async (req, res) => {
       });
     }
 
-    // 3️⃣ Run aggregation pipeline for full details
+    console.log('Order found:', orderExists._id);
+    
+    // 3️⃣ Run aggregation pipeline for full details - ensure user ownership in match
     const details = await Order.aggregate([
       {
         $match: {
           _id: new mongoose.Types.ObjectId(orderExists._id),
-          createdBy: new mongoose.Types.ObjectId(req.user._id),
+          createdBy: new mongoose.Types.ObjectId(req.user._id), // Ensure user ownership in aggregation
         },
       },
       {
@@ -3229,7 +3298,6 @@ export const orderDetailsV2 = async (req, res) => {
       },
       { $unwind: { path: "$storeDetails", preserveNullAndEmptyArrays: true } },
       { $unwind: { path: "$paymentDetails", preserveNullAndEmptyArrays: true } },
-      { $unwind: { path: "$productDetails", preserveNullAndEmptyArrays: true } },
       {
         $lookup: {
           from: "products",
@@ -3238,7 +3306,6 @@ export const orderDetailsV2 = async (req, res) => {
           as: "productInfo",
         },
       },
-      { $unwind: { path: "$productInfo", preserveNullAndEmptyArrays: true } },
       {
         $addFields: {
           "productDetails.productName": "$productInfo.productName",
@@ -3283,8 +3350,54 @@ export const orderDetailsV2 = async (req, res) => {
       });
     }
 
-    // 4️⃣ Format the output
+    // 4️⃣ Format the output with complete order details
     const paymentInfo = details[0].paymentDetails || {};
+    
+    // Calculate enhanced summary fields according to standardized response structure
+    const summary = details[0].summary || {};
+    
+    // Extract individual product prices to calculate item total
+    const products = details[0].products || [];
+    const item_total = products.reduce((sum, product) => {
+      const totalAmount = (product.totalAmount || 0);
+      return sum + totalAmount;
+    }, 0);
+    
+    // Calculate additional fields based on existing summary data
+    const total_discount = summary.discountAmount || 0;
+    const shipping_fee = summary.shippingFee || 0;
+    const grandTotal = summary.grandTotal || 0;
+    
+    // Calculate total_payable as grandTotal (the final amount user paid)
+    const total_payable = grandTotal;
+    
+    // Calculate saved as the difference between total MRP and final price
+    const total_mrp = products.reduce((sum, product) => {
+      const mrp = product.mrp || product.price || 0;
+      const quantity = product.quantity || 1;
+      return sum + (mrp * quantity);
+    }, 0);
+    const saved = Math.max(total_mrp - grandTotal, 0); // Ensure saved is not negative
+    
+    // Calculate coupon discount separately if available in summary
+    // Assuming coupon discount is part of total discount
+    const coupon_discount = summary.couponCodeDiscount || summary.discountAmount || 0;
+    
+    // Plant a tree - this would be a fixed value or calculated based on your business logic
+    // For now, setting it to 0, but you can adjust based on your requirements
+    const plant_a_tree = 0;
+    
+    const enhancedSummary = {
+      ...summary,
+      item_total: Number(item_total.toFixed(2)),
+      plant_a_tree,
+      total_discount: Number(total_discount.toFixed(2)),
+      coupon_discount: Number(coupon_discount.toFixed(2)),
+      shipping_fee: Number(shipping_fee.toFixed(2)),
+      total_payable: Number(total_payable.toFixed(2)),
+      saved: Number(saved.toFixed(2)),
+    };
+    
     const formattedDetails = {
       _id: details[0]._id,
       store: details[0].storeDetails
@@ -3306,7 +3419,7 @@ export const orderDetailsV2 = async (req, res) => {
       shippingFee: details[0].summary?.shippingFee || 0,
       createdAt: details[0].createdAt,
       updatedAt: details[0].updatedAt,
-      summary: details[0].summary,
+      summary: enhancedSummary, // Use enhanced summary with standardized fields
       invoiceUrl: details[0].invoiceUrl || null,
       address: details[0].address,
       products: details[0].products.map((product) => ({
@@ -3325,18 +3438,20 @@ export const orderDetailsV2 = async (req, res) => {
       })),
     };
 
-    // 5️⃣ Send response
+    // 5️⃣ Send response with proper success status
     return res.status(200).json({
       status: 200,
       success: true,
+      message: "Order details retrieved successfully",
       data: formattedDetails,
     });
   } catch (error) {
     console.error("Error in orderDetailsV2:", error.message);
+    console.error("Error stack:", error.stack);
     return res.status(500).json({
       status: 500,
       success: false,
-      message: error.message,
+      message: error.message || "Internal server error",
     });
   }
 };
