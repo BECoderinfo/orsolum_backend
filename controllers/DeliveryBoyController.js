@@ -2497,7 +2497,7 @@ export const isDeliveryBoyExist = async (req, res) => {
 
 export const sendDeliveryBoyRegisterOtp = async (req, res) => {
     try {
-        const { phone, name } = req.body;
+        const { phone, name, appHash } = req.body; // Add appHash parameter
 
         if (!phone) {
             return res.status(status.BadRequest).json({
@@ -2535,17 +2535,24 @@ export const sendDeliveryBoyRegisterOtp = async (req, res) => {
         });
         await otpRecord.save();
 
-        // Send SMS in background (non-blocking) - don't await, just fire and forget
-        sendSms(phone.replace("+", ""), { var1: name || "DeliveryBoy", var2: otp })
+        // Send SMS with app hash for autofill
+        const smsParams = {
+            var1: name || "DeliveryBoy",
+            var2: otp,
+            var3: appHash || "" // App hash for Android autofill
+        };
+
+        sendSms(phone.replace("+", ""), smsParams)
             .then((smsSent) => {
                 if (smsSent) {
-                    console.log(`SMS sent successfully to ${phone}`);
+                    console.log(`✅ SMS sent successfully to ${phone}`);
+                    console.log(`📱 OTP: ${otp}, App Hash: ${appHash || 'Not provided'}`);
                 } else {
-                    console.log(`SMS failed for ${phone}, but OTP is saved`);
+                    console.log(`⚠️ SMS failed for ${phone}, but OTP is saved`);
                 }
             })
             .catch((smsError) => {
-                console.error(`SMS error for ${phone}:`, smsError.message);
+                console.error(`❌ SMS error for ${phone}:`, smsError.message);
             });
 
         // Send response immediately without waiting for SMS
@@ -2567,7 +2574,7 @@ export const sendDeliveryBoyRegisterOtp = async (req, res) => {
 
 export const sendDeliveryBoyLoginOtp = async (req, res) => {
     try {
-        const { phone } = req.body;
+        const { phone, appHash } = req.body; // Add appHash parameter
 
         if (!phone) {
             return res.status(status.BadRequest).json({
@@ -2622,17 +2629,24 @@ export const sendDeliveryBoyLoginOtp = async (req, res) => {
         });
         await otpRecord.save();
 
-        // Send SMS in background (non-blocking) - don't await, just fire and forget
-        sendSms(phone.replace('+', ''), { var1: deliveryBoy.firstName || 'User', var2: otp })
+        // Send SMS with app hash for autofill
+        const smsParams = {
+            var1: deliveryBoy.firstName || "DeliveryBoy",
+            var2: otp,
+            var3: appHash || "" // App hash for Android autofill
+        };
+
+        sendSms(phone.replace('+', ''), smsParams)
             .then((smsSent) => {
                 if (smsSent) {
-                    console.log(`SMS sent successfully to ${phone}`);
+                    console.log(`✅ SMS sent successfully to ${phone}`);
+                    console.log(`📱 OTP: ${otp}, App Hash: ${appHash || 'Not provided'}`);
                 } else {
-                    console.log(`SMS failed for ${phone}, but OTP is saved`);
+                    console.log(`⚠️ SMS failed for ${phone}, but OTP is saved`);
                 }
             })
             .catch((smsError) => {
-                console.error(`SMS error for ${phone}:`, smsError.message);
+                console.error(`❌ SMS error for ${phone}:`, smsError.message);
             });
 
         // Send response immediately without waiting for SMS

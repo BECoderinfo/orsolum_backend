@@ -176,6 +176,7 @@ export const createOrder = async (req, res) => {
     );
 
     const stockUpdates = [];
+    const lowStockWarnings = [];
     for (const detail of cartDetails) {
       const currentStock =
         typeof detail.product.stock === "number" ? detail.product.stock : null;
@@ -191,15 +192,29 @@ export const createOrder = async (req, res) => {
         });
       }
 
+      // Check if stock will be low after this order
+      const newStock = currentStock - detail.quantity;
+      const lowStockThreshold =
+        typeof detail.product.lowStockThreshold === "number"
+          ? detail.product.lowStockThreshold
+          : 5; // Default threshold of 5
+      
+      if (newStock <= lowStockThreshold && newStock > 0) {
+        lowStockWarnings.push({
+          productName: detail.product.productName,
+          currentStock: currentStock,
+          quantityOrdered: detail.quantity,
+          remainingStock: newStock,
+          lowStockThreshold: lowStockThreshold
+        });
+      }
+
       stockUpdates.push({
         productId: detail.productId,
         retailerId: detail.product.createdBy,
         product: detail.product,
-        newStock: currentStock - detail.quantity,
-        lowStockThreshold:
-          typeof detail.product.lowStockThreshold === "number"
-            ? detail.product.lowStockThreshold
-            : 0,
+        newStock: newStock,
+        lowStockThreshold: lowStockThreshold,
       });
     }
 
@@ -364,7 +379,10 @@ export const createOrder = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Order created successfully & synced with Shiprocket",
+      message: lowStockWarnings.length > 0 
+        ? "Order created successfully & synced with Shiprocket. Note: Some products are running low on stock and the order may not be fulfilled as expected."
+        : "Order created successfully & synced with Shiprocket",
+      lowStockWarnings: lowStockWarnings.length > 0 ? lowStockWarnings : undefined
     });
   } catch (error) {
     console.error("Error in createOrder:", error.message);
@@ -488,13 +506,27 @@ export const addProductToCart = async (req, res) => {
       const tentativeTotal = existingQty + safeQuantity;
       if (tentativeTotal > availableStock) {
         const remaining = Math.max(availableStock - existingQty, 0);
+        
+        // Check if product has low stock threshold
+        const lowStockThreshold = typeof findProduct.lowStockThreshold === "number" 
+          ? findProduct.lowStockThreshold 
+          : 0;
+        
+        const isLowStock = lowStockThreshold > 0 && availableStock <= lowStockThreshold;
+        
         return res.status(status.BadRequest).json({
           status: jsonStatus.BadRequest,
           success: false,
           message:
             remaining > 0
-              ? `Only ${remaining} unit(s) available in stock`
+              ? `Only ${remaining} unit(s) available in stock${isLowStock ? ' (Low Stock)' : ''}`
               : "You've reached the maximum available stock for this product.",
+          data: {
+            availableStock,
+            lowStockThreshold,
+            isLowStock,
+            productId: findProduct._id
+          }
         });
       }
     }
@@ -517,9 +549,15 @@ export const addProductToCart = async (req, res) => {
       res.status(status.OK).json({
         status: jsonStatus.OK,
         success: true,
-        message: "Product added in to the Cart",
+        message: isLowStock ? `Product added to Cart (Low Stock: ${availableStock} units remaining)` : "Product added in to the Cart",
         count: findProductInCart.quantity,
         totalCartCount,
+        data: isLowStock ? {
+          lowStockWarning: true,
+          availableStock,
+          lowStockThreshold,
+          message: `Only ${availableStock} units left in stock`
+        } : null
       });
     } else {
       if (availableStock !== null && safeQuantity > availableStock) {
@@ -603,6 +641,13 @@ export const incrementProductQuantityInCart = async (req, res) => {
           message: "Product is currently out of stock.",
         });
       }
+      
+      // Check for low stock warning
+      const lowStockThreshold = typeof findProduct.lowStockThreshold === "number" 
+        ? findProduct.lowStockThreshold 
+        : 0;
+      
+      const isLowStock = lowStockThreshold > 0 && availableStock <= lowStockThreshold;
 
       let newCart = new Cart({
         productId: id,
@@ -626,9 +671,15 @@ export const incrementProductQuantityInCart = async (req, res) => {
       res.status(status.OK).json({
         status: jsonStatus.OK,
         success: true,
-        message: "Quantity incremented",
+        message: isLowStock ? `Quantity incremented (Low Stock: ${availableStock} units remaining)` : "Quantity incremented",
         count: newCart.quantity,
         totalCartCount,
+        data: isLowStock ? {
+          lowStockWarning: true,
+          availableStock,
+          lowStockThreshold,
+          message: `Only ${availableStock} units left in stock`
+        } : null
       });
     } else {
       if (availableStock !== null && findCart.quantity + 1 > availableStock) {
@@ -639,6 +690,15 @@ export const incrementProductQuantityInCart = async (req, res) => {
         });
       }
 
+      // Check for low stock warning
+      const product = await Product.findById(findCart.productId);
+      const availableStock = typeof product.stock === "number" ? product.stock : null;
+      const lowStockThreshold = typeof product.lowStockThreshold === "number" 
+        ? product.lowStockThreshold 
+        : 0;
+      
+      const isLowStock = lowStockThreshold > 0 && availableStock <= lowStockThreshold;
+      
       findCart.quantity += 1;
       await findCart.save();
 
@@ -656,9 +716,15 @@ export const incrementProductQuantityInCart = async (req, res) => {
       res.status(status.OK).json({
         status: jsonStatus.OK,
         success: true,
-        message: "Quantity incremented",
+        message: isLowStock ? `Quantity incremented (Low Stock: ${availableStock} units remaining)` : "Quantity incremented",
         count: findCart.quantity,
         totalCartCount,
+        data: isLowStock ? {
+          lowStockWarning: true,
+          availableStock,
+          lowStockThreshold,
+          message: `Only ${availableStock} units left in stock`
+        } : null
       });
     }
   } catch (error) {
@@ -1053,6 +1119,10 @@ export const cartDetails = async (req, res) => {
 
         storeTotalAmount += productTotal; // ✅ Fix: Ensure total is accumulated
 
+        // ✅ Check if product is running low on stock
+        const isLowStock = product.stock !== undefined && product.lowStockThreshold !== undefined &&
+                          product.stock > 0 && product.stock <= product.lowStockThreshold;
+        
         storeOffers.forEach((offer) => {
           if (
             offer.offerType === "percentage_discount" &&
@@ -1112,6 +1182,8 @@ export const cartDetails = async (req, res) => {
           ...product,
           appliedOffers: appliedProductOffers,
           freeQuantity,
+          isLowStock: isLowStock,
+          lowStockMessage: isLowStock ? `Only ${product.stock} units left in stock. Order may not be fulfilled as expected.` : undefined
         };
       });
 
@@ -1572,10 +1644,14 @@ export const couponCodeList = async (req, res) => {
 
 export const createAddress = async (req, res) => {
   try {
-    const { address_1, flatHouse, name, pincode, mapLink, lat, long, city, state, landmark, type } =
+    const { address_1, flatHouse, name, pincode, mapLink, lat, long, city, state, country, landmark, type } =
       req.body;
 
-    // Required fields validation with type safety
+    // Enhanced logging for debugging
+    console.log("Creating address with data:", req.body);
+    console.log("User ID:", req.user._id);
+
+    // Required fields validation with enhanced type safety
     if (!address_1 || (typeof address_1 === 'string' && address_1.trim() === "")) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
@@ -1623,6 +1699,7 @@ export const createAddress = async (req, res) => {
       pincode: pincodeStr,
       city: city ? (typeof city === 'string' ? city.trim() : city.toString()) : "",
       state: state ? (typeof state === 'string' ? state.trim() : state.toString()) : "",
+      country: country ? (typeof country === 'string' ? country.trim() : country.toString()) : "India", // Default to India
       landmark: landmark ? (typeof landmark === 'string' ? landmark.trim() : landmark.toString()) : "",
       mapLink: mapLink ? (typeof mapLink === 'string' ? mapLink.trim() : mapLink.toString()) : `https://maps.google.com/?q=${lat || ""},${long || ""}`,
       lat: lat ? lat.toString() : "0",
@@ -1632,8 +1709,44 @@ export const createAddress = async (req, res) => {
       type: normalizedType || "Home",
     };
 
+    // Validate coordinates if provided
+    if (lat && isNaN(parseFloat(lat))) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid latitude value",
+      });
+    }
+    
+    if (long && isNaN(parseFloat(long))) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid longitude value",
+      });
+    }
+
+    console.log("Final address data to save:", addressData);
+    
     let newAddress = new Address(addressData);
     newAddress = await newAddress.save();
+    
+    console.log("Address saved successfully with ID:", newAddress._id);
+
+    // Update user's default location if this is their first address
+    const userAddressCount = await Address.countDocuments({ createdBy: req.user._id });
+    console.log("User address count:", userAddressCount);
+    
+    if (userAddressCount === 1 && lat && long) {
+      console.log("Updating user default location");
+      await User.findByIdAndUpdate(req.user._id, {
+        lat: lat.toString(),
+        long: long.toString(),
+        city: city || "",
+        state: state || "",
+        country: country || "India"
+      });
+    }
 
     return res
       .status(status.OK)
@@ -1646,6 +1759,7 @@ export const createAddress = async (req, res) => {
   } catch (error) {
     // Handle validation errors
     if (error.name === 'ValidationError') {
+      console.error("Address validation error:", error.message);
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
@@ -1653,10 +1767,11 @@ export const createAddress = async (req, res) => {
       });
     }
     
+    console.error("createAddress error:", error);
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
-      message: error.message,
+      message: error.message || "Failed to create address",
     });
     return catchError("createAddress", error, req, res);
   }
@@ -1711,6 +1826,18 @@ export const editAddress = async (req, res) => {
       });
     }
 
+    // Validate pincode format if being updated
+    if (pincode !== undefined) {
+      const pincodeStr = pincode.toString().trim();
+      if (!/^\d{6}$/.test(pincodeStr)) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Pincode must be 6 digits",
+        });
+      }
+    }
+
     // Normalize and validate type if provided
     const allowedTypes = ["Home", "Work", "Other"];
     let updatePayload = { ...req.body };
@@ -1730,6 +1857,23 @@ export const editAddress = async (req, res) => {
       updatePayload.type = normalizedType;
     }
 
+    // Validate coordinates if provided
+    if (req.body.lat !== undefined && req.body.lat && isNaN(parseFloat(req.body.lat))) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid latitude value",
+      });
+    }
+    
+    if (req.body.long !== undefined && req.body.long && isNaN(parseFloat(req.body.long))) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid longitude value",
+      });
+    }
+
     // Update address
     const updateAddress = await Address.findByIdAndUpdate(
       id,
@@ -1745,6 +1889,17 @@ export const editAddress = async (req, res) => {
         status: jsonStatus.NotFound,
         success: false,
         message: "Address not found after update",
+      });
+    }
+
+    // Update user's default location if this address was their default
+    if (req.user.lat === address.lat && req.user.long === address.long) {
+      await User.findByIdAndUpdate(req.user._id, {
+        lat: updateAddress.lat || "0",
+        long: updateAddress.long || "0",
+        city: updateAddress.city || "",
+        state: updateAddress.state || "",
+        country: updateAddress.country || "India"
       });
     }
 
@@ -1766,10 +1921,11 @@ export const editAddress = async (req, res) => {
       });
     }
     
+    console.error("editAddress error:", error);
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
-      message: error.message,
+      message: error.message || "Failed to update address",
     });
     return catchError("editAddress", error, req, res);
   }
@@ -1779,16 +1935,34 @@ export const getAddress = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Validate address ID
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid address ID",
+      });
+    }
+
     const address = await Address.findOne({ createdBy: req.user._id, _id: id });
+
+    if (!address) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Address not found",
+      });
+    }
 
     return res
       .status(status.OK)
-      .json({ status: jsonStatus.OK, success: true, data: address || {} });
+      .json({ status: jsonStatus.OK, success: true, data: address });
   } catch (error) {
+    console.error("getAddress error:", error);
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
-      message: error.message,
+      message: error.message || "Failed to retrieve address",
     });
     return catchError("getAddress", error, req, res);
   }
@@ -1833,12 +2007,18 @@ export const getUserAllAddress = async (req, res) => {
 
     return res
       .status(status.OK)
-      .json({ status: jsonStatus.OK, success: true, data: enhancedAddresses || [] });
+      .json({ 
+        status: jsonStatus.OK, 
+        success: true, 
+        data: enhancedAddresses || [],
+        count: enhancedAddresses.length
+      });
   } catch (error) {
+    console.error("getUserAllAddress error:", error);
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
-      message: error.message,
+      message: error.message || "Failed to retrieve addresses",
     });
     return catchError("getUserAllAddress", error, req, res);
   }
@@ -1850,12 +2030,18 @@ export const getAllAddress = async (req, res) => {
 
     return res
       .status(status.OK)
-      .json({ status: jsonStatus.OK, success: true, data: address || [] });
+      .json({ 
+        status: jsonStatus.OK, 
+        success: true, 
+        data: address || [],
+        count: address.length
+      });
   } catch (error) {
+    console.error("getAllAddress error:", error);
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
-      message: error.message,
+      message: error.message || "Failed to retrieve addresses",
     });
     return catchError("getAllAddress", error, req, res);
   }
@@ -1865,6 +2051,15 @@ export const getAllAddress = async (req, res) => {
 export const deleteAddress = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Validate address ID
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid address ID",
+      });
+    }
 
     const address = await Address.findOne({ _id: id, createdBy: req.user._id });
     if (!address) {
@@ -1880,6 +2075,17 @@ export const deleteAddress = async (req, res) => {
     // Return remaining addresses so mobile app can refresh immediately
     const remainingAddresses = await Address.find({ createdBy: req.user._id }).lean();
 
+    // If this was the user's default address, update their profile
+    if (req.user.lat === address.lat && req.user.long === address.long) {
+      await User.findByIdAndUpdate(req.user._id, {
+        lat: "0",
+        long: "0",
+        city: "",
+        state: "",
+        country: "India"
+      });
+    }
+
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
@@ -1890,16 +2096,66 @@ export const deleteAddress = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("deleteAddress error:", error);
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
-      message: error.message,
+      message: error.message || "Failed to delete address",
     });
     return catchError("deleteAddress", error, req, res);
   }
 };
+// Set user's default address
+export const setDefaultAddress = async (req, res) => {
+  try {
+    const { id } = req.params;
 
+    // Validate address ID
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid address ID",
+      });
+    }
 
+    // Check if address exists and belongs to user
+    const address = await Address.findOne({ _id: id, createdBy: req.user._id });
+    if (!address) {
+      return res.status(status.NotFound).json({
+        status: jsonStatus.NotFound,
+        success: false,
+        message: "Address not found or you don't have permission to set as default",
+      });
+    }
+
+    // Update user's default location with the selected address coordinates
+    await User.findByIdAndUpdate(req.user._id, {
+      lat: address.lat || "0",
+      long: address.long || "0",
+      city: address.city || "",
+      state: address.state || "",
+      country: address.country || "India"
+    });
+
+    return res
+      .status(status.OK)
+      .json({ 
+        status: jsonStatus.OK, 
+        success: true, 
+        message: "Default address set successfully",
+        data: address
+      });
+  } catch (error) {
+    console.error("setDefaultAddress error:", error);
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message || "Failed to set default address",
+    });
+    return catchError("setDefaultAddress", error, req, res);
+  }
+};
 
 export const createOrderV2 = async (req, res) => {
   try {

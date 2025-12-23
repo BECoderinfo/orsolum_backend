@@ -4,7 +4,7 @@ import { retailerAuthentication } from "../middlewares/middleware.js";
 import { uploadAdMediaAny, uploadAdMediaMulter, uploadUserImage, uploadStoreImagesMulter } from "../helper/uploadImage.js";
 import { getRetailerNotifications, markRetailerNotificationRead, clearRetailerNotifications } from "../controllers/notificationController.js";
 import { retailerPendingOrderList, retailerOrderHistoryList, retailerOrderDetailsV2, orderChangeStatus, retailerAssignedDeliveries, retailerAvailableDeliveryBoys, retailerAssignOrderToDeliveryBoy, retailerDeliveryBoyDashboard, retailerDeliveryBoyHistory, retailerCreateOrder } from "../controllers/orderController.js";
-import { createRetailerAdRequest, deleteRetailerAd, getRetailerAdDetails, getSellerAdsConfig, listRetailerAds, getRetailerLocalStoreAds, createRetailerAdPaymentSession, getAdPaymentInfo } from "../controllers/adController.js";
+import { createRetailerAdRequest, deleteRetailerAd, getRetailerAdDetails, getSellerAdsConfig, listRetailerAds, getRetailerLocalStoreAds, createRetailerAdPaymentSession, getAdPaymentInfo, getAdsConfigForUser, getAdLocations } from "../controllers/adController.js";
 const retailerRouter = express.Router();
 
 // auth
@@ -51,6 +51,8 @@ retailerRouter.post('/retailer/delivery/assign/v1', retailerAuthentication, reta
 
 // Retailer ads management (mirrors seller flow)
 retailerRouter.get('/retailer/ads/config/v1', retailerAuthentication, getSellerAdsConfig);
+retailerRouter.get('/retailer/ads/config/user/v1', retailerAuthentication, getAdsConfigForUser);
+retailerRouter.get('/retailer/ads/locations/v1', retailerAuthentication, getAdLocations);
 retailerRouter.post(
   '/retailer/ads/v1',
   retailerAuthentication,

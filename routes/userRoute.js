@@ -1,11 +1,13 @@
 import express from "express";
 import { body } from 'express-validator';
 import { uploadProfileImage, loginUser, registerUser, sendLoginOtp, sendRegisterOtp, getMyProfile, updateMyProfile, deleteMyAccount, purchasePremium, reActivateMyAccount, logoutUser, shareMyProfile } from "../controllers/userController.js";
-import { createAddress, editAddress, deleteAddress, getAddress, getAllAddress, getUserAllAddress, addProductToCart } from "../controllers/orderController.js";
+import { createAddress, editAddress, deleteAddress, getAddress, getAllAddress, getUserAllAddress, addProductToCart, setDefaultAddress } from "../controllers/orderController.js";
 import { getAppThemeSettings } from "../controllers/adminController.js";
 import { userAuthentication } from "../middlewares/middleware.js";
 import { uploadUserImage } from "../helper/uploadImage.js";
 import { getUserNotifications, markUserNotificationRead, dismissUserNotification, clearUserNotifications } from "../controllers/notificationController.js";
+import User from "../models/User.js";
+import { getCoordinatesFromAddress, getAddressFromCoordinates, searchPlaces, getDetailedAddressFromCoordinates, detectLocationByIP } from "../helper/geocoding.js";
 const userRouter = express.Router();
 
 // image upload
@@ -47,11 +49,206 @@ userRouter.delete('/delete/address/:id/v1', userAuthentication, deleteAddress);
 userRouter.get('/get/address/:id/v1', userAuthentication, getAddress);
 userRouter.get('/get/address/v1', userAuthentication, getAllAddress);
 userRouter.get('/get/address/user/list/v1', userAuthentication, getUserAllAddress);
+userRouter.put('/set/default/address/:id/v1', userAuthentication, setDefaultAddress);
 
 // Cart (alias without /order prefix for mobile clients)
 userRouter.post('/add/product/in/cart/v1', userAuthentication, addProductToCart);
 
 // App Theme Settings (Public - no auth required for user app)
 userRouter.get('/app/theme/settings/v1', getAppThemeSettings);
+
+// 🗺️ Location & Geocoding Services
+// Get coordinates from address
+userRouter.post('/geocode/address/v1', userAuthentication, async (req, res) => {
+    try {
+        const { address } = req.body;
+
+        if (!address) {
+            return res.status(400).json({
+                success: false,
+                message: "Address is required"
+            });
+        }
+
+        const result = await getCoordinatesFromAddress(address);
+
+        if (!result) {
+            return res.status(404).json({
+                success: false,
+                message: "Could not geocode address"
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: result
+        });
+    } catch (error) {
+        console.error("Geocode error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+// Get address from coordinates (reverse geocoding)
+userRouter.post('/reverse-geocode/v1', userAuthentication, async (req, res) => {
+    try {
+        const { lat, lng } = req.body;
+
+        if (!lat || !lng) {
+            return res.status(400).json({
+                success: false,
+                message: "Latitude and longitude are required"
+            });
+        }
+
+        const result = await getAddressFromCoordinates(lat, lng);
+
+        if (!result) {
+            return res.status(404).json({
+                success: false,
+                message: "Could not reverse geocode coordinates"
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: result
+        });
+    } catch (error) {
+        console.error("Reverse geocode error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+// Search places
+userRouter.post('/search/places/v1', userAuthentication, async (req, res) => {
+    try {
+        const { query, lat, lng } = req.body;
+
+        if (!query) {
+            return res.status(400).json({
+                success: false,
+                message: "Search query is required"
+            });
+        }
+
+        const results = await searchPlaces(query, lat, lng);
+
+        return res.status(200).json({
+            success: true,
+            data: results
+        });
+    } catch (error) {
+        console.error("Place search error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+// Get Google Maps API key (for client-side use)
+userRouter.get('/config/maps-api-key/v1', userAuthentication, async (req, res) => {
+    try {
+        const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+
+        if (!apiKey) {
+            return res.status(500).json({
+                success: false,
+                message: "Google Maps API key not configured"
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                apiKey
+            }
+        });
+    } catch (error) {
+        console.error("Config error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+// Auto-detect user location when app opens
+userRouter.post('/detect/location/v1', userAuthentication, async (req, res) => {
+    try {
+        const { lat, lng } = req.body;
+
+        // If coordinates are provided, use them
+        if (lat && lng) {
+            const detailedAddress = await getDetailedAddressFromCoordinates(lat, lng);
+            
+            if (detailedAddress) {
+                // Update user's location in profile
+                const updateData = {
+                    lat: lat.toString(),
+                    long: lng.toString(),
+                    city: detailedAddress.city || "",
+                    state: detailedAddress.state || ""
+                };
+                
+                // Only update if values are not empty
+                Object.keys(updateData).forEach(key => {
+                    if (!updateData[key]) delete updateData[key];
+                });
+                
+                if (Object.keys(updateData).length > 0) {
+                    await User.findByIdAndUpdate(req.user._id, updateData, { new: true });
+                }
+                
+                return res.status(200).json({
+                    success: true,
+                    data: {
+                        coordinates: { lat, lng },
+                        address: detailedAddress
+                    }
+                });
+            }
+        }
+
+        // Fallback to IP-based location detection
+        const ipLocation = await detectLocationByIP();
+        if (ipLocation) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    coordinates: { 
+                        lat: ipLocation.lat, 
+                        lng: ipLocation.lng 
+                    },
+                    location: {
+                        city: ipLocation.city,
+                        state: ipLocation.state
+                    }
+                }
+            });
+        }
+
+        // If all methods fail, return default response
+        return res.status(200).json({
+            success: true,
+            data: {
+                message: "Location detection completed"
+            }
+        });
+    } catch (error) {
+        console.error("Location detection error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
 
 export default userRouter;

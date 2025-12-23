@@ -1156,18 +1156,23 @@ export const storeDetails = async (req, res) => {
           .json({ success: false, message: "Unauthorized access" });
       }
   
-      const store = await Store.findOne({ createdBy: req.user._id });
-      if (!store) {
+      // First check if store exists
+      const existingStore = await Store.findOne({ createdBy: req.user._id });
+      if (!existingStore) {
         return res
-          .status(status.NotFound)
+          .status(status.OK)
           .json({
-            success: false,
-            message: "You have not created any store with this account",
+            success: true,
+            message: "No store created yet",
+            data: null
           });
       }
   
+      // Use consistent ObjectId conversion
+      const userIdObjectId = new mongoose.Types.ObjectId(req.user._id);
+      
       const storeDetails = await Store.aggregate([
-        { $match: { createdBy: new ObjectId(req.user._id) } },
+        { $match: { createdBy: userIdObjectId } },
         {
           $lookup: {
             from: "store_categories",
@@ -1248,14 +1253,38 @@ export const storeDetails = async (req, res) => {
           });
         })
       );
-
+  
       // Return single store object (not array) with complete structure
       const storeData = enrichedStores[0] || null;
       
-      if (!storeData) {
-        return res.status(status.NotFound).json({
-          success: false,
-          message: "Store not found",
+      // Even if aggregation doesn't return data, return the basic store info
+      if (!storeData && existingStore) {
+        const basicStoreData = {
+          _id: existingStore._id,
+          name: existingStore.name,
+          category: existingStore.category,
+          information: existingStore.information,
+          phone: existingStore.phone,
+          address: existingStore.address,
+          email: existingStore.email,
+          directMe: existingStore.directMe,
+          coverImage: existingStore.coverImage,
+          images: existingStore.images || [],
+          createdBy: existingStore.createdBy,
+          updatedBy: existingStore.updatedBy,
+          status: existingStore.status,
+          location: existingStore.location,
+          shiprocket: existingStore.shiprocket || {},
+          createdAt: existingStore.createdAt,
+          updatedAt: existingStore.updatedAt,
+          storeOffers: [],
+          popularProducts: [],
+        };
+        
+        return res.status(status.OK).json({
+          success: true,
+          message: "Store details fetched successfully",
+          data: basicStoreData,
         });
       }
 
@@ -1297,7 +1326,7 @@ export const storeDetails = async (req, res) => {
       console.error("Error in storeDetails:", error);
       return res.status(status.InternalServerError).json({
         success: false,
-        message: error.message,
+        message: "Failed to fetch store details: " + error.message,
       });
     }
   };

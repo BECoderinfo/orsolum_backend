@@ -19,6 +19,12 @@ const UserSchema = new mongoose.Schema({
         trim: true,
         maxlength: 20
     },
+    country: {
+        type: String,
+        trim: true,
+        maxlength: 20,
+        default: "India"
+    },
     role: {
         type: String,
         enum: ['user', 'retailer', 'seller'],
@@ -63,10 +69,24 @@ const UserSchema = new mongoose.Schema({
         default: true
     },
     lat: {
-        type: String
+        type: String,
+        trim: true,
+        validate: {
+            validator: function(v) {
+                return !v || v === "0" || /^-?\d+(\.\d+)?$/.test(v);
+            },
+            message: props => `${props.value} is not a valid latitude!`
+        }
     },
     long: {
-        type: String
+        type: String,
+        trim: true,
+        validate: {
+            validator: function(v) {
+                return !v || v === "0" || /^-?\d+(\.\d+)?$/.test(v);
+            },
+            message: props => `${props.value} is not a valid longitude!`
+        }
     },
     coins: {
         type: Number,

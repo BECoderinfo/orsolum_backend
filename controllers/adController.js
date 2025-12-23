@@ -14,8 +14,30 @@ const { ObjectId } = mongoose.Types;
 
 // Allowed ad placements across Admin, Seller, and Retailer
 const AD_LOCATIONS = ["crazy_deals", "trending_items", "popular_categories", "stores_near_me", "promotional_banner"];
+
+// API to get all available ad locations
+export const getAdLocations = async (req, res) => {
+  try {
+    return res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      data: AD_LOCATIONS,
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+  }
+};
 const S3_BASE_URL = "https://orsolum.s3.ap-south-1.amazonaws.com/";
 const BANK_SECRET = process.env.ADS_BANK_SECRET || process.env.BANK_SECRET || "";
+
+// Validate that encryption key is properly set
+if (!BANK_SECRET) {
+  console.warn("⚠️ WARNING: ADS_BANK_SECRET or BANK_SECRET environment variable is not set. Bank details will not be encrypted!");
+}
 
 const normalizeLocation = (loc) =>
   (loc || "")
@@ -39,18 +61,29 @@ const extractUploadedUrls = (files = []) =>
 
 const encryptValue = (value) => {
   if (!BANK_SECRET || !value) return value;
-  const key = crypto.createHash("sha256").update(BANK_SECRET).digest();
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
-  let encrypted = cipher.update(value, "utf8", "base64");
-  encrypted += cipher.final("base64");
-  return `${iv.toString("base64")}:${encrypted}`;
+  try {
+    const key = crypto.createHash("sha256").update(BANK_SECRET).digest();
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
+    let encrypted = cipher.update(value, "utf8", "base64");
+    encrypted += cipher.final("base64");
+    return `${iv.toString("base64")}:${encrypted}`;
+  } catch (error) {
+    console.error("Encryption error:", error.message);
+    return value; // Return original value if encryption fails
+  }
 };
 
 const decryptValue = (value) => {
-  if (!BANK_SECRET || !value || !value.includes(":")) return value;
+  if (!BANK_SECRET || !value || typeof value !== "string") return value;
+  
+  // Check if value is already encrypted (contains IV:encrypted format)
+  if (!value.includes(":")) return value;
+  
   try {
     const [ivStr, enc] = value.split(":");
+    if (!ivStr || !enc) return value; // Not in expected format
+    
     const key = crypto.createHash("sha256").update(BANK_SECRET).digest();
     const iv = Buffer.from(ivStr, "base64");
     const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
@@ -58,7 +91,8 @@ const decryptValue = (value) => {
     decrypted += decipher.final("utf8");
     return decrypted;
   } catch (e) {
-    return value;
+    console.error("Decryption error:", e.message);
+    return value; // Return original value if decryption fails
   }
 };
 
@@ -350,6 +384,11 @@ export const deleteSellerAd = async (req, res) => {
       });
     }
 
+    // If this is a seller/retailer ad, resume admin ads for that location before deletion
+    if (ad.sellerId) {
+      await resumeAdminAdsForLocation(ad.location);
+    }
+    
     // Soft delete - mark as deleted
     ad.deleted = true;
     ad.deletedBy = "seller";
@@ -735,6 +774,28 @@ export const adminUpdateAdStatus = async (req, res) => {
       });
     }
 
+    // Validate status transition based on current status
+    if (newStatus) {
+      // Define valid status transitions
+      const validTransitions = {
+        "pending": ["approved", "rejected"],
+        "approved": ["active", "rejected", "cancelled"],
+        "active": ["completed", "cancelled"],
+        "rejected": ["pending"], // Allow re-submission if rejected
+        "completed": ["cancelled"],
+        "cancelled": ["pending"], // Allow re-submission if cancelled
+      };
+      
+      const allowedTransitions = validTransitions[ad.status] || [];
+      if (!allowedTransitions.includes(newStatus)) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: `Invalid status transition from ${ad.status} to ${newStatus}. Valid transitions: ${allowedTransitions.join(", ")}`,
+        });
+      }
+    }
+
     if (newStatus && !["pending", "approved", "rejected", "active", "completed", "cancelled"].includes(newStatus)) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
@@ -809,6 +870,11 @@ export const adminUpdateAdStatus = async (req, res) => {
     if (newStatus === "rejected") {
       ad.status = "rejected";
       ad.rejectionReason = rejectionReason || "Rejected by admin";
+      
+      // If a seller/retailer ad was rejected, check if we should resume admin ads
+      if (ad.sellerId) {
+        await resumeAdminAdsForLocation(ad.location);
+      }
     } else if (newStatus === "approved") {
       // Mark as approved
       ad.status = "approved";
@@ -894,6 +960,11 @@ export const adminUpdateAdStatus = async (req, res) => {
       setAdDates(startDate);
       ad.status = "active";
       ad.approvedBy = ad.approvedBy || adminId;
+      
+      // If this is a seller/retailer ad, pause any active admin ads for the same location
+      if (ad.sellerId) {
+        await pauseAdminAdsForLocation(ad.location);
+      }
     } else if (newStatus) {
       ad.status = newStatus;
     } else {
@@ -912,6 +983,16 @@ export const adminUpdateAdStatus = async (req, res) => {
         setAdDates(startDate);
         ad.status = "active";
         ad.approvedBy = ad.approvedBy || adminId;
+        
+        // If this is a seller/retailer ad, pause any active admin ads for the same location
+        if (ad.sellerId) {
+          await pauseAdminAdsForLocation(ad.location);
+        }
+      } else if (newStatus === "cancelled" || newStatus === "completed") {
+        // If a seller/retailer ad is being cancelled or completed, resume admin ads for that location
+        if (ad.sellerId) {
+          await resumeAdminAdsForLocation(ad.location);
+        }
       }
     }
 
@@ -1150,6 +1231,16 @@ export const adminUpdateOrsolumAd = async (req, res) => {
 
     if (newStatus && ["active", "completed", "cancelled"].includes(newStatus)) {
       ad.status = newStatus;
+      
+      // If an admin ad is being set to active, pause any active seller/retailer ads for the same location
+      if (!ad.sellerId && newStatus === "active") {  // This is an admin ad and it's being activated
+        await pauseSellerAdsForLocation(ad.location);
+      }
+      
+      // If an admin ad is being cancelled or completed, resume any paused seller/retailer ads for the same location
+      if (!ad.sellerId && (newStatus === "cancelled" || newStatus === "completed")) {
+        await resumeSellerAdsForLocation(ad.location);
+      }
     }
 
     if (startDate) {
@@ -1207,6 +1298,21 @@ export const adminDeleteOrsolumAd = async (req, res) => {
     ad.deleted = true;
     ad.deletedBy = "admin";
     ad.status = "cancelled";
+    
+    // If this is an admin ad, check if we should resume other ads for this location
+    if (!ad.sellerId) {  // This is an admin ad
+      // Find active seller/retailer ads for this location and make sure they continue to run
+      const activeSellerAds = await Ad.find({
+        location: ad.location,
+        sellerId: { $exists: true }, // Seller ads have sellerId
+        status: "active", // Active ads
+        deleted: { $ne: true }, // Not deleted
+      });
+      
+      // If there are no active seller ads, the location is now available for other admin ads
+      // But we don't need to do anything special here since the admin ad is being removed
+    }
+    
     await ad.save();
 
     return res.status(status.OK).json({
@@ -1248,6 +1354,11 @@ export const adminDeleteAd = async (req, res) => {
       });
     }
 
+    // If this is a seller/retailer ad, resume admin ads for that location before deletion
+    if (ad.sellerId) {
+      await resumeAdminAdsForLocation(ad.location);
+    }
+    
     // Hard delete - remove from database
     await Ad.deleteOne({ _id: ad._id });
 
@@ -1359,6 +1470,15 @@ export const checkAdsExpiryAndNotify = async () => {
     }
 
     // 1) Mark completed ads (excluding deleted ones and admin ads without endDate)
+    const completedAds = await Ad.find(
+      {
+        status: "active",
+        endDate: { $exists: true, $ne: null, $lte: now },
+        deleted: { $ne: true },
+      }
+    );
+    
+    // Update status to completed
     const completedResult = await Ad.updateMany(
       {
         status: "active",
@@ -1367,6 +1487,13 @@ export const checkAdsExpiryAndNotify = async () => {
       },
       { $set: { status: "completed" } }
     );
+    
+    // Resume admin ads for locations where seller/retailer ads have completed
+    for (const completedAd of completedAds) {
+      if (completedAd.sellerId) {  // Only for seller/retailer ads
+        await resumeAdminAdsForLocation(completedAd.location);
+      }
+    }
 
     if (completedResult.modifiedCount) {
       console.log(`✅ Marked ${completedResult.modifiedCount} ads as completed`);
@@ -1444,15 +1571,24 @@ export const adminGetAdsConfig = async (req, res) => {
     const config = await getAdsConfig();
     // Decrypt bank details for admin view
     const decryptedBank = {
-      ...config.bankDetails,
+      accountName: decryptValue(config.bankDetails?.accountName || ""),
       accountNumber: decryptValue(config.bankDetails?.accountNumber || ""),
       ifsc: decryptValue(config.bankDetails?.ifsc || ""),
+      bankName: config.bankDetails?.bankName || "",
+      branch: config.bankDetails?.branch || "",
       upiId: decryptValue(config.bankDetails?.upiId || ""),
+      note: config.bankDetails?.note || "",
     };
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
-      data: { ...config, bankDetails: decryptedBank },
+      data: { 
+        locationRates: config.locationRates,
+        bankDetails: decryptedBank,
+        _id: config._id,
+        createdAt: config.createdAt,
+        updatedAt: config.updatedAt,
+      },
     });
   } catch (error) {
     res.status(status.InternalServerError).json({
@@ -1511,10 +1647,13 @@ export const adminUpdateAdsConfig = async (req, res) => {
       const incoming = req.body.bankDetails;
       update.bankDetails = {
         ...existing.bankDetails,
-        ...incoming,
+        accountName: incoming.accountName ? encryptValue(incoming.accountName) : existing.bankDetails.accountName,
         accountNumber: incoming.accountNumber ? encryptValue(incoming.accountNumber) : existing.bankDetails.accountNumber,
         ifsc: incoming.ifsc ? encryptValue(incoming.ifsc) : existing.bankDetails.ifsc,
         upiId: incoming.upiId ? encryptValue(incoming.upiId) : existing.bankDetails.upiId,
+        bankName: incoming.bankName !== undefined ? incoming.bankName : existing.bankDetails.bankName,
+        branch: incoming.branch !== undefined ? incoming.branch : existing.bankDetails.branch,
+        note: incoming.note !== undefined ? incoming.note : existing.bankDetails.note,
       };
     }
 
@@ -1523,10 +1662,19 @@ export const adminUpdateAdsConfig = async (req, res) => {
       runValidators: true,
     }).lean();
 
+    // Decrypt bank details for response
+    const decryptedBank = {
+      ...updated.bankDetails,
+      accountName: decryptValue(updated.bankDetails?.accountName || ""),
+      accountNumber: decryptValue(updated.bankDetails?.accountNumber || ""),
+      ifsc: decryptValue(updated.bankDetails?.ifsc || ""),
+      upiId: decryptValue(updated.bankDetails?.upiId || ""),
+    };
+
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
-      data: updated,
+      data: { ...updated, bankDetails: decryptedBank },
     });
   } catch (error) {
     res.status(status.InternalServerError).json({
@@ -1542,10 +1690,13 @@ export const getSellerAdsConfig = async (req, res) => {
   try {
     const config = await getAdsConfig();
     const decryptedBank = {
-      ...config.bankDetails,
+      accountName: decryptValue(config.bankDetails?.accountName || ""),
       accountNumber: decryptValue(config.bankDetails?.accountNumber || ""),
       ifsc: decryptValue(config.bankDetails?.ifsc || ""),
+      bankName: config.bankDetails?.bankName || "",
+      branch: config.bankDetails?.branch || "",
       upiId: decryptValue(config.bankDetails?.upiId || ""),
+      note: config.bankDetails?.note || "",
     };
     return res.status(status.OK).json({
       status: jsonStatus.OK,
@@ -1590,10 +1741,10 @@ export const getActiveAds = async (req, res) => {
       filter.location = normalizedLocation;
     }
 
-    // ✅ seller ids
-    const sellerUsers = await User.find({ role: "seller" }).select("_id").lean();
-    const sellerIds = sellerUsers.map((u) => u._id);
-    filter.sellerId = { $in: sellerIds };
+    // ✅ seller and retailer ids
+    const sellerAndRetailerUsers = await User.find({ role: { $in: ["seller", "retailer"] } }).select("_id").lean();
+    const sellerAndRetailerIds = sellerAndRetailerUsers.map((u) => u._id);
+    filter.sellerId = { $in: sellerAndRetailerIds };
 
     const sellerAds = await Ad.find(filter)
       .populate("sellerId", "name phone role")
@@ -1692,7 +1843,7 @@ export const getActiveAds = async (req, res) => {
     // Group one per location (seller priority then admin)
     const adsByLocation = {};
     sellerAds.forEach((ad) => {
-      if (!ad.sellerId || ad.sellerId.role !== "seller") return;
+      if (!ad.sellerId || (ad.sellerId.role !== "seller" && ad.sellerId.role !== "retailer")) return;
       if (adsByLocation[ad.location]) return;
       adsByLocation[ad.location] = buildAdPayload(ad);
     });
@@ -2319,6 +2470,232 @@ export const createAdPaymentSession = async (req, res) => {
       message: error.message || "Failed to create payment session",
     });
     return catchError("createAdPaymentSession", error, req, res);
+  }
+};
+
+// New API to get decrypted bank details for seller/retailer ads
+export const getAdBankDetails = async (req, res) => {
+  try {
+    const config = await getAdsConfig();
+    const decryptedBank = {
+      accountName: decryptValue(config.bankDetails?.accountName || ""),
+      accountNumber: decryptValue(config.bankDetails?.accountNumber || ""),
+      ifsc: decryptValue(config.bankDetails?.ifsc || ""),
+      bankName: config.bankDetails?.bankName || "",
+      branch: config.bankDetails?.branch || "",
+      upiId: decryptValue(config.bankDetails?.upiId || ""),
+      note: config.bankDetails?.note || "",
+    };
+    
+    return res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      data: decryptedBank,
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("getAdBankDetails", error, req, res);
+  }
+};
+
+// API to get complete ad configuration with decrypted bank details for all users
+export const getAdsConfigForUser = async (req, res) => {
+  try {
+    const config = await getAdsConfig();
+    
+    // Decrypt bank details for user view (seller/retailer)
+    const decryptedBank = {
+      accountName: decryptValue(config.bankDetails?.accountName || ""),
+      accountNumber: decryptValue(config.bankDetails?.accountNumber || ""),
+      ifsc: decryptValue(config.bankDetails?.ifsc || ""),
+      bankName: config.bankDetails?.bankName || "",
+      branch: config.bankDetails?.branch || "",
+      upiId: decryptValue(config.bankDetails?.upiId || ""),
+      note: config.bankDetails?.note || "",
+    };
+    
+    return res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      data: {
+        locationRates: config.locationRates,
+        bankDetails: decryptedBank,
+        _id: config._id,
+        createdAt: config.createdAt,
+        updatedAt: config.updatedAt,
+      },
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("getAdsConfigForUser", error, req, res);
+  }
+};
+
+// API to get all ads configuration data for UI display in admin panel
+export const getAllAdsConfigData = async (req, res) => {
+  try {
+    const config = await getAdsConfig();
+    
+    // Decrypt bank details for admin view
+    const decryptedBank = {
+      accountName: decryptValue(config.bankDetails?.accountName || ""),
+      accountNumber: decryptValue(config.bankDetails?.accountNumber || ""),
+      ifsc: decryptValue(config.bankDetails?.ifsc || ""),
+      bankName: config.bankDetails?.bankName || "",
+      branch: config.bankDetails?.branch || "",
+      upiId: decryptValue(config.bankDetails?.upiId || ""),
+      note: config.bankDetails?.note || "",
+    };
+    
+    // Get all active ads to show in admin panel
+    const activeAds = await Ad.find({
+      status: { $in: ["active", "pending", "approved"] },
+      deleted: { $ne: true },
+    }).populate("sellerId", "name phone email").populate("storeId", "name").sort({ createdAt: -1 }).limit(10);
+    
+    return res.status(status.OK).json({
+      status: jsonStatus.OK,
+      success: true,
+      data: {
+        config: {
+          locationRates: config.locationRates,
+          bankDetails: decryptedBank,
+          _id: config._id,
+          createdAt: config.createdAt,
+          updatedAt: config.updatedAt,
+        },
+        recentAds: activeAds,
+        adLocations: AD_LOCATIONS,
+      },
+    });
+  } catch (error) {
+    res.status(status.InternalServerError).json({
+      status: jsonStatus.InternalServerError,
+      success: false,
+      message: error.message,
+    });
+    return catchError("getAllAdsConfigData", error, req, res);
+  }
+};
+
+// Function to pause active admin ads for a specific location when seller/retailer ads are activated
+const pauseAdminAdsForLocation = async (location) => {
+  try {
+    // Find active admin ads for the same location
+    const adminAds = await Ad.find({
+      location: location,
+      sellerId: { $exists: false }, // Admin ads don't have sellerId
+      createdByAdmin: { $exists: true }, // Only admin-created ads
+      status: "active", // Only active ads
+      deleted: { $ne: true }, // Not deleted
+    });
+    
+    // Pause all active admin ads for this location
+    for (const adminAd of adminAds) {
+      adminAd.status = "paused"; // Change status to paused
+      await adminAd.save();
+    }
+    
+    console.log(`Paused ${adminAds.length} admin ads for location: ${location}`);
+  } catch (error) {
+    console.error('Error pausing admin ads:', error);
+  }
+};
+
+// Function to resume admin ads when seller/retailer ads are no longer active
+const resumeAdminAdsForLocation = async (location) => {
+  try {
+    // Find paused admin ads for the location
+    const pausedAdminAds = await Ad.find({
+      location: location,
+      sellerId: { $exists: false }, // Admin ads don't have sellerId
+      createdByAdmin: { $exists: true }, // Only admin-created ads
+      status: "paused", // Only paused ads
+      deleted: { $ne: true }, // Not deleted
+    });
+    
+    // Check if there are any active seller/retailer ads for this location
+    const activeSellerAds = await Ad.find({
+      location: location,
+      sellerId: { $exists: true }, // Seller ads have sellerId
+      status: "active", // Active ads
+      deleted: { $ne: true }, // Not deleted
+    });
+    
+    // Only resume admin ads if no active seller/retailer ads exist
+    if (activeSellerAds.length === 0) {
+      for (const adminAd of pausedAdminAds) {
+        adminAd.status = "active"; // Resume the ad
+        await adminAd.save();
+      }
+      console.log(`Resumed ${pausedAdminAds.length} admin ads for location: ${location}`);
+    }
+  } catch (error) {
+    console.error('Error resuming admin ads:', error);
+  }
+};
+
+// Function to pause active seller ads for a specific location when admin ads are activated
+const pauseSellerAdsForLocation = async (location) => {
+  try {
+    // Find active seller ads for the same location
+    const sellerAds = await Ad.find({
+      location: location,
+      sellerId: { $exists: true }, // Seller ads have sellerId
+      status: "active", // Only active ads
+      deleted: { $ne: true }, // Not deleted
+    });
+    
+    // Pause all active seller ads for this location
+    for (const sellerAd of sellerAds) {
+      sellerAd.status = "paused"; // Change status to paused
+      await sellerAd.save();
+    }
+    
+    console.log(`Paused ${sellerAds.length} seller ads for location: ${location}`);
+  } catch (error) {
+    console.error('Error pausing seller ads:', error);
+  }
+};
+
+// Function to resume seller ads when admin ads are no longer active
+const resumeSellerAdsForLocation = async (location) => {
+  try {
+    // Find paused seller ads for the location
+    const pausedSellerAds = await Ad.find({
+      location: location,
+      sellerId: { $exists: true }, // Seller ads have sellerId
+      status: "paused", // Only paused ads
+      deleted: { $ne: true }, // Not deleted
+    });
+    
+    // Check if there are any active admin ads for this location
+    const activeAdminAds = await Ad.find({
+      location: location,
+      sellerId: { $exists: false }, // Admin ads don't have sellerId
+      createdByAdmin: { $exists: true }, // Only admin-created ads
+      status: "active", // Active ads
+      deleted: { $ne: true }, // Not deleted
+    });
+    
+    // Only resume seller ads if no active admin ads exist
+    if (activeAdminAds.length === 0) {
+      for (const sellerAd of pausedSellerAds) {
+        sellerAd.status = "active"; // Resume the ad
+        await sellerAd.save();
+      }
+      console.log(`Resumed ${pausedSellerAds.length} seller ads for location: ${location}`);
+    }
+  } catch (error) {
+    console.error('Error resuming seller ads:', error);
   }
 };
 

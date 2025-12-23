@@ -249,7 +249,7 @@ export const isExist = async (req, res) => {
 
 export const sendRegisterOtp = async (req, res) => {
     try {
-        const { phone } = req.body;
+        const { phone, name, appHash } = req.body; // Add appHash parameter
 
         if (!phone) {
             return res.status(status.BadRequest).json({ 
@@ -285,18 +285,24 @@ export const sendRegisterOtp = async (req, res) => {
         });
         await otpRecord.save();
 
-        // Send SMS in background (non-blocking) - don't await, just fire and forget
-        // This ensures response is sent immediately even if SMS service is slow
-        sendSms(phone.replace('+', ''), { var1: req.body.name || 'User', var2: otp })
+        // Send SMS with app hash for autofill
+        const smsParams = {
+            var1: req.body.name || "Retailer",
+            var2: otp,
+            var3: appHash || "" // App hash for Android autofill
+        };
+
+        sendSms(phone.replace('+', ''), smsParams)
             .then((smsSent) => {
                 if (smsSent) {
-                    console.log(`SMS sent successfully to ${phone}`);
+                    console.log(`✅ SMS sent successfully to ${phone}`);
+                    console.log(`📱 OTP: ${otp}, App Hash: ${appHash || 'Not provided'}`);
                 } else {
-                    console.log(`SMS failed for ${phone}, but OTP is saved`);
+                    console.log(`⚠️ SMS failed for ${phone}, but OTP is saved`);
                 }
             })
             .catch((smsError) => {
-                console.error(`SMS error for ${phone}:`, smsError.message);
+                console.error(`❌ SMS error for ${phone}:`, smsError.message);
                 // OTP is already saved, so user can still use it
             });
 
@@ -321,7 +327,7 @@ export const sendRegisterOtp = async (req, res) => {
 
 export const sendLoginOtp = async (req, res) => {
     try {
-        const { phone } = req.body;
+        const { phone, appHash } = req.body; // Add appHash parameter
 
         if (!phone) {
             return res.status(status.BadRequest).json({ 
@@ -367,18 +373,24 @@ export const sendLoginOtp = async (req, res) => {
         });
         await otpRecord.save();
 
-        // Send SMS in background (non-blocking) - don't await, just fire and forget
-        // This ensures response is sent immediately even if SMS service is slow
-        sendSms(phone.replace('+', ''), { var1: userRecord.name || 'User', var2: otp })
+        // Send SMS with app hash for autofill
+        const smsParams = {
+            var1: userRecord.name || "Retailer",
+            var2: otp,
+            var3: appHash || "" // App hash for Android autofill
+        };
+
+        sendSms(phone.replace('+', ''), smsParams)
             .then((smsSent) => {
                 if (smsSent) {
-                    console.log(`SMS sent successfully to ${phone}`);
+                    console.log(`✅ SMS sent successfully to ${phone}`);
+                    console.log(`📱 OTP: ${otp}, App Hash: ${appHash || 'Not provided'}`);
                 } else {
-                    console.log(`SMS failed for ${phone}, but OTP is saved`);
+                    console.log(`⚠️ SMS failed for ${phone}, but OTP is saved`);
                 }
             })
             .catch((smsError) => {
-                console.error(`SMS error for ${phone}:`, smsError.message);
+                console.error(`❌ SMS error for ${phone}:`, smsError.message);
                 // OTP is already saved, so user can still use it
             });
 

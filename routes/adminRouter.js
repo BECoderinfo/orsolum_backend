@@ -8,7 +8,7 @@ import ShiprocketService from '../helper/shiprocketService.js';
 import { processGoogleMapsLink } from '../helper/latAndLong.js';
 import { createNotification, listNotifications, deleteNotification } from "../controllers/notificationController.js";
 import { adminListHelpCenterTickets, adminUpdateHelpCenterTicket, adminDeleteHelpCenterTicket } from "../controllers/helpCenterController.js";
-import { adminListAds, adminGetAdDetails, adminUpdateAdStatus, adminCreateOrsolumAd, adminUpdateOrsolumAd, adminDeleteOrsolumAd, adminGetAdsConfig, adminUpdateAdsConfig, adminDeleteAd } from "../controllers/adController.js";
+import { adminListAds, adminGetAdDetails, adminUpdateAdStatus, adminCreateOrsolumAd, adminUpdateOrsolumAd, adminDeleteOrsolumAd, adminGetAdsConfig, adminUpdateAdsConfig, adminDeleteAd, getAdsConfigForUser, getAllAdsConfigData, getAdLocations } from "../controllers/adController.js";
 import { createPopularCategory, editPopularCategory, uploadPopularCategoryImage, deletePopularCategory, listPopularCategory } from "../controllers/PopularCategoryController.js";
 import { createLocalPopularCategory, editLocalPopularCategory, uploadLocalPopularCategoryImage, deleteLocalPopularCategory, listLocalPopularCategory } from "../controllers/LocalPopularCategoryController.js";
 const adminRouter = express.Router();
@@ -216,6 +216,9 @@ adminRouter.delete('/admin/orsolum/ads/:id/v1', adminAuthentication, adminDelete
 // Ads configuration (rates + bank details)
 adminRouter.get('/admin/ads/config/v1', adminAuthentication, adminGetAdsConfig);
 adminRouter.put('/admin/ads/config/v1', adminAuthentication, adminUpdateAdsConfig);
+adminRouter.get('/admin/ads/config/user/v1', adminAuthentication, getAdsConfigForUser);
+adminRouter.get('/admin/ads/config/all/v1', adminAuthentication, getAllAdsConfigData);
+adminRouter.get('/admin/ads/locations/v1', adminAuthentication, getAdLocations);
 
 // App Theme Settings
 adminRouter.get('/admin/app/theme/settings/v1', adminAuthentication, getAppThemeSettings);

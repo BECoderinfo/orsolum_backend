@@ -17,6 +17,7 @@ export const sendSms = async (mobileNumber, templateParams) => {
                     mobiles: mobileNumber,   // +91xxxxxxxxxx or xxxxxxxxxx
                     var1: templateParams.var1,  // user name
                     var2: templateParams.var2,  // OTP
+                    var3: templateParams.appHash || '',  // App hash for auto-fill
                 },
             ],
         };
