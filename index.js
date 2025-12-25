@@ -7,6 +7,7 @@ import rateLimit from "express-rate-limit";
 import cron from "node-cron";
 import { dbConnect } from "./database.js";
 import { Server } from "socket.io";
+import mongoose from "mongoose";
 
 // import routes
 import userRouter from "./routes/userRoute.js";
@@ -72,7 +73,71 @@ app.use(
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // ✅ Database Connection
-dbConnect();
+let dbConnected = false;
+
+// Initialize database connection
+const initializeDatabase = async () => {
+  try {
+    await dbConnect();
+    dbConnected = true;
+    console.log('✅ Database connection established');
+  } catch (error) {
+    console.error('❌ Database connection error:', error);
+    // Don't exit - server can still run with connection issues
+  }
+};
+
+// Call the initialization function
+initializeDatabase();
+
+// Set up database connection monitoring
+mongoose.connection.on('connected', () => {
+  dbConnected = true;
+  console.log('✅ Database reconnected');
+});
+
+mongoose.connection.on('disconnected', () => {
+  dbConnected = false;
+  console.log('⚠️ Database disconnected');
+});
+
+mongoose.connection.on('error', (err) => {
+  console.error('🔴 Database connection error:', err);
+  dbConnected = false;
+});
+
+// ✅ Server readiness flag
+let serverReady = false;
+
+// ✅ Startup delay to ensure all services are ready
+setTimeout(() => {
+  serverReady = true;
+  console.log('✅ Server is ready to handle requests');
+}, 3000); // 3 seconds delay to ensure DB and other services are ready
+
+// ✅ Enhanced readiness middleware that also checks database connection
+app.use('/api', (req, res, next) => {
+  if (!serverReady) {
+    return res.status(503).json({
+      success: false,
+      message: 'Server is starting up, please try again in a moment',
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  // Optional: Check if database is connected (you can enable this if needed)
+  // if (!dbConnected && req.path !== '/health') {
+  //   return res.status(503).json({
+  //     success: false,
+  //     message: 'Database is temporarily unavailable',
+  //     timestamp: new Date().toISOString()
+  //   });
+  // }
+  
+  next();
+});
+
+
 
 // ✅ Root Route — Fix for "Cannot GET /"
 app.get("/", (req, res) => {
@@ -80,6 +145,17 @@ app.get("/", (req, res) => {
     success: true,
     message: "🚀 Node Backend is Live and Running Successfully on AWS EC2!",
     serverTime: new Date().toLocaleString(),
+  });
+});
+
+// ✅ General Health Check Endpoint
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Server is healthy and ready",
+    serverTime: new Date().toISOString(),
+    uptime: process.uptime(),
+    timestamp: Date.now()
   });
 });
 
@@ -103,14 +179,22 @@ app.get("/u/:id", renderSharedProfilePage);
 
 // ✅ Cron Job to check premium expiry daily at 12:01 AM
 cron.schedule("1 0 * * *", () => {
-  console.log("Running premium expiry check at 12:01 AM...");
-  checkPremiumExpiry();
+  try {
+    console.log("Running premium expiry check at 12:01 AM...");
+    checkPremiumExpiry();
+  } catch (error) {
+    console.error('🔴 Error in premium expiry cron job:', error);
+  }
 });
 
 // ✅ Cron Job to manage Ads expiry & notifications every hour
 cron.schedule("0 * * * *", () => {
-  console.log("Running ads expiry & notification check...");
-  runAdsExpiryCron();
+  try {
+    console.log("Running ads expiry & notification check...");
+    runAdsExpiryCron();
+  } catch (error) {
+    console.error('🔴 Error in ads expiry cron job:', error);
+  }
 });
 
 // ✅ Register Routes
@@ -142,6 +226,27 @@ app.use('/api/coupon', couponRoutes);
 
 // ✅ Shiprocket Webhook Route
 app.post('/api/delivery/tracking/webhook', webhookTracking);
+
+// ✅ Global Error Handling Middleware
+app.use((err, req, res, next) => {
+  console.error('🔴 Global Error Handler:', err);
+  
+  // Log error details
+  console.error('   URL:', req.method, req.url);
+  console.error('   Error:', err.message);
+  
+  // Prevent duplicate responses
+  if (res.headersSent) {
+    return next(err);
+  }
+  
+  // Send appropriate error response
+  res.status(500).json({
+    success: false,
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
 
 // ✅ Start Server
 const port = process.env.PORT || 5000;
@@ -343,4 +448,37 @@ io.engine.on("connection_error", (err) => {
   console.log("   Code:", err.code);
   console.log("   Message:", err.message);
   console.log("   Context:", err.context);
+});
+
+// ✅ Global Error Handlers
+process.on('uncaughtException', (err) => {
+  console.error('🔴 Uncaught Exception:', err);
+  console.error('   Error:', err.message);
+  console.error('   Stack:', err.stack);
+  // Don't exit the process - just log the error
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🔴 Unhandled Rejection at:', promise, 'reason:', reason);
+  if (reason instanceof Error) {
+    console.error('   Error:', reason.message);
+    console.error('   Stack:', reason.stack);
+  }
+});
+
+// ✅ Graceful shutdown handling
+process.on('SIGTERM', () => {
+  console.log('⚠️ SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('⚠️ SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
 });

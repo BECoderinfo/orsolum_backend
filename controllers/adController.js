@@ -622,7 +622,16 @@ export const deleteSellerAd = async (req, res) => {
     }
 
     ad.deleted = true;
-    await ad.save();
+    try {
+      await ad.save();
+    } catch (saveError) {
+      console.error('Error saving ad deletion:', saveError);
+      return res.status(500).json({
+        status: 500,
+        success: false,
+        message: 'Failed to update ad status'
+      });
+    }
 
     res.status(200).json({
       status: 200,
@@ -1070,7 +1079,16 @@ export const adminDeleteAd = async (req, res) => {
     }
 
     ad.deleted = true;
-    await ad.save();
+    try {
+      await ad.save();
+    } catch (saveError) {
+      console.error('Error saving ad deletion:', saveError);
+      return res.status(500).json({
+        status: 500,
+        success: false,
+        message: 'Failed to update ad status'
+      });
+    }
 
     res.status(200).json({
       status: 200,
@@ -1553,7 +1571,16 @@ export const deleteRetailerAd = async (req, res) => {
     }
 
     ad.deleted = true;
-    await ad.save();
+    try {
+      await ad.save();
+    } catch (saveError) {
+      console.error('Error saving ad deletion:', saveError);
+      return res.status(500).json({
+        status: 500,
+        success: false,
+        message: 'Failed to update ad status'
+      });
+    }
 
     res.status(200).json({
       status: 200,
@@ -1716,40 +1743,85 @@ export const getActiveAds = async (req, res) => {
     const { location } = req.query;
     const now = new Date();
     
-    // Build query for active ads
-    const query = {
+    // Find all active ads (both with and without date restrictions)
+    const allAds = await Ad.find({
       status: 'active',
-      startDate: { $lte: now },
-      endDate: { $gte: now },
       isDead: { $ne: true },
       deleted: { $ne: true }
-    };
+    }).sort({ createdAt: -1 });
     
-    // If location is specified, filter by location
-    if (location) {
-      query.location = location;
+    // Populate storeId and productId separately to handle potential errors gracefully
+    for (const ad of allAds) {
+      try {
+        if (ad.storeId) {
+          await ad.populate('storeId');
+        }
+        if (ad.productId) {
+          await ad.populate('productId');
+        }
+      } catch (populateError) {
+        console.error('Error populating ad references:', populateError);
+        // Continue with the ad even if populate fails
+      }
     }
-    
-    // Find active ads
-    const ads = await Ad.find(query)
-      .populate('storeId')
-      .populate('productId')
-      .sort({ createdAt: -1 });
 
-    // The query already filters by date range, but we can add additional validation if needed
-    const validAds = ads;
-    
-    // Group ads by location if no specific location is requested
+    // Group ads by location and prioritize non-admin ads
     const adsByLocation = {};
-    if (!location) {
-      validAds.forEach(ad => {
-        if (!adsByLocation[ad.location]) {
-          adsByLocation[ad.location] = [];
+    
+    allAds.forEach(ad => {
+      // If location query parameter is specified, only include ads for that location
+      if (location && ad.location !== location) {
+        return;
+      }
+      
+      // Apply date range filter based on ad type
+      // For seller/retailer ads, apply date range validation
+      const isAdminAd = ad.adOwnerType === 'admin';
+      
+      if (!isAdminAd) {
+        // Apply date range validation for seller/retailer ads
+        if (!ad.startDate || !ad.endDate || ad.startDate > now || ad.endDate < now) {
+          return; // Skip this ad if it doesn't meet date criteria
         }
-        // Only add the first ad per location (to prevent multiple ads in same location)
-        if (adsByLocation[ad.location].length === 0) {
-          adsByLocation[ad.location].push(ad);
+      }
+      
+      if (!adsByLocation[ad.location]) {
+        adsByLocation[ad.location] = [];
+      }
+      
+      // Check if this is a seller/retailer ad (higher priority) or admin ad (lower priority)
+      const isSellerRetailerAd = ad.adOwnerType === 'seller' || ad.adOwnerType === 'retailer';
+      
+      // If no ad exists for this location yet, add this one
+      if (adsByLocation[ad.location].length === 0) {
+        adsByLocation[ad.location].push(ad);
+      } else {
+        // If there's already an ad for this location, check priority
+        const existingAd = adsByLocation[ad.location][0];
+        const isExistingSellerRetailer = existingAd.adOwnerType === 'seller' || existingAd.adOwnerType === 'retailer';
+        
+        // If existing ad is seller/retailer, keep it (higher priority)
+        if (isExistingSellerRetailer) {
+          // Do nothing, keep existing ad
+        } else {
+          // If existing ad is admin and current ad is seller/retailer, replace it
+          if (isSellerRetailerAd) {
+            adsByLocation[ad.location] = [ad];
+          }
+          // If both are admin ads, keep the first one found
         }
+      }
+    });
+    
+    // Flatten the adsByLocation to get all ads
+    let validAds = [];
+    if (location) {
+      // If specific location requested, return only ads for that location
+      validAds = adsByLocation[location] || [];
+    } else {
+      // If no specific location, get all ads from all locations
+      Object.values(adsByLocation).forEach(locationAds => {
+        validAds = validAds.concat(locationAds);
       });
     }
     
