@@ -510,3 +510,76 @@ export const sellerAuthentication = async (req, res, next) => {
     return res.status(401).json({ success: false, message: `Authentication failed: ${error.message}` });
   }
 };
+
+/* ------------------------- GENERIC AUTHENTICATION -------------------------- */
+export const authenticateToken = async (req, res, next) => {
+  try {
+    const token = extractToken(req);
+    if (!token) {
+      return res.status(status.Unauthorized).json({
+        status: jsonStatus.Unauthorized,
+        success: false,
+        message: "No Token. Authorization Denied",
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (jwtError) {
+      // Provide specific error messages for token issues
+      if (jwtError.name === 'TokenExpiredError') {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Token expired",
+        });
+      }
+      if (jwtError.name === 'JsonWebTokenError') {
+        return res.status(status.Unauthorized).json({
+          status: jsonStatus.Unauthorized,
+          success: false,
+          message: "Invalid token",
+        });
+      }
+      return res.status(status.Unauthorized).json({
+        status: jsonStatus.Unauthorized,
+        success: false,
+        message: "Invalid or expired token",
+      });
+    }
+
+    // Try to find user in different collections based on context
+    let user = await User.findById(decoded._id);
+    if (user) {
+      req.user = user;
+      req.userType = 'user';
+      next();
+      return;
+    }
+
+    user = await Admin.findById(decoded._id);
+    if (user) {
+      req.user = user;
+      req.userType = 'admin';
+      next();
+      return;
+    }
+
+    user = await DeliveryBoy.findById(decoded._id);
+    if (user) {
+      req.user = user;
+      req.userType = 'deliveryBoy';
+      next();
+      return;
+    }
+
+    return res.status(status.Unauthorized).json({
+      status: jsonStatus.Unauthorized,
+      success: false,
+      message: "User not found",
+    });
+  } catch (error) {
+    catchError("authenticateToken", error, req, res);
+  }
+};

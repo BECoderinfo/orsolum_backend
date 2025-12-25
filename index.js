@@ -34,6 +34,10 @@ import { webhookTracking } from "./controllers/shiprocketController.js";
 import { renderSharedProfilePage } from "./controllers/userController.js";
 import superadminRouter from "./routes/superadminRouter.js";
 
+// import new routes
+import donationRoutes from './routes/donationRoutes.js';
+import couponRoutes from './routes/couponRoutes.js';
+
 dotEnv.config({ path: './.env' });
 const enableChatSockets = process.env.ENABLE_CHAT_SOCKETS !== "false";
 
@@ -131,6 +135,10 @@ app.use('/api/payment', paymentRouter);
 app.use('/api/shiprocket', shiprocketRouter);
 app.use('/api/pickup-addresses', pickupAddressRouter);
 app.use('/api', sellerRouter);
+
+// Donation and coupon routes
+app.use('/api/donation', donationRoutes);
+app.use('/api/coupon', couponRoutes);
 
 // ✅ Shiprocket Webhook Route
 app.post('/api/delivery/tracking/webhook', webhookTracking);

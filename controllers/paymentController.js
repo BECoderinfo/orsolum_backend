@@ -216,7 +216,6 @@ export const processCardPayment = async (req, res) => {
                 customer_id: userId,
                 customer_phone: req.user.phone?.replace('+91', '') || '9999999999'
             },
-            payment_methods: ["card"],
             card_details: {
                 card_number: cardNumber,
                 card_expiry_month: expiryMonth,

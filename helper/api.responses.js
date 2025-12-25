@@ -90,10 +90,10 @@ export const messages = {
     past_date_err: '## date should be a future date.',
     compiled_success: 'File compiled successfully.',
     upload_excel_file: 'Please upload a excel file',
-    access_denied: 'You don\'t have permission'
-
+    access_denied: 'You don\'t have permission',
+    errorResponse: 'Something went wrong.'
   }
-}
+};
 
 export const status = {
   OK: 200,
@@ -134,4 +134,18 @@ export const apiResponse = (success, message, data) => ({
   success,
   message,
   data
+});
+
+// Standardized error response
+export const errorResponse = (message, data = null) => ({
+  success: false,
+  message: message || 'Something went wrong.',
+  data: data
+});
+
+// Standardized success response
+export const successResponse = (data, message = 'Success') => ({
+  success: true,
+  message: message,
+  data: data
 });

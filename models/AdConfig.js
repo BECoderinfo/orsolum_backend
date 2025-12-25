@@ -3,9 +3,6 @@ import mongoose from "mongoose";
 const AdConfigSchema = new mongoose.Schema(
   {
     locationRates: {
-      banner: { type: Number, default: 0 }, // per day
-      popup: { type: Number, default: 0 },
-      offer_bar: { type: Number, default: 0 },
       crazy_deals: { type: Number, default: 0 },
       trending_items: { type: Number, default: 0 },
       popular_categories: { type: Number, default: 0 },

@@ -79,7 +79,7 @@ const AdSchema = new mongoose.Schema(
     },
     deletedBy: {
       type: String,
-      enum: ["admin", "seller"],
+      enum: ["admin", "seller", "retailer"],
     },
     rejectionReason: {
       type: String,
@@ -123,6 +123,19 @@ const AdSchema = new mongoose.Schema(
       type: ObjectId,
       ref: "admin",
     },
+
+    // Ad owner identification
+    adOwnerType: {
+      type: String,
+      enum: ["admin", "seller", "retailer"],
+      required: true,
+      default: "seller",
+    },
+    adOwnerId: {
+      type: ObjectId,
+      ref: "user",
+      required: true,
+    },
   },
   {
     timestamps: true,
@@ -131,6 +144,34 @@ const AdSchema = new mongoose.Schema(
 
 AdSchema.index({ sellerId: 1, createdAt: -1 });
 AdSchema.index({ status: 1, endDate: 1 });
+
+// Static method to check for overlapping ads
+AdSchema.statics.hasOverlappingAd = async function(location, startDate, endDate, excludeAdId = null) {
+  const query = {
+    location: location,
+    status: { $in: ['active', 'approved'] }, // Only check active and approved ads
+    deleted: { $ne: true },
+    isDead: { $ne: true },
+    $and: [
+      { $or: [
+        { startDate: { $lte: endDate } },
+        { startDate: { $exists: false } }
+      ]},
+      { $or: [
+        { endDate: { $gte: startDate } },
+        { endDate: { $exists: false } }
+      ]}
+    ]
+  };
+
+  // Exclude the current ad if provided (for updates)
+  if (excludeAdId) {
+    query._id = { $ne: excludeAdId };
+  }
+
+  const overlappingAd = await this.findOne(query);
+  return !!overlappingAd;
+};
 
 const Ad = mongoose.model("ad", AdSchema);
 

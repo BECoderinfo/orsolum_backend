@@ -82,8 +82,8 @@ const fetchCategoriesWithLocation = async ({
     lat,
     long,
     limitCount,
-    fallbackToAll = true,
-    maxDistance = 5000
+    fallbackToAll = false,  // Changed default to false to respect location filtering
+    maxDistance = 6000  // Updated to 6km average for 5-7km range
 }) => {
     const parsedLat = toNumberOrNull(lat);
     const parsedLong = toNumberOrNull(long);
@@ -115,7 +115,7 @@ const fetchCategoriesWithLocation = async ({
 
     const categoryIds = nearbyCategories.map((c) => c._id).filter(Boolean);
     if (!categoryIds.length) {
-        return [];
+        return [];  // Return empty array when no stores exist in the location
     }
 
     const pipeline = [
@@ -135,7 +135,7 @@ const fetchCategoriesWithLocation = async ({
     return StoreCategory.aggregate(pipeline);
 };
 
-const collectNearbyStoreCategoryIds = async ({ lat, long, maxDistance = 5000 }) => {
+const collectNearbyStoreCategoryIds = async ({ lat, long, maxDistance = 6000 }) => {  // Updated to 6km average for 5-7km range
     const parsedLat = toNumberOrNull(lat);
     const parsedLong = toNumberOrNull(long);
     if (parsedLat === null || parsedLong === null) return [];
@@ -163,9 +163,9 @@ const S3_BASE_URL =
     "https://orsolum.s3.ap-south-1.amazonaws.com/";
 
 const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => {
-    let storeCategoryIds = await collectNearbyStoreCategoryIds({ lat, long, maxDistance: 5000 });
+    let storeCategoryIds = await collectNearbyStoreCategoryIds({ lat, long, maxDistance: 6000 });
 
-    // If nothing found in 5km, retry with 8km to avoid empty UI
+    // If nothing found in 6km, retry with 8km to avoid empty UI
     if (!storeCategoryIds.length) {
         storeCategoryIds = await collectNearbyStoreCategoryIds({ lat, long, maxDistance: 8000 });
     }
@@ -1515,7 +1515,7 @@ export const getLocalStoreHomePageData = async (req, res) => {
         const categories = await fetchCategoriesWithLocation({
             lat,
             long,
-            limitCount: 8,
+            limitCount: null,  // Remove the limit to return all categories
             fallbackToAll: false
         });
         const popularCategories = await fetchLocalPopularCategories({ lat, long, limitCount: null });
@@ -1589,7 +1589,7 @@ export const getLocalStoreHomePageData = async (req, res) => {
                 $geoNear: {
                     near: { type: "Point", coordinates: [parsedLong, parsedLat] },
                     distanceField: "distance",
-                    maxDistance: 5000, // 5 km radius
+                    maxDistance: 6000, // 6 km radius for 5-7km range
                     spherical: true
                 }
             });
@@ -1601,30 +1601,23 @@ export const getLocalStoreHomePageData = async (req, res) => {
 
             const userLocation = { lat: parsedLat, lng: parsedLong };
 
-            // Calculate distance using simple geolib calculation
+            // Use the distance from MongoDB's $geoNear calculation (in meters), convert to km
             const storesWithDistance = stores.map((store) => {
-                if (store.location && store.location.coordinates) {
-                    const userLocationGeo = {
-                        latitude: parsedLat,
-                        longitude: parsedLong
-                    };
-                    const storeLocationGeo = {
-                        latitude: store.location.coordinates[1],
-                        longitude: store.location.coordinates[0]
-                    };
-                    const distance = store.distance ? store.distance / 1000 : getDistance(userLocationGeo, storeLocationGeo) / 1000;
+                let distanceInKm = null;
+                let estimatedTime = null;
+                
+                if (store.distance !== undefined) {
+                    // Use distance from $geoNear (in meters)
+                    distanceInKm = Math.ceil(store.distance / 1000);
+                    // Calculate estimated time (30 km/h average speed)
                     const speedKmPerHour = 30;
-                    const estimatedTime = (distance / speedKmPerHour) * 60;
-                    return {
-                        ...store,
-                        distanceKm: Math.ceil(distance),
-                        estimatedTimeMinutes: Math.ceil(estimatedTime)
-                    };
+                    estimatedTime = Math.ceil((distanceInKm / speedKmPerHour) * 60);
                 }
+                
                 return {
                     ...store,
-                    distanceKm: null,
-                    estimatedTimeMinutes: null
+                    distanceKm: distanceInKm,
+                    estimatedTimeMinutes: estimatedTime
                 };
             });
             stores = storesWithDistance;
@@ -1637,7 +1630,22 @@ export const getLocalStoreHomePageData = async (req, res) => {
             }));
         }
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: { categories, popularCategories, stores } });
+        // Determine appropriate message based on results
+        let message = "Data retrieved successfully";
+        if (categories.length === 0 && stores.length === 0) {
+            message = "No categories or stores available for this location";
+        } else if (categories.length === 0) {
+            message = "No categories available for this location";
+        } else if (stores.length === 0) {
+            message = "No stores available for this location";
+        }
+        
+        res.status(status.OK).json({ 
+            status: jsonStatus.OK, 
+            success: true, 
+            message,
+            data: { categories, popularCategories, stores } 
+        });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('getLocalStoreHomePageData', error, req, res);
@@ -1735,27 +1743,29 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             searchArea = extractAreaFromAddress(userDetails.address);
         }
 
-        // Fetch categories - always return consistent data regardless of location
+        // Fetch categories - respect location filtering and return empty if no stores exist in location
         let categories = [];
         let popularCategories = [];
+        let categoriesMessage = "Categories available for this location";
+        let storesMessage = "Stores available for this location";  // Declare here and update later
         
         try {
             categories = await fetchCategoriesWithLocation({
                 lat: searchLat,
                 long: searchLong,
-                limitCount: 8,
-                // Use fallbackToAll: true to ensure we always get categories even if no stores exist in location
-                fallbackToAll: true
+                limitCount: null,  // Remove the limit to return all categories
+                // Only use fallback when specifically needed
+                fallbackToAll: false
             });
+            
+            // Set appropriate message based on results
+            if (categories.length === 0) {
+                categoriesMessage = "No categories available for this location";
+            }
         } catch (catError) {
             console.warn("Failed to fetch categories with location:", catError.message);
-            // Fallback to all categories if location-based fetch fails
-            categories = await fetchCategoriesWithLocation({
-                lat: null,
-                long: null,
-                limitCount: 8,
-                fallbackToAll: true
-            });
+            categories = [];
+            categoriesMessage = "Error fetching categories for this location";
         }
         
         try {
@@ -1771,173 +1781,280 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
         try {
             // Require coordinates or city/area to avoid showing far stores
             if (searchLat !== null && searchLong !== null) {
-            // Build match conditions
-            let matchConditions = {
-                status: "A"
-            };
+                // Build match conditions
+                let matchConditions = {
+                    status: "A"
+                };
 
-            // ✅ Area-based filtering: If area is detected, filter stores by area name in address
-            if (searchArea) {
-                // Create regex pattern for area matching (case-insensitive)
-                const areaPattern = searchArea.replace(/\s+/g, '[\\s-]*'); // Handle spaces and hyphens
-                const areaRegex = new RegExp(areaPattern, 'i');
-                matchConditions.address = { $regex: areaRegex };
-            }
+                // ✅ Area-based filtering: If area is detected, filter stores by area name in address
+                if (searchArea) {
+                    // Create regex pattern for area matching (case-insensitive)
+                    const areaPattern = searchArea.replace(/\s+/g, '[\\s-]*'); // Handle spaces and hyphens
+                    const areaRegex = new RegExp(areaPattern, 'i');
+                    // Also check shiprocket location for area matching
+                    matchConditions.$or = [
+                        { address: { $regex: areaRegex } },
+                        { "shiprocket.pickup_location.address": { $regex: areaRegex } },
+                        { "shiprocket.pickup_location.city": { $regex: areaRegex } }
+                    ];
+                }
 
-            // Fetch stores within 5 km radius (retailer-owned only)
-            stores = await Store.aggregate([
-                {
-                    $geoNear: {
-                        near: {
-                            type: "Point",
-                            coordinates: [searchLong, searchLat] // Longitude first, then latitude
-                        },
-                        distanceField: "distance",
-                        maxDistance: 5000, // strict 5 km radius
-                        spherical: true
-                    }
-                },
-                {
-                    $match: matchConditions
-                },
-                {
-                    $lookup: {
-                        from: "users",
-                        localField: "createdBy",
-                        foreignField: "_id",
-                        as: "owner",
-                        pipeline: [{ $project: { role: 1 } }]
-                    }
-                },
-                {
-                    $addFields: {
-                        ownerRole: { $arrayElemAt: ["$owner.role", 0] }
-                    }
-                },
-                {
-                    // Show only retailer-owned stores
-                    $match: {
-                        ownerRole: "retailer"
-                    }
-                },
-                {
-                    $lookup: {
-                        from: "store_categories",
-                        localField: "category",
-                        foreignField: "_id",
-                        as: "category_name"
-                    }
-                },
-                {
-                    $addFields: {
-                        category_name: {
-                            $ifNull: [
-                                { $arrayElemAt: ["$category_name.name", 0] },
-                                null
-                            ]
-                        }
-                    }
-                },
-                {
-                    $project: {
-                        _id: 1,
-                        productImages: 1,
-                        category_name: 1,
-                        name: 1,
-                        address: 1,
-                        images: 1,
-                        location: 1,
-                        distance: 1
-                    }
-                },
-                { $sort: { createdAt: -1 } },
-                { $limit: 5 } // Only 5 stores for home section
-            ]);
-        } else if (searchCity || searchArea) {
-            // Build match conditions for city/area-based search
-            let matchConditions = {
-                status: "A"
-            };
-
-            if (searchArea) {
-                // Area-based filtering
-                const areaPattern = searchArea.replace(/\s+/g, '[\\s-]*');
-                const areaRegex = new RegExp(areaPattern, 'i');
-                matchConditions.address = { $regex: areaRegex };
-            } else if (searchCity) {
-                // City-based filtering
-                const cityRegex = new RegExp(searchCity, "i");
-                matchConditions.$or = [
-                    { address: { $regex: cityRegex } },
-                    { "shiprocket.pickup_location.city": { $regex: cityRegex } }
-                ];
-            }
-
-            stores = await Store.aggregate([
-                { $match: matchConditions },
-                {
-                    $lookup: {
-                        from: "users",
-                        localField: "createdBy",
-                        foreignField: "_id",
-                        as: "owner",
-                        pipeline: [{ $project: { role: 1 } }]
-                    }
-                },
-                {
-                    $addFields: {
-                        ownerRole: { $arrayElemAt: ["$owner.role", 0] }
-                    }
-                },
-                {
-                    // Show only retailer-owned stores
-                    $match: {
-                        ownerRole: "retailer"
-                    }
-                },
-                {
-                    $lookup: {
-                        from: "store_categories",
-                        localField: "category",
-                        foreignField: "_id",
-                        as: "category_name"
-                    }
-                },
-                {
-                    $addFields: {
-                        category_name: {
-                            $ifNull: [
-                                { $arrayElemAt: ["$category_name.name", 0] },
-                                null
-                            ]
-                        }
-                    }
-                },
-                {
-                    $project: {
-                        _id: 1,
-                        productImages: 1,
-                        category_name: 1,
-                        name: 1,
-                        address: 1,
-                        images: 1,
-                        location: 1
-                    }
-                },
-                { $sort: { createdAt: -1 } },
-                { $limit: 5 } // Only 5 for home section
-            ]);
-            } else {
-                // No coords and no city/area: return empty array but ensure consistent response structure
-                stores = [];
-            }
-            
-            // If still no stores found, try to get ANY stores as final fallback (for new locations)
-            if (!stores || stores.length === 0) {
-                console.log(`No stores found for location (${searchCity || 'N/A'}, ${searchArea || 'N/A'}), trying global fallback`);
-                
+                // Fetch stores within 5 km radius (retailer-owned only)
                 stores = await Store.aggregate([
-                    { $match: { status: "A" } },
+                    {
+                        $geoNear: {
+                            near: {
+                                type: "Point",
+                                coordinates: [searchLong, searchLat] // Longitude first, then latitude
+                            },
+                            distanceField: "distance",
+                            maxDistance: 6000, // strict 6 km radius for 5-7km range
+                            spherical: true
+                        }
+                    },
+                    {
+                        $match: matchConditions
+                    },
+                    {
+                        $lookup: {
+                            from: "users",
+                            localField: "createdBy",
+                            foreignField: "_id",
+                            as: "owner",
+                            pipeline: [{ $project: { role: 1 } }]
+                        }
+                    },
+                    {
+                        $addFields: {
+                            ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+                        }
+                    },
+                    {
+                        // Show only retailer-owned stores
+                        $match: {
+                            ownerRole: "retailer"
+                        }
+                    },
+                    {
+                        $lookup: {
+                            from: "store_categories",
+                            localField: "category",
+                            foreignField: "_id",
+                            as: "category_name"
+                        }
+                    },
+                    {
+                        $addFields: {
+                            category_name: {
+                                $ifNull: [
+                                    { $arrayElemAt: ["$category_name.name", 0] },
+                                    null
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        $project: {
+                            _id: 1,
+                            productImages: 1,
+                            category_name: 1,
+                            name: 1,
+                            address: 1,
+                            images: 1,
+                            location: 1,
+                            distance: 1
+                        }
+                    },
+                    { $sort: { createdAt: -1 } },
+                    { $limit: 5 } // Only 5 stores for home section
+                ]);
+                
+                // If no stores found in 5km radius, implement fallback workflow
+                if (!stores || stores.length === 0) {
+                    console.log(`No stores found within 5km radius for (${searchCity || 'N/A'}, ${searchArea || 'N/A'}), implementing fallback workflow`);
+                    
+                    // First fallback: city/area level search
+                    if (searchCity || searchArea) {
+                        // Build match conditions for city/area-based search
+                        let cityAreaMatchConditions = {
+                            status: "A"
+                        };
+
+                        if (searchArea) {
+                            // Area-based filtering
+                            const areaPattern = searchArea.replace(/\s+/g, '[\\s-]*');
+                            const areaRegex = new RegExp(areaPattern, 'i');
+                            // Also check shiprocket location for area matching
+                            cityAreaMatchConditions.$or = [
+                                { address: { $regex: areaRegex } },
+                                { "shiprocket.pickup_location.address": { $regex: areaRegex } },
+                                { "shiprocket.pickup_location.city": { $regex: areaRegex } }
+                            ];
+                        } else if (searchCity) {
+                            // City-based filtering
+                            const cityRegex = new RegExp(searchCity, "i");
+                            cityAreaMatchConditions.$or = [
+                                { address: { $regex: cityRegex } },
+                                { "shiprocket.pickup_location.city": { $regex: cityRegex } }
+                            ];
+                        }
+
+                        stores = await Store.aggregate([
+                            { $match: cityAreaMatchConditions },
+                            {
+                                $lookup: {
+                                    from: "users",
+                                    localField: "createdBy",
+                                    foreignField: "_id",
+                                    as: "owner",
+                                    pipeline: [{ $project: { role: 1 } }]
+                                }
+                            },
+                            {
+                                $addFields: {
+                                    ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+                                }
+                            },
+                            {
+                                // Show only retailer-owned stores
+                                $match: {
+                                    ownerRole: "retailer"
+                                }
+                            },
+                            {
+                                $lookup: {
+                                    from: "store_categories",
+                                    localField: "category",
+                                    foreignField: "_id",
+                                    as: "category_name"
+                                }
+                            },
+                            {
+                                $addFields: {
+                                    category_name: {
+                                        $ifNull: [
+                                            { $arrayElemAt: ["$category_name.name", 0] },
+                                            null
+                                        ]
+                                    }
+                                }
+                            },
+                            {
+                                $project: {
+                                    _id: 1,
+                                    productImages: 1,
+                                    category_name: 1,
+                                    name: 1,
+                                    address: 1,
+                                    images: 1,
+                                    location: 1
+                                }
+                            },
+                            { $sort: { createdAt: -1 } },
+                            { $limit: 5 } // Only 5 for home section
+                        ]);
+                    }
+                    
+                    // Second fallback: global search if still no stores found
+                    if (!stores || stores.length === 0) {
+                        console.log(`No stores found at city/area level, trying global fallback for (${searchCity || 'N/A'}, ${searchArea || 'N/A'})`);
+                        
+                        // Apply fallbackToAll: true logic to get all available stores
+                        stores = await Store.aggregate([
+                            { $match: { status: "A" } },
+                            {
+                                $lookup: {
+                                    from: "users",
+                                    localField: "createdBy",
+                                    foreignField: "_id",
+                                    as: "owner",
+                                    pipeline: [{ $project: { role: 1 } }]
+                                }
+                            },
+                            {
+                                $addFields: {
+                                    ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+                                }
+                            },
+                            {
+                                // Show only retailer-owned stores
+                                $match: {
+                                    ownerRole: "retailer"
+                                }
+                            },
+                            {
+                                $lookup: {
+                                    from: "store_categories",
+                                    localField: "category",
+                                    foreignField: "_id",
+                                    as: "category_name"
+                                }
+                            },
+                            {
+                                $addFields: {
+                                    category_name: {
+                                        $ifNull: [
+                                            { $arrayElemAt: ["$category_name.name", 0] },
+                                            null
+                                        ]
+                                    }
+                                }
+                            },
+                            {
+                                $project: {
+                                    _id: 1,
+                                    productImages: 1,
+                                    category_name: 1,
+                                    name: 1,
+                                    address: 1,
+                                    images: 1,
+                                    location: 1
+                                }
+                            },
+                            { $sort: { createdAt: -1 } },
+                            { $limit: 5 } // Only 5 for home section
+                        ]);
+                        
+                        if (stores && stores.length > 0) {
+                            storesMessage = "Stores available (expanded search - may be further away)";
+                        } else {
+                            storesMessage = "No stores available for this location";
+                        }
+                    } else {
+                        // Stores found at city/area level
+                        storesMessage = "Stores available (city/area level search)";
+                    }
+                } else {
+                    // Stores found within 5km radius
+                    storesMessage = "Stores available for this location";
+                }
+            } else if (searchCity || searchArea) {
+                // Build match conditions for city/area-based search
+                let matchConditions = {
+                    status: "A"
+                };
+
+                if (searchArea) {
+                    // Area-based filtering
+                    const areaPattern = searchArea.replace(/\s+/g, '[\\s-]*');
+                    const areaRegex = new RegExp(areaPattern, 'i');
+                    // Also check shiprocket location for area matching
+                    matchConditions.$or = [
+                        { address: { $regex: areaRegex } },
+                        { "shiprocket.pickup_location.address": { $regex: areaRegex } },
+                        { "shiprocket.pickup_location.city": { $regex: areaRegex } }
+                    ];
+                } else if (searchCity) {
+                    // City-based filtering
+                    const cityRegex = new RegExp(searchCity, "i");
+                    matchConditions.$or = [
+                        { address: { $regex: cityRegex } },
+                        { "shiprocket.pickup_location.city": { $regex: cityRegex } }
+                    ];
+                }
+
+                stores = await Store.aggregate([
+                    { $match: matchConditions },
                     {
                         $lookup: {
                             from: "users",
@@ -1990,40 +2107,42 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     { $sort: { createdAt: -1 } },
                     { $limit: 5 } // Only 5 for home section
                 ]);
+                
+                if (!stores || stores.length === 0) {
+                    storesMessage = "No stores available for this location";
+                }
+            } else {
+                // No coords and no city/area: return empty array but ensure consistent response structure
+                stores = [];
+                storesMessage = "No location provided, cannot fetch stores";
             }
         } catch (storeError) {
             console.warn("Failed to fetch stores with location, returning empty array:", storeError.message);
             // Always return empty array instead of null or throwing error
             stores = [];
+            storesMessage = "Error fetching stores for this location";
         }
 
         if (searchLat !== null && searchLong !== null) {
             const userLocation = { lat: searchLat, lng: searchLong };
 
-            // Calculate distance using simple geolib calculation
+            // Use the distance from MongoDB's $geoNear calculation (in meters), convert to km
             const storesWithDistance = stores.map((store) => {
-                if (store.location && store.location.coordinates) {
-                    const userLocationGeo = {
-                        latitude: searchLat,
-                        longitude: searchLong
-                    };
-                    const storeLocationGeo = {
-                        latitude: store.location.coordinates[1],
-                        longitude: store.location.coordinates[0]
-                    };
-                    const distance = store.distance ? store.distance / 1000 : getDistance(userLocationGeo, storeLocationGeo) / 1000;
+                let distanceInKm = null;
+                let estimatedTime = null;
+                
+                if (store.distance !== undefined) {
+                    // Use distance from $geoNear (in meters)
+                    distanceInKm = Math.ceil(store.distance / 1000);
+                    // Calculate estimated time (30 km/h average speed)
                     const speedKmPerHour = 30;
-                    const estimatedTime = (distance / speedKmPerHour) * 60;
-                    return {
-                        ...store,
-                        distanceKm: Math.ceil(distance),
-                        estimatedTimeMinutes: Math.ceil(estimatedTime)
-                    };
+                    estimatedTime = Math.ceil((distanceInKm / speedKmPerHour) * 60);
                 }
+                
                 return {
                     ...store,
-                    distanceKm: null,
-                    estimatedTimeMinutes: null
+                    distanceKm: distanceInKm,
+                    estimatedTimeMinutes: estimatedTime
                 };
             });
             stores = storesWithDistance;
@@ -2060,13 +2179,26 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             limit: 8
         });
 
+        // Determine the overall response message based on results
+        let overallMessage = "Data retrieved successfully";
+        if (categories.length === 0 && stores.length === 0) {
+            overallMessage = "No categories or stores available for this location";
+        } else if (categories.length === 0) {
+            overallMessage = "No categories available for this location";
+        } else if (stores.length === 0) {
+            overallMessage = "No stores available for this location";
+        }
+        
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
+            message: overallMessage,
             data: {
                 categories,
+                categoriesMessage,
                 popularCategories,
                 stores,
+                storesMessage,
                 trendingProducts,
                 totalCartCount,
                 location: resolvedLocation
@@ -2089,10 +2221,20 @@ export const getAllCategories = async (req, res) => {
             long,
             // Return complete list when location is missing
             fallbackToAll: true,
-            limitCount: null
+            limitCount: null  // Remove any artificial limit
         });
+        
+        // Determine appropriate message based on results
+        const message = categories.length > 0 
+            ? "Categories retrieved successfully" 
+            : "No categories available for the specified location";
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: categories });
+        res.status(status.OK).json({ 
+            status: jsonStatus.OK, 
+            success: true, 
+            message,
+            data: categories 
+        });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('getAllCategories', error, req, res);
@@ -2106,8 +2248,18 @@ export const getLocalPopularCategories = async (req, res) => {
         const limitCount = req.query?.limit ? Number(req.query.limit) : null;
 
         const popularCategories = await fetchLocalPopularCategories({ lat, long, limitCount });
+        
+        // Determine appropriate message based on results
+        const message = popularCategories.length > 0 
+            ? "Popular categories retrieved successfully" 
+            : "No popular categories available for the specified location";
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: popularCategories });
+        res.status(status.OK).json({ 
+            status: jsonStatus.OK, 
+            success: true, 
+            message,
+            data: popularCategories 
+        });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('getLocalPopularCategories', error, req, res);
@@ -2155,7 +2307,7 @@ export const getAllStores = async (req, res) => {
                         coordinates: [parseFloat(long), parseFloat(lat)]
                     },
                     distanceField: "distance",
-                    maxDistance: 5000, // strict 5 km radius
+                    maxDistance: 6000, // strict 6 km radius for 5-7km range
                     spherical: true
                 }
             });
@@ -2257,30 +2409,23 @@ export const getAllStores = async (req, res) => {
         if (lat && long) {
             const userLocation = { lat: parseFloat(lat), lng: parseFloat(long) };
 
-            // Calculate distance using simple geolib calculation
+            // Use the distance from MongoDB's $geoNear calculation (in meters), convert to km
             const storesWithDistance = stores.map((store) => {
-                if (store.location && store.location.coordinates) {
-                    const userLocationGeo = {
-                        latitude: parseFloat(lat),
-                        longitude: parseFloat(long)
-                    };
-                    const storeLocationGeo = {
-                        latitude: store.location.coordinates[1],
-                        longitude: store.location.coordinates[0]
-                    };
-                    const distance = getDistance(userLocationGeo, storeLocationGeo) / 1000;
+                let distanceInKm = null;
+                let estimatedTime = null;
+                
+                if (store.distance !== undefined) {
+                    // Use distance from $geoNear (in meters)
+                    distanceInKm = Math.ceil(store.distance / 1000);
+                    // Calculate estimated time (30 km/h average speed)
                     const speedKmPerHour = 30;
-                    const estimatedTime = (distance / speedKmPerHour) * 60;
-                    return {
-                        ...store,
-                        distanceKm: Math.ceil(distance),
-                        estimatedTimeMinutes: Math.ceil(estimatedTime)
-                    };
+                    estimatedTime = Math.ceil((distanceInKm / speedKmPerHour) * 60);
                 }
+                
                 return {
                     ...store,
-                    distanceKm: null,
-                    estimatedTimeMinutes: null
+                    distanceKm: distanceInKm,
+                    estimatedTimeMinutes: estimatedTime
                 };
             });
             stores = storesWithDistance;
@@ -2293,7 +2438,17 @@ export const getAllStores = async (req, res) => {
             }));
         }
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: stores });
+        // Determine appropriate message based on results
+        const message = stores.length > 0 
+            ? "Stores retrieved successfully" 
+            : "No stores available for the specified criteria";
+        
+        res.status(status.OK).json({ 
+            status: jsonStatus.OK, 
+            success: true, 
+            message,
+            data: stores 
+        });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('getAllStores', error, req, res);

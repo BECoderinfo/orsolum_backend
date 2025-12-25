@@ -3029,6 +3029,17 @@ export const onlineStoreCartDetails = async (req, res) => {
         overallShippingFee = overallTotalAmount > 500 ? 0 : 50;
         overallGrandTotal = overallTotalAmount - couponCodeDiscount + overallShippingFee + donate;
 
+        // Calculate enhanced bill summary
+        const billSummary = {
+            itemTotal: overallTotalAmount,
+            donationAmount: donate,
+            couponDiscount: couponCodeDiscount,
+            couponCode: couponCode ? couponCode.code : null,
+            shippingFee: overallShippingFee,
+            totalPayable: overallGrandTotal,
+            saved: couponCodeDiscount // Amount saved through coupon
+        };
+
         res.status(status.OK).json({
             status: jsonStatus.OK,
             success: true,
@@ -3040,7 +3051,8 @@ export const onlineStoreCartDetails = async (req, res) => {
                 overallGrandTotal,
                 donate,
                 couponCodeDiscount,
-                totalCoinsCanBeUsed: totalCoinsCanBeUsed > req.user.coins ? 0 : totalCoinsCanBeUsed // New field added
+                totalCoinsCanBeUsed: totalCoinsCanBeUsed > req.user.coins ? 0 : totalCoinsCanBeUsed, // New field added
+                billSummary // Enhanced bill summary
             }
         });
     } catch (error) {
@@ -3205,9 +3217,21 @@ export const createOnlineOrder = async (req, res) => {
         { $set: { deleted: true } }
       );
 
+      // Calculate enhanced bill summary
+      const billSummary = {
+        itemTotal: totalAmount,
+        donationAmount: Number(donate),
+        couponDiscount: couponCodeDiscount,
+        couponCode: coupon ? couponCode.code : null,
+        shippingFee: shippingFee,
+        totalPayable: grandTotal,
+        saved: couponCodeDiscount // Amount saved through coupon
+      };
+      
       return res.status(200).json({
         success: true,
         message: "Order created successfully",
+        billSummary, // Include complete bill summary
         data: {
           _id: savedOrder._id.toString(),
           paymentSessionId: cashFreeSession.data.payment_session_id,

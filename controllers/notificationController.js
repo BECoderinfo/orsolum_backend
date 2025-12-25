@@ -293,9 +293,9 @@ export const createNotification = async (req, res) => {
       actionValue,
       actionType = "none",
       targetRoles,
-      targetUserIds,
-      retailerIds,
-      expiresAt,
+      targetUserIds, // Ignored - not used
+      retailerIds, // Ignored - not used
+      expiresAt, // Ignored - not used
       meta,
     } = req.body;
 
@@ -318,10 +318,11 @@ export const createNotification = async (req, res) => {
         value: actionValue,
       },
       targetRoles: normalizeRoleList(targetRoles),
-      targetUserIds: parseObjectIdArray(targetUserIds || retailerIds),
+      // targetUserIds and expiresAt are ignored for global notifications
+      targetUserIds: [], // Global notifications - no specific user targets
       meta: typeof meta === "object" && meta !== null ? meta : {},
       createdBy: req.user?._id,
-      expiresAt: expiresAt ? new Date(expiresAt) : null,
+      expiresAt: null, // Global notifications - no expiry
     });
 
     await notification.save();

@@ -6,8 +6,23 @@ const CouponCodeSchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    code: {
+        type: String,
+        required: true,
+        unique: true
+    },
     description: {
         type: String,
+        required: true
+    },
+    discountType: {
+        type: String,
+        enum: ["flat", "percentage"],
+        default: "flat",
+        required: true
+    },
+    discountValue: {
+        type: Number,
         required: true
     },
     use: {
@@ -15,15 +30,47 @@ const CouponCodeSchema = new mongoose.Schema({
         enum: ["one", "many"],
         default: "one"
     },
-    minPrice: {
-        type: Number
-    },
-    upto: {
-        type: Number
-    },
-    discount: {
+    minOrderValue: {
         type: Number,
+        default: 0
+    },
+    maxDiscountAmount: {
+        type: Number // For percentage discounts, max discount cap
+    },
+    validFrom: {
+        type: Date,
         required: true
+    },
+    validUntil: {
+        type: Date,
+        required: true
+    },
+    usageLimit: {
+        type: Number, // Total usage limit
+        default: 0 // 0 means unlimited
+    },
+    usageCount: {
+        type: Number,
+        default: 0
+    },
+    userEligibility: {
+        type: String,
+        enum: ["all", "new_user", "existing_user"],
+        default: "all"
+    },
+    ownerType: {
+        type: String,
+        enum: ["admin", "seller", "retailer"],
+        required: true
+    },
+    ownerId: {
+        type: ObjectId,
+        refPath: 'ownerType', // Dynamic reference based on ownerType
+        required: true
+    },
+    storeId: {
+        type: ObjectId,
+        ref: 'store'
     },
     deleted: {
         type: Boolean,
@@ -36,6 +83,6 @@ const CouponCodeSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-const CounponCode = mongoose.model('counpon_code', CouponCodeSchema);
+const CouponCode = mongoose.model('coupon_code', CouponCodeSchema);
 
-export default CounponCode;
+export default CouponCode;

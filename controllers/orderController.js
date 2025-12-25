@@ -144,7 +144,7 @@ const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
 
 export const createOrder = async (req, res) => {
   try {
-    const { coupon } = req.body;
+    const { coupon, donationAmount = 0 } = req.body;
 
     const carts = await Cart.find({ createdBy: req.user._id, deleted: false });
     if (carts.length < 1) {
@@ -220,8 +220,9 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // 🎟️ Coupon logic (unchanged)
+    // 🎟️ Coupon logic (enhanced)
     let couponCodeDiscount = 0;
+    let appliedCoupon = null;
     if (coupon) {
       const couponCode = await CouponCode.findById(coupon);
       if (!couponCode || couponCode.deleted) {
@@ -238,32 +239,55 @@ export const createOrder = async (req, res) => {
         }
       }
 
-      if (couponCode.minPrice && overallTotalAmount < couponCode.minPrice) {
+      if (couponCode.minOrderValue && overallTotalAmount < couponCode.minOrderValue) {
         return res.status(400).json({
           success: false,
-          message: `Minimum purchase of ${couponCode.minPrice} required`,
+          message: `Minimum purchase of ₹${couponCode.minOrderValue} required`,
         });
       }
 
-      const rawDiscount = (overallTotalAmount * couponCode.discount) / 100;
-      couponCodeDiscount = couponCode.upto
-        ? Math.min(rawDiscount, couponCode.upto)
-        : rawDiscount;
+      // Calculate discount based on discount type
+      if (couponCode.discountType === 'flat') {
+        couponCodeDiscount = Math.min(couponCode.discountValue, overallTotalAmount);
+      } else if (couponCode.discountType === 'percentage') {
+        couponCodeDiscount = (overallTotalAmount * couponCode.discountValue) / 100;
+        if (couponCode.maxDiscountAmount) {
+          couponCodeDiscount = Math.min(couponCodeDiscount, couponCode.maxDiscountAmount);
+        }
+      }
+      
+      // Ensure discount doesn't exceed order total
+      couponCodeDiscount = Math.min(couponCodeDiscount, overallTotalAmount);
+      
+      appliedCoupon = couponCode;
     }
 
-    const totalCartItems = cartDetails.length;
-    const discountPerItem = couponCodeDiscount / totalCartItems;
+    // Calculate total with discounts and donation
+    let totalWithDiscount = overallTotalAmount - couponCodeDiscount;
+    let totalWithDonation = totalWithDiscount + donationAmount;
+    
+    // Calculate shipping fee (example logic - you can adjust based on your business rules)
+    const shippingFee = totalWithDiscount > 500 ? 0 : 50; // Free shipping above ₹500
+    const finalTotal = totalWithDonation + shippingFee;
 
     // 🧾 Create orders
     await Promise.all(
       cartDetails.map(async (item) => {
-        const itemDiscount = discountPerItem;
-        const grandTotal = item.totalAmount - itemDiscount;
+        // Calculate item-level discount proportionally
+        const itemRatio = item.totalAmount / overallTotalAmount;
+        const itemDiscount = couponCodeDiscount * itemRatio;
+        const itemTotalAfterDiscount = item.totalAmount - itemDiscount;
+        
+        // Calculate final item total with proportional donation and shipping
+        const itemDonation = donationAmount * itemRatio;
+        const itemShipping = shippingFee * itemRatio;
+        const grandTotal = itemTotalAfterDiscount + itemDonation + itemShipping;
 
         const summary = {
           totalAmount: item.totalAmount,
-          shippingFee: 0,
-          coupon: itemDiscount,
+          discountAmount: itemDiscount,
+          shippingFee: itemShipping,
+          donate: itemDonation,
           grandTotal,
         };
 
@@ -341,8 +365,20 @@ export const createOrder = async (req, res) => {
       })
     );
 
-    if (coupon) {
-      await new CouponHistory({ couponId: coupon, userId: req.user._id }).save();
+    // Record coupon usage if coupon was applied
+    if (appliedCoupon) {
+      await new CouponHistory({ 
+        couponId: appliedCoupon._id, 
+        userId: req.user._id,
+        orderId: orderId, // Link to the order
+        discountAmount: couponCodeDiscount,
+        orderTotalBeforeDiscount: overallTotalAmount,
+        orderTotalAfterDiscount: finalTotal
+      }).save();
+      
+      // Increment coupon usage count
+      appliedCoupon.usageCount = (appliedCoupon.usageCount || 0) + 1;
+      await appliedCoupon.save();
     }
 
     await Cart.updateMany({ createdBy: req.user._id }, { $set: { deleted: true } });
@@ -378,13 +414,27 @@ export const createOrder = async (req, res) => {
         })
       );
     }
+    
+    // Calculate final bill summary
+    const billSummary = {
+      itemTotal: overallTotalAmount,
+      discountAmount: overallDiscountAmount,
+      couponCodeDiscount,
+      couponCode: appliedCoupon ? appliedCoupon.code : null,
+      shippingFee: shippingFee,
+      donationAmount: donationAmount,
+      charges: PLATFORM_FEE, // Include platform fee in charges
+      totalPayable: finalTotal,
+      saved: overallDiscountAmount + couponCodeDiscount // Total savings
+    };
 
     res.status(200).json({
       success: true,
       message: lowStockWarnings.length > 0 
         ? "Order created successfully & synced with Shiprocket. Note: Some products are running low on stock and the order may not be fulfilled as expected."
         : "Order created successfully & synced with Shiprocket",
-      lowStockWarnings: lowStockWarnings.length > 0 ? lowStockWarnings : undefined
+      lowStockWarnings: lowStockWarnings.length > 0 ? lowStockWarnings : undefined,
+      billSummary
     });
   } catch (error) {
     console.error("Error in createOrder:", error.message);
@@ -1332,7 +1382,19 @@ export const cartDetails = async (req, res) => {
       ]);
     }
 
-    overallGrandTotal += donate;
+    // Calculate enhanced bill summary with all components
+    const billSummary = {
+      itemTotal: overallTotalAmount,
+      discountAmount: overallDiscountAmount,
+      couponDiscount: couponCodeDiscount,
+      couponCode: couponCode ? couponCode.code : null,
+      shippingFee: overallShippingFee,
+      donationAmount: donate,
+      charges: overallCharges,
+      platformFee: PLATFORM_FEE,
+      totalPayable: overallGrandTotal,
+      saved: overallDiscountAmount + couponCodeDiscount // How much user saved
+    };
 
     res.status(status.OK).json({
       status: jsonStatus.OK,
@@ -1350,6 +1412,7 @@ export const cartDetails = async (req, res) => {
         couponCodeDiscount,
         appliedOffers,
         similarProducts,
+        billSummary, // Enhanced bill summary
         addressRange: {
           distanceKm: addressDistanceKm,
           withinRange: isAddressInRange,
@@ -1506,9 +1569,10 @@ export const allCartDetails = async (req, res) => {
     });
 
     // Apply coupon code if provided
+    let couponCode = null;
     let couponCodeDiscount = 0;
     if (req.query.coupon) {
-      const couponCode = await CouponCode.findById(req.query.coupon);
+      couponCode = await CouponCode.findById(req.query.coupon);
 
       if (!couponCode || couponCode.deleted) {
         return res.status(status.NotFound).json({
@@ -1549,6 +1613,17 @@ export const allCartDetails = async (req, res) => {
       overallGrandTotal -= couponCodeDiscount;
     }
 
+    // Calculate enhanced bill summary for all cart details
+    const billSummary = {
+      itemTotal: overallTotalAmount,
+      discountAmount: overallDiscountAmount,
+      couponDiscount: couponCodeDiscount,
+      couponCode: couponCode ? couponCode.code : null,
+      shippingFee: overallShippingFee,
+      totalPayable: overallGrandTotal,
+      saved: overallDiscountAmount + couponCodeDiscount // How much user saved
+    };
+    
     res.status(200).json({
       success: true,
       data: {
@@ -1560,6 +1635,7 @@ export const allCartDetails = async (req, res) => {
         overallGrandTotal,
         couponCodeDiscount,
         appliedOffers,
+        billSummary, // Enhanced bill summary
       },
     });
   } catch (error) {
@@ -2339,7 +2415,7 @@ export const createOrderV2 = async (req, res) => {
       }
 
       storeTotal += productPrice * quantity;
-
+    
       productDetails.push({
         productId: cart.productId._id,
         productPrice,
@@ -2349,9 +2425,10 @@ export const createOrderV2 = async (req, res) => {
         appliedOffers,
       });
     }
-
-    // ✅ Coupon Logic
+    
+    // ✅ Coupon Logic (enhanced)
     let couponCodeDiscount = 0;
+    let appliedCoupon = null;
     if (coupon) {
       const couponCode = await CouponCode.findById(coupon);
       if (!couponCode || couponCode.deleted) {
@@ -2361,13 +2438,47 @@ export const createOrderV2 = async (req, res) => {
           message: "Coupon not found or deleted",
         });
       }
-
-      const rawDiscount = (storeTotal * couponCode.discount) / 100;
-      couponCodeDiscount = couponCode.upto
-        ? Math.min(rawDiscount, couponCode.upto)
-        : rawDiscount;
+    
+      // Check if coupon is valid for this user
+      if (couponCode.use === "one") {
+        const alreadyUsed = await CouponHistory.findOne({
+          couponId: couponCode._id,
+          userId: req.user._id,
+        });
+        if (alreadyUsed) {
+          return res.status(status.BadRequest).json({
+            status: jsonStatus.BadRequest,
+            success: false,
+            message: "Coupon already used",
+          });
+        }
+      }
+    
+      // Check minimum order value
+      if (couponCode.minOrderValue && storeTotal < couponCode.minOrderValue) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: `Minimum purchase of ₹${couponCode.minOrderValue} required for this coupon`,
+        });
+      }
+        
+      // Calculate discount based on discount type
+      if (couponCode.discountType === 'flat') {
+        couponCodeDiscount = Math.min(couponCode.discountValue, storeTotal);
+      } else if (couponCode.discountType === 'percentage') {
+        couponCodeDiscount = (storeTotal * couponCode.discountValue) / 100;
+        if (couponCode.maxDiscountAmount) {
+          couponCodeDiscount = Math.min(couponCodeDiscount, couponCode.maxDiscountAmount);
+        }
+      }
+        
+      // Ensure discount doesn't exceed order total
+      couponCodeDiscount = Math.min(couponCodeDiscount, storeTotal);
+        
+      appliedCoupon = couponCode;
     }
-
+    
     const charges = buildCharges({
       store,
       products: productDetails,
@@ -2498,6 +2609,22 @@ export const createOrderV2 = async (req, res) => {
       });
 
       await newOrder.save();
+      
+      // ✅ Record coupon usage if coupon was applied
+      if (appliedCoupon) {
+        await new CouponHistory({ 
+          couponId: appliedCoupon._id, 
+          userId: req.user._id,
+          orderId: newOrder._id, // Link to the order
+          discountAmount: couponCodeDiscount,
+          orderTotalBeforeDiscount: storeTotal,
+          orderTotalAfterDiscount: grandTotal
+        }).save();
+        
+        // Increment coupon usage count
+        appliedCoupon.usageCount = (appliedCoupon.usageCount || 0) + 1;
+        await appliedCoupon.save();
+      }
     } catch (saveError) {
       console.error("Error saving order:", saveError);
       return res.status(status.InternalServerError).json({
@@ -2556,12 +2683,27 @@ export const createOrderV2 = async (req, res) => {
         })
       );
     }
+    
+    // Calculate final bill summary with standardized structure
+    const billSummary = {
+      itemTotal: storeTotal,
+      donationAmount: donateValue, // Donation amount as per requirements
+      totalDiscount: storeDiscountAmount, // Store-level discounts
+      couponDiscount: couponCodeDiscount, // Coupon-specific discount
+      couponCode: appliedCoupon ? appliedCoupon.code : null,
+      shippingFee: storeShippingFee,
+      extraCharges: charges.chargesTotal,
+      platformFee: charges.platformFee,
+      totalPayable: grandTotal,
+      saved: storeDiscountAmount + couponCodeDiscount, // Total savings
+    };
 
     // ✅ Respond with the actual Mongo ID
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
       message: "Order created successfully",
+      billSummary, // Include complete bill summary
       data: {
         _id: newOrder._id, // ✅ Real ID now
         paymentSessionId,
