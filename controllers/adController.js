@@ -37,8 +37,7 @@ export const checkAdsExpiryAndNotify = async () => {
             title: "Ad Expired",
             message: `Your ad "${ad.name}" has expired and is no longer active.`,
             type: "info",
-            targetRoles: [ad.adOwnerType],
-            targetUserIds: [ad.adOwnerId],
+            targetUserIds: [ad.sellerId],
             meta: {
               category: "ad",
               adId: ad._id.toString(),
@@ -75,8 +74,7 @@ export const checkAdsExpiryAndNotify = async () => {
             title: "Ad Expiring Soon",
             message: `Your ad "${ad.name}" will expire on ${ad.endDate.toLocaleDateString('en-IN')} at ${ad.endDate.toLocaleTimeString('en-IN')}.`,
             type: "warning",
-            targetRoles: [ad.adOwnerType],
-            targetUserIds: [ad.adOwnerId],
+            targetUserIds: [ad.sellerId],
             meta: {
               category: "ad",
               adId: ad._id.toString(),
@@ -116,8 +114,7 @@ export const checkAdsExpiryAndNotify = async () => {
             title: "Ad Payment Deadline Expired",
             message: `Your ad "${ad.name}" payment deadline has expired. The ad has been cancelled.`,
             type: "error",
-            targetRoles: [ad.adOwnerType],
-            targetUserIds: [ad.adOwnerId],
+            targetUserIds: [ad.sellerId],
             meta: {
               category: "ad",
               adId: ad._id.toString(),
@@ -174,7 +171,7 @@ export const validateAdApproval = async (adId, startDate, endDate) => {
 
     // Check for overlapping ads in the same location
     if (adStartDate && adEndDate) {
-      const hasOverlap = await Ad.hasOverlappingAd(ad.location, adStartDate, adEndDate, adId);
+      const hasOverlap = await Ad.hasOverlappingAd(ad.location, adStartDate, adEndDate, adId, ad.adOwnerType, ad.adOwnerId);
       if (hasOverlap) {
         return {
           isValid: false,
@@ -208,6 +205,8 @@ export const validateAdCreation = async (location, startDate, endDate) => {
     }
 
     // Check for overlapping ads in the same location
+    // For this function, we don't have ad owner info, so we pass null
+    // This will use the default behavior without owner filtering
     const hasOverlap = await Ad.hasOverlappingAd(location, startDate, endDate);
     if (hasOverlap) {
       return {
@@ -255,7 +254,7 @@ export const validateAdActivation = async (adId, startDate, endDate) => {
 
     // Check for overlapping ads in the same location
     if (adStartDate && adEndDate) {
-      const hasOverlap = await Ad.hasOverlappingAd(ad.location, adStartDate, adEndDate, adId);
+      const hasOverlap = await Ad.hasOverlappingAd(ad.location, adStartDate, adEndDate, adId, ad.adOwnerType, ad.adOwnerId);
       if (hasOverlap) {
         return {
           isValid: false,
@@ -388,10 +387,9 @@ export const createSellerAdRequest = async (req, res) => {
       description,
       images,
       location,
+      sellerId: req.user._id, // Assuming req.user._id is the seller ID
       storeId: storeId || null,
       productId: productId || null,
-      adOwnerType: 'seller',
-      adOwnerId: req.user._id, // Assuming req.user._id is the seller ID
       totalRunDays: totalRunDays || 1,
       amount,
       inquiry,
@@ -405,7 +403,7 @@ export const createSellerAdRequest = async (req, res) => {
     const intendedEndDate = new Date(intendedStartDate);
     intendedEndDate.setDate(intendedEndDate.getDate() + (totalRunDays || 1));
     
-    const hasOverlap = await Ad.hasOverlappingAd(location, intendedStartDate, intendedEndDate);
+    const hasOverlap = await Ad.hasOverlappingAd(location, intendedStartDate, intendedEndDate, null, 'seller', req.user._id);
     if (hasOverlap) {
       return res.status(400).json({
         status: 400,
@@ -445,8 +443,10 @@ export const listSellerAds = async (req, res) => {
   try {
     const { status } = req.query;
     const query = {
-      adOwnerId: req.user._id,
-      adOwnerType: 'seller',
+      $or: [
+        { adOwnerId: req.user._id, adOwnerType: 'seller' },
+        { sellerId: req.user._id } // For backward compatibility
+      ],
       deleted: { $ne: true }
     };
 
@@ -487,8 +487,10 @@ export const getSellerAdDetails = async (req, res) => {
 
     const ad = await Ad.findOne({
       _id: id,
-      adOwnerId: req.user._id,
-      adOwnerType: 'seller',
+      $or: [
+        { adOwnerId: req.user._id, adOwnerType: 'seller' },
+        { sellerId: req.user._id } // For backward compatibility
+      ],
       deleted: { $ne: true }
     }).populate('storeId').populate('productId');
 
@@ -532,8 +534,10 @@ export const renewSellerAd = async (req, res) => {
 
     const ad = await Ad.findOne({
       _id: id,
-      adOwnerId: req.user._id,
-      adOwnerType: 'seller',
+      $or: [
+        { adOwnerId: req.user._id, adOwnerType: 'seller' },
+        { sellerId: req.user._id } // For backward compatibility
+      ],
       deleted: { $ne: true }
     });
 
@@ -600,8 +604,10 @@ export const deleteSellerAd = async (req, res) => {
 
     const ad = await Ad.findOne({
       _id: id,
-      adOwnerId: req.user._id,
-      adOwnerType: 'seller'
+      $or: [
+        { adOwnerId: req.user._id, adOwnerType: 'seller' },
+        { sellerId: req.user._id } // For backward compatibility
+      ]
     });
 
     if (!ad) {
@@ -664,8 +670,10 @@ export const createAdPaymentSession = async (req, res) => {
 
     const ad = await Ad.findOne({
       _id: adId,
-      adOwnerId: req.user._id,
-      adOwnerType: 'seller',
+      $or: [
+        { adOwnerId: req.user._id, adOwnerType: 'seller' },
+        { sellerId: req.user._id } // For backward compatibility
+      ],
       isDead: { $ne: true },
       deleted: { $ne: true }
     });
@@ -714,7 +722,7 @@ export const createAdPaymentSession = async (req, res) => {
       order_tags: {
         forPayment: "Ad",
         adId: ad._id.toString(),
-        sellerId: ad.adOwnerId.toString(),
+        sellerId: ad.sellerId.toString(),
         location: ad.location,
         totalRunDays: ad.totalRunDays.toString()
       }
@@ -776,8 +784,10 @@ export const getAdPaymentInfo = async (req, res) => {
 
     const ad = await Ad.findOne({
       _id: id,
-      adOwnerId: req.user._id,
-      adOwnerType: 'seller',
+      $or: [
+        { adOwnerId: req.user._id, adOwnerType: 'retailer' },
+        { sellerId: req.user._id }
+      ],
       isDead: { $ne: true },
       deleted: { $ne: true }
     });
@@ -836,21 +846,18 @@ export const getAdPaymentInfo = async (req, res) => {
 // Admin list ads
 export const adminListAds = async (req, res) => {
   try {
-    const { status, adOwnerType, location } = req.query;
+    const { status, location } = req.query;
     const query = { deleted: { $ne: true } };
 
     if (status) {
       query.status = status;
-    }
-    if (adOwnerType) {
-      query.adOwnerType = adOwnerType;
     }
     if (location) {
       query.location = location;
     }
 
     const ads = await Ad.find(query)
-      .populate('adOwnerId')
+      .populate('sellerId')
       .populate('storeId')
       .populate('productId')
       .sort({ createdAt: -1 });
@@ -887,7 +894,7 @@ export const adminGetAdDetails = async (req, res) => {
     const ad = await Ad.findOne({
       _id: id,
       deleted: { $ne: true }
-    }).populate('adOwnerId').populate('storeId').populate('productId');
+    }).populate('sellerId').populate('storeId').populate('productId');
 
     if (!ad) {
       return res.status(404).json({
@@ -975,7 +982,7 @@ export const adminUpdateAdStatus = async (req, res) => {
       
       // Check for overlapping ads in the same location
       if (adStartDate && adEndDate) {
-        const hasOverlap = await Ad.hasOverlappingAd(ad.location, adStartDate, adEndDate, id);
+        const hasOverlap = await Ad.hasOverlappingAd(ad.location, adStartDate, adEndDate, id, ad.adOwnerType, ad.adOwnerId);
         if (hasOverlap) {
           return res.status(400).json({
             status: 400,
@@ -985,17 +992,8 @@ export const adminUpdateAdStatus = async (req, res) => {
         }
       }
       
-      // Ensure ad has valid owner type
-      if (!ad.adOwnerType || !['admin', 'seller', 'retailer'].includes(ad.adOwnerType)) {
-        return res.status(400).json({
-          status: 400,
-          success: false,
-          message: "Invalid ad owner type. Must be admin, seller, or retailer"
-        });
-      }
-      
       // Ensure ad has valid owner ID
-      if (!ad.adOwnerId) {
+      if (!ad.sellerId) {
         return res.status(400).json({
           status: 400,
           success: false,
@@ -1141,8 +1139,6 @@ export const adminCreateOrsolumAd = async (req, res) => {
       images,
       location,
       productId: productId || null,
-      adOwnerType: 'admin',
-      adOwnerId: req.user._id, // Admin ID
       totalRunDays: 999999, // Large number to indicate no time limit
       amount: 0, // Admin ads are free
       inquiry,
@@ -1199,7 +1195,7 @@ export const adminUpdateOrsolumAd = async (req, res) => {
 
     const ad = await Ad.findOne({
       _id: id,
-      adOwnerType: 'admin',
+      sellerId: null,
       deleted: { $ne: true }
     });
 
@@ -1253,7 +1249,7 @@ export const adminDeleteOrsolumAd = async (req, res) => {
 
     const ad = await Ad.findOne({
       _id: id,
-      adOwnerType: 'admin'
+      sellerId: null
     });
 
     if (!ad) {
@@ -1363,6 +1359,121 @@ export const getAllAdsConfigData = async (req, res) => {
   }
 };
 
+/**
+ * Get active ads for retailer's local store display (LOCAL STORE)
+ * This API returns active ads from RETAILER stores only
+ * ✅ Retailer ads → Local store me show hongi
+ */
+export const getRetailerLocalStoreAds = async (req, res) => {
+  try {
+    const { location } = req.query;
+    const now = new Date();
+
+    // Filter for retailer ads only
+    const filter = {
+      status: "active",
+      startDate: { $lte: now },
+      endDate: { $gte: now },
+      deleted: { $ne: true },
+      adOwnerType: "retailer" // Only retailer ads
+    };
+
+    // Filter by location if provided
+    if (location) {
+      filter.location = location;
+    }
+
+    const ads = await Ad.find(filter)
+      .populate("adOwnerId", "name phone")
+      .populate("storeId", "name phone images")
+      .populate("productId", "productName primaryImage productImages sellingPrice mrp price name")
+      .sort({ startDate: 1 });
+
+    // Group ads by location, keeping only one ad per location (first from sorted list)
+    const adsByLocation = {};
+    ads.forEach((ad) => {
+      if (!adsByLocation[ad.location]) {
+        adsByLocation[ad.location] = {
+          _id: ad._id,
+          name: ad.name,
+          description: ad.description,
+          images: Array.isArray(ad.images) ? ad.images : [],
+          location: ad.location,
+          storeId: ad.storeId ? {
+            _id: ad.storeId._id,
+            name: ad.storeId.name,
+            images: Array.isArray(ad.storeId.images) ? ad.storeId.images : []
+          } : null,
+          productId: ad.productId ? {
+            _id: ad.productId._id,
+            name: ad.productId.productName || ad.productId.name || null,
+            images: Array.isArray(ad.productId.productImages) ? ad.productId.productImages : [],
+            price: ad.productId.sellingPrice ?? ad.productId.price ?? null,
+            mrp: ad.productId.mrp || null
+          } : null,
+          startDate: ad.startDate,
+          endDate: ad.endDate
+        };
+      }
+    });
+
+    // Fill missing slots per location with admin ads (Orsolum) while keeping retailer priority
+    const fallbackFilter = {
+      status: "active",
+      startDate: { $lte: now },
+      endDate: { $gte: now },
+      deleted: { $ne: true },
+      adOwnerType: { $exists: false }, // Admin ads (no owner type)
+      sellerId: { $exists: false } // Also check for old format admin ads
+    };
+    
+    if (location) {
+      fallbackFilter.location = location;
+    }
+
+    const fallbackAds = await Ad.find(fallbackFilter)
+      .sort({ startDate: 1 });
+
+    fallbackAds.forEach((ad) => {
+      if (!adsByLocation[ad.location]) { // retailer ad already occupies slot
+        adsByLocation[ad.location] = {
+          _id: ad._id,
+          name: ad.name,
+          description: ad.description,
+          images: Array.isArray(ad.images) ? ad.images : [],
+          location: ad.location,
+          storeId: ad.storeId ? {
+            _id: ad.storeId._id,
+            name: ad.storeId.name,
+            images: Array.isArray(ad.storeId.images) ? ad.storeId.images : []
+          } : null,
+          productId: null,
+          startDate: ad.startDate,
+          endDate: ad.endDate
+        };
+      }
+    });
+
+    const formattedAds = Object.values(adsByLocation);
+
+    return res.status(200).json({
+      status: 200,
+      success: true,
+      message: "Active ads for local store (retailer ads only)",
+      data: {
+        ads: formattedAds,
+        adsByLocation: adsByLocation,
+      },
+    });
+  } catch (error) {
+    console.error('Error getting retailer local store ads:', error);
+    res.status(500).json({
+      status: 500,
+      success: false,
+      message: error.message,
+    });
+  }
+};
 // Retailer functions
 
 // Create retailer ad request
@@ -1423,7 +1534,7 @@ export const createRetailerAdRequest = async (req, res) => {
     const intendedEndDate = new Date(intendedStartDate);
     intendedEndDate.setDate(intendedEndDate.getDate() + (totalRunDays || 1));
     
-    const hasOverlap = await Ad.hasOverlappingAd(location, intendedStartDate, intendedEndDate);
+    const hasOverlap = await Ad.hasOverlappingAd(location, intendedStartDate, intendedEndDate, null, 'retailer', req.user._id);
     if (hasOverlap) {
       return res.status(400).json({
         status: 400,
@@ -1463,8 +1574,10 @@ export const listRetailerAds = async (req, res) => {
   try {
     const { status } = req.query;
     const query = {
-      adOwnerId: req.user._id,
-      adOwnerType: 'retailer',
+      $or: [
+        { adOwnerId: req.user._id, adOwnerType: 'retailer' },
+        { sellerId: req.user._id } // For backward compatibility with existing retailer ads
+      ],
       deleted: { $ne: true }
     };
 
@@ -1505,8 +1618,10 @@ export const getRetailerAdDetails = async (req, res) => {
 
     const ad = await Ad.findOne({
       _id: id,
-      adOwnerId: req.user._id,
-      adOwnerType: 'retailer',
+      $or: [
+        { adOwnerId: req.user._id, adOwnerType: 'retailer' },
+        { sellerId: req.user._id } // For backward compatibility with existing retailer ads
+      ],
       deleted: { $ne: true }
     }).populate('storeId').populate('productId');
 
@@ -1549,8 +1664,10 @@ export const deleteRetailerAd = async (req, res) => {
 
     const ad = await Ad.findOne({
       _id: id,
-      adOwnerId: req.user._id,
-      adOwnerType: 'retailer'
+      $or: [
+        { adOwnerId: req.user._id, adOwnerType: 'retailer' },
+        { sellerId: req.user._id } // For backward compatibility with existing retailer ads
+      ]
     });
 
     if (!ad) {
@@ -1613,8 +1730,10 @@ export const createRetailerAdPaymentSession = async (req, res) => {
 
     const ad = await Ad.findOne({
       _id: adId,
-      adOwnerId: req.user._id,
-      adOwnerType: 'retailer',
+      $or: [
+        { adOwnerId: req.user._id, adOwnerType: 'retailer' },
+        { sellerId: req.user._id } // For backward compatibility with existing retailer ads
+      ],
       isDead: { $ne: true },
       deleted: { $ne: true }
     });
@@ -1663,7 +1782,7 @@ export const createRetailerAdPaymentSession = async (req, res) => {
       order_tags: {
         forPayment: "Ad",
         adId: ad._id.toString(),
-        retailerId: ad.adOwnerId.toString(),
+        sellerId: ad.sellerId.toString(),
         location: ad.location,
         totalRunDays: ad.totalRunDays.toString()
       }
@@ -1709,26 +1828,59 @@ export const createRetailerAdPaymentSession = async (req, res) => {
   }
 };
 
-// Get retailer local store ads (for retailer dashboard)
-export const getRetailerLocalStoreAds = async (req, res) => {
+
+
+// Get single ad details (public API - no user filtering)
+export const getAdDetails = async (req, res) => {
   try {
-    // For retailers, this would return their local store ads or related ads
-    // This could be customized based on business requirements
-    const ads = await Ad.find({
-      adOwnerId: req.user._id,
-      adOwnerType: 'retailer',
+    const { id } = req.params;
+    
+    // Validate if id is a valid ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 400,
+        success: false,
+        message: 'Invalid ad ID format'
+      });
+    }
+
+    const ad = await Ad.findOne({
+      _id: id,
       status: 'active',
       isDead: { $ne: true },
       deleted: { $ne: true }
-    }).populate('storeId').populate('productId').sort({ createdAt: -1 });
+    }).populate('storeId').populate('productId');
+
+    if (!ad) {
+      return res.status(404).json({
+        status: 404,
+        success: false,
+        message: 'Ad not found or not active'
+      });
+    }
+    
+    // Apply date validation for non-admin ads
+    const now = new Date();
+    const isAdminAd = ad.sellerId === null || ad.sellerId === undefined; // If no sellerId, consider it as admin ad
+    
+    if (!isAdminAd) {
+      // For seller ads, validate date range
+      if (!ad.startDate || !ad.endDate || ad.startDate > now || ad.endDate < now) {
+        return res.status(404).json({
+          status: 404,
+          success: false,
+          message: 'Ad not available (outside date range)'
+        });
+      }
+    }
 
     res.status(200).json({
       status: 200,
       success: true,
-      data: ads
+      data: ad
     });
   } catch (error) {
-    console.error('Error getting retailer local store ads:', error);
+    console.error('Error getting ad details:', error);
     res.status(500).json({
       status: 500,
       success: false,
@@ -1748,22 +1900,10 @@ export const getActiveAds = async (req, res) => {
       status: 'active',
       isDead: { $ne: true },
       deleted: { $ne: true }
-    }).sort({ createdAt: -1 });
-    
-    // Populate storeId and productId separately to handle potential errors gracefully
-    for (const ad of allAds) {
-      try {
-        if (ad.storeId) {
-          await ad.populate('storeId');
-        }
-        if (ad.productId) {
-          await ad.populate('productId');
-        }
-      } catch (populateError) {
-        console.error('Error populating ad references:', populateError);
-        // Continue with the ad even if populate fails
-      }
-    }
+    })
+      .populate('storeId')
+      .populate('productId')
+      .sort({ createdAt: -1 });
 
     // Group ads by location and prioritize non-admin ads
     const adsByLocation = {};
@@ -1775,11 +1915,11 @@ export const getActiveAds = async (req, res) => {
       }
       
       // Apply date range filter based on ad type
-      // For seller/retailer ads, apply date range validation
-      const isAdminAd = ad.adOwnerType === 'admin';
+      // For seller ads, apply date range validation
+      const isAdminAd = ad.sellerId === null || ad.sellerId === undefined; // If no sellerId, consider it as admin ad
       
       if (!isAdminAd) {
-        // Apply date range validation for seller/retailer ads
+        // Apply date range validation for seller ads
         if (!ad.startDate || !ad.endDate || ad.startDate > now || ad.endDate < now) {
           return; // Skip this ad if it doesn't meet date criteria
         }
@@ -1789,8 +1929,8 @@ export const getActiveAds = async (req, res) => {
         adsByLocation[ad.location] = [];
       }
       
-      // Check if this is a seller/retailer ad (higher priority) or admin ad (lower priority)
-      const isSellerRetailerAd = ad.adOwnerType === 'seller' || ad.adOwnerType === 'retailer';
+      // Check if this is a seller ad (higher priority) or admin ad (lower priority)
+      const isSellerAd = ad.sellerId !== null && ad.sellerId !== undefined;
       
       // If no ad exists for this location yet, add this one
       if (adsByLocation[ad.location].length === 0) {
@@ -1798,14 +1938,14 @@ export const getActiveAds = async (req, res) => {
       } else {
         // If there's already an ad for this location, check priority
         const existingAd = adsByLocation[ad.location][0];
-        const isExistingSellerRetailer = existingAd.adOwnerType === 'seller' || existingAd.adOwnerType === 'retailer';
+        const isExistingSeller = existingAd.sellerId !== null && existingAd.sellerId !== undefined;
         
-        // If existing ad is seller/retailer, keep it (higher priority)
-        if (isExistingSellerRetailer) {
+        // If existing ad is seller, keep it (higher priority)
+        if (isExistingSeller) {
           // Do nothing, keep existing ad
         } else {
-          // If existing ad is admin and current ad is seller/retailer, replace it
-          if (isSellerRetailerAd) {
+          // If existing ad is admin and current ad is seller, replace it
+          if (isSellerAd) {
             adsByLocation[ad.location] = [ad];
           }
           // If both are admin ads, keep the first one found

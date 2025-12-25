@@ -1,5 +1,5 @@
-import User from './models/User.js';
 import { checkAdsExpiryAndNotify } from './controllers/adController.js';
+import User from './models/User.js';
 
 export const checkPremiumExpiry = async () => {
   try {

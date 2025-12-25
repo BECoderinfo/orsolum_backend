@@ -5,9 +5,29 @@ const { ObjectId } = mongoose.Schema.Types;
 const AdSchema = new mongoose.Schema(
   {
     // Who created this ad
+    // For backward compatibility, keeping sellerId
     sellerId: {
       type: ObjectId,
       ref: "user",
+    },
+    // New fields for flexible ad ownership
+    adOwnerType: {
+      type: String,
+      enum: ["seller", "retailer"],
+      required: function() {
+        // Required if sellerId is not present
+        return !this.sellerId;
+      },
+      index: true
+    },
+    adOwnerId: {
+      type: ObjectId,
+      ref: "user",
+      required: function() {
+        // Required if sellerId is not present
+        return !this.sellerId;
+      },
+      index: true
     },
     storeId: {
       type: ObjectId,
@@ -30,7 +50,7 @@ const AdSchema = new mongoose.Schema(
     },
     location: {
       type: String,
-      enum: ["banner", "popup", "offer_bar", "crazy_deals", "trending_items", "popular_categories", "stores_near_me", "promotional_banner"],
+      enum: ["crazy_deals", "trending_items", "popular_categories", "stores_near_me", "promotional_banner"],
       required: true,
     },
     images: [
@@ -124,18 +144,7 @@ const AdSchema = new mongoose.Schema(
       ref: "admin",
     },
 
-    // Ad owner identification
-    adOwnerType: {
-      type: String,
-      enum: ["admin", "seller", "retailer"],
-      required: true,
-      default: "seller",
-    },
-    adOwnerId: {
-      type: ObjectId,
-      ref: "user",
-      required: true,
-    },
+
   },
   {
     timestamps: true,
@@ -144,9 +153,11 @@ const AdSchema = new mongoose.Schema(
 
 AdSchema.index({ sellerId: 1, createdAt: -1 });
 AdSchema.index({ status: 1, endDate: 1 });
+AdSchema.index({ adOwnerType: 1, adOwnerId: 1, createdAt: -1 });
+AdSchema.index({ adOwnerType: 1, adOwnerId: 1, status: 1, endDate: 1 });
 
 // Static method to check for overlapping ads
-AdSchema.statics.hasOverlappingAd = async function(location, startDate, endDate, excludeAdId = null) {
+AdSchema.statics.hasOverlappingAd = async function(location, startDate, endDate, excludeAdId = null, adOwnerType = null, adOwnerId = null) {
   const query = {
     location: location,
     status: { $in: ['active', 'approved'] }, // Only check active and approved ads
@@ -163,6 +174,14 @@ AdSchema.statics.hasOverlappingAd = async function(location, startDate, endDate,
       ]}
     ]
   };
+
+  // Add owner type and ID to prevent cross-owner ad conflicts
+  if (adOwnerType && adOwnerId) {
+    query.adOwnerType = adOwnerType;
+    query.adOwnerId = adOwnerId;
+  }
+  // For backward compatibility, if no owner type is provided, don't add owner-specific filters
+  // This allows the function to work for both old and new ad types
 
   // Exclude the current ad if provided (for updates)
   if (excludeAdId) {
