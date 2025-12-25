@@ -349,7 +349,7 @@ export const getAdLocations = async (req, res) => {
 // Create seller ad request
 export const createSellerAdRequest = async (req, res) => {
   try {
-    const { name, description, location, totalRunDays, inquiry, storeId, productId } = req.body;
+    const { name, description, location, totalRunDays, inquiry } = req.body;
     const images = req.files ? req.files.map(file => file.path) : [];
 
     // Validate required fields
@@ -363,7 +363,7 @@ export const createSellerAdRequest = async (req, res) => {
 
     // Validate location
     const validLocations = [
-      'banner', 'popup', 'offer_bar', 'crazy_deals', 
+      'crazy_deals', 
       'trending_items', 'popular_categories', 'stores_near_me', 'promotional_banner'
     ];
     
@@ -388,8 +388,6 @@ export const createSellerAdRequest = async (req, res) => {
       images,
       location,
       sellerId: req.user._id, // Assuming req.user._id is the seller ID
-      storeId: storeId || null,
-      productId: productId || null,
       totalRunDays: totalRunDays || 1,
       amount,
       inquiry,
@@ -454,7 +452,7 @@ export const listSellerAds = async (req, res) => {
       query.status = status;
     }
 
-    const ads = await Ad.find(query).populate('storeId').populate('productId').sort({ createdAt: -1 });
+    const ads = await Ad.find(query).sort({ createdAt: -1 });
 
     res.status(200).json({
       status: 200,
@@ -492,7 +490,7 @@ export const getSellerAdDetails = async (req, res) => {
         { sellerId: req.user._id } // For backward compatibility
       ],
       deleted: { $ne: true }
-    }).populate('storeId').populate('productId');
+    });
 
     if (!ad) {
       return res.status(404).json({
@@ -858,8 +856,6 @@ export const adminListAds = async (req, res) => {
 
     const ads = await Ad.find(query)
       .populate('sellerId')
-      .populate('storeId')
-      .populate('productId')
       .sort({ createdAt: -1 });
 
     res.status(200).json({
@@ -894,7 +890,7 @@ export const adminGetAdDetails = async (req, res) => {
     const ad = await Ad.findOne({
       _id: id,
       deleted: { $ne: true }
-    }).populate('sellerId').populate('storeId').populate('productId');
+    }).populate('sellerId');
 
     if (!ad) {
       return res.status(404).json({
@@ -1369,13 +1365,16 @@ export const getRetailerLocalStoreAds = async (req, res) => {
     const { location } = req.query;
     const now = new Date();
 
-    // Filter for retailer ads only
+    // Filter for retailer ads only - support both new and legacy patterns
     const filter = {
       status: "active",
       startDate: { $lte: now },
       endDate: { $gte: now },
       deleted: { $ne: true },
-      adOwnerType: "retailer" // Only retailer ads
+      $or: [
+        { adOwnerType: 'retailer' },
+        { sellerId: { $exists: true } } // For legacy retailer ads that used sellerId
+      ]
     };
 
     // Filter by location if provided
@@ -1385,8 +1384,6 @@ export const getRetailerLocalStoreAds = async (req, res) => {
 
     const ads = await Ad.find(filter)
       .populate("adOwnerId", "name phone")
-      .populate("storeId", "name phone images")
-      .populate("productId", "productName primaryImage productImages sellingPrice mrp price name")
       .sort({ startDate: 1 });
 
     // Group ads by location, keeping only one ad per location (first from sorted list)
@@ -1399,18 +1396,6 @@ export const getRetailerLocalStoreAds = async (req, res) => {
           description: ad.description,
           images: Array.isArray(ad.images) ? ad.images : [],
           location: ad.location,
-          storeId: ad.storeId ? {
-            _id: ad.storeId._id,
-            name: ad.storeId.name,
-            images: Array.isArray(ad.storeId.images) ? ad.storeId.images : []
-          } : null,
-          productId: ad.productId ? {
-            _id: ad.productId._id,
-            name: ad.productId.productName || ad.productId.name || null,
-            images: Array.isArray(ad.productId.productImages) ? ad.productId.productImages : [],
-            price: ad.productId.sellingPrice ?? ad.productId.price ?? null,
-            mrp: ad.productId.mrp || null
-          } : null,
           startDate: ad.startDate,
           endDate: ad.endDate
         };
@@ -1442,12 +1427,6 @@ export const getRetailerLocalStoreAds = async (req, res) => {
           description: ad.description,
           images: Array.isArray(ad.images) ? ad.images : [],
           location: ad.location,
-          storeId: ad.storeId ? {
-            _id: ad.storeId._id,
-            name: ad.storeId.name,
-            images: Array.isArray(ad.storeId.images) ? ad.storeId.images : []
-          } : null,
-          productId: null,
           startDate: ad.startDate,
           endDate: ad.endDate
         };
@@ -1479,7 +1458,7 @@ export const getRetailerLocalStoreAds = async (req, res) => {
 // Create retailer ad request
 export const createRetailerAdRequest = async (req, res) => {
   try {
-    const { name, description, location, totalRunDays, inquiry, storeId, productId } = req.body;
+    const { name, description, location, totalRunDays, inquiry } = req.body;
     const images = req.files ? req.files.map(file => file.path) : [];
 
     // Validate required fields
@@ -1517,8 +1496,6 @@ export const createRetailerAdRequest = async (req, res) => {
       description,
       images,
       location,
-      storeId: storeId || null,
-      productId: productId || null,
       adOwnerType: 'retailer',
       adOwnerId: req.user._id, // Assuming req.user._id is the retailer ID
       totalRunDays: totalRunDays || 1,
@@ -1585,7 +1562,7 @@ export const listRetailerAds = async (req, res) => {
       query.status = status;
     }
 
-    const ads = await Ad.find(query).populate('storeId').populate('productId').sort({ createdAt: -1 });
+    const ads = await Ad.find(query).sort({ createdAt: -1 });
 
     res.status(200).json({
       status: 200,
@@ -1623,7 +1600,7 @@ export const getRetailerAdDetails = async (req, res) => {
         { sellerId: req.user._id } // For backward compatibility with existing retailer ads
       ],
       deleted: { $ne: true }
-    }).populate('storeId').populate('productId');
+    });
 
     if (!ad) {
       return res.status(404).json({
@@ -1849,7 +1826,7 @@ export const getAdDetails = async (req, res) => {
       status: 'active',
       isDead: { $ne: true },
       deleted: { $ne: true }
-    }).populate('storeId').populate('productId');
+    });
 
     if (!ad) {
       return res.status(404).json({
@@ -1901,8 +1878,6 @@ export const getActiveAds = async (req, res) => {
       isDead: { $ne: true },
       deleted: { $ne: true }
     })
-      .populate('storeId')
-      .populate('productId')
       .sort({ createdAt: -1 });
 
     // Group ads by location and prioritize non-admin ads
