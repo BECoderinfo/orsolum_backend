@@ -25,6 +25,7 @@ import {
 } from "../helper/helper.js";
 import Payment from "../models/Payment.js";
 import { notifyLowStock } from "../helper/notificationHelper.js";
+import { getCoordinatesFromAddress } from "../helper/geocoding.js";
 import User from "../models/User.js";
 // import { image } from "pdfkit";
 
@@ -1795,7 +1796,7 @@ export const createAddress = async (req, res) => {
     // Fallback: Try to fetch coordinates from Pincode/Address if still 0
     if (finalLat === "0" || finalLong === "0") {
       try {
-        const { getCoordinatesFromAddress } = await import("../helper/geocoding.js");
+        // Static import used
         const query = pincodeStr || address_1; // Use pincode or address string
         if (query) {
           const geoCoords = await getCoordinatesFromAddress(query);

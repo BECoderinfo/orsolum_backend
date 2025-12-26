@@ -2686,7 +2686,25 @@ export const addOnlineProductToCart = async (req, res) => {
 
         const onlineProductId = productDetails._id;
 
-        const productUnit = await ProductUnit.findOne({ parentProduct: onlineProductId, _id: unitId });
+        const productUnitOriginal = await ProductUnit.findOne({ parentProduct: onlineProductId, _id: unitId });
+        let productUnit = productUnitOriginal;
+
+        // If unit not found directly, try to map from local product unit if applicable
+        if (!productUnit) {
+            const localProduct = await Product.findById(productId);
+            if (localProduct && localProduct.units) {
+                const localUnit = localProduct.units.find(u => u._id.toString() === unitId);
+                if (localUnit) {
+                    // Find matching online unit by quantity
+                    productUnit = await ProductUnit.findOne({
+                        parentProduct: onlineProductId,
+                        qty: localUnit.qty,
+                        deleted: false
+                    });
+                }
+            }
+        }
+
         if (!productUnit) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Product Unit not found" });
         }
