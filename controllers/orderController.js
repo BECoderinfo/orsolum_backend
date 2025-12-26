@@ -940,7 +940,7 @@ export const cartDetails = async (req, res) => {
     let storeObjectId = null;
 
     // If store id is missing/invalid, try to find store from cart items
-    if (!id || !ObjectId.isValid(id)) {
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
       // Try to get store ID from user's cart items
       const userCartItems = await Cart.findOne({
         createdBy: req.user._id,
@@ -952,8 +952,8 @@ export const cartDetails = async (req, res) => {
 
       if (userCartItems && userCartItems.productId && userCartItems.productId.storeId) {
         const storeIdFromCart = userCartItems.productId.storeId._id || userCartItems.productId.storeId;
-        if (ObjectId.isValid(storeIdFromCart)) {
-          storeObjectId = new ObjectId(storeIdFromCart);
+        if (storeIdFromCart && mongoose.Types.ObjectId.isValid(storeIdFromCart.toString())) {
+          storeObjectId = new mongoose.Types.ObjectId(storeIdFromCart.toString());
         }
       }
 
@@ -978,7 +978,14 @@ export const cartDetails = async (req, res) => {
         });
       }
     } else {
-      storeObjectId = new ObjectId(id);
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Invalid store ID format",
+        });
+      }
+      storeObjectId = new mongoose.Types.ObjectId(id);
     }
 
     let findStore = await Store.findById(storeObjectId);
@@ -994,8 +1001,8 @@ export const cartDetails = async (req, res) => {
 
       if (userCartItems && userCartItems.productId && userCartItems.productId.storeId) {
         const storeIdFromCart = userCartItems.productId.storeId._id || userCartItems.productId.storeId;
-        if (ObjectId.isValid(storeIdFromCart)) {
-          storeObjectId = new ObjectId(storeIdFromCart);
+        if (storeIdFromCart && mongoose.Types.ObjectId.isValid(storeIdFromCart.toString())) {
+          storeObjectId = new mongoose.Types.ObjectId(storeIdFromCart.toString());
           findStore = await Store.findById(storeObjectId);
           if (!findStore) {
             return res.status(status.NotFound).json({
@@ -1058,7 +1065,7 @@ export const cartDetails = async (req, res) => {
                   {
                     $match: {
                       deleted: false,
-                      createdBy: new ObjectId(req.user._id),
+                      createdBy: new mongoose.Types.ObjectId(req.user._id),
                     },
                   },
                 ],
@@ -3353,10 +3360,19 @@ export const orderDetailsV2 = async (req, res) => {
     console.log('Order ID requested:', id);
     console.log('User ID from token:', req.user._id);
 
+    // 1️⃣ Validate order ID parameter
+    if (!id) {
+      return res.status(400).json({
+        status: 400,
+        success: false,
+        message: "Order ID is required",
+      });
+    }
+
     // 1️⃣ Try to find order by _id or alternate IDs (orderId / cf_order_id)
     let orderExists = null;
 
-    if (mongoose.isValidObjectId(id)) {
+    if (mongoose.Types.ObjectId.isValid(id)) {
       console.log('Looking up by ObjectId');
       orderExists = await Order.findOne({
         _id: new mongoose.Types.ObjectId(id),
@@ -3450,12 +3466,42 @@ export const orderDetailsV2 = async (req, res) => {
       },
       {
         $addFields: {
-          "productDetails.productName": "$productInfo.productName",
-          "productDetails.productImages": "$productInfo.productImages",
-          "productDetails.companyName": "$productInfo.companyName",
-          "productDetails.qty": "$productInfo.qty",
-          "productDetails.deliverdTime": "$productInfo.deliverdTime",
-          "productDetails.estimatedDate": "$productInfo.estimatedDate",
+          "productDetails.productName": {
+            $ifNull: [
+              { $arrayElemAt: ["$productInfo.productName", 0] },
+              "Product Not Found"
+            ]
+          },
+          "productDetails.productImages": {
+            $ifNull: [
+              { $arrayElemAt: ["$productInfo.productImages", 0] },
+              []
+            ]
+          },
+          "productDetails.companyName": {
+            $ifNull: [
+              { $arrayElemAt: ["$productInfo.companyName", 0] },
+              ""
+            ]
+          },
+          "productDetails.qty": {
+            $ifNull: [
+              { $arrayElemAt: ["$productInfo.qty", 0] },
+              null
+            ]
+          },
+          "productDetails.deliverdTime": {
+            $ifNull: [
+              { $arrayElemAt: ["$productInfo.deliverdTime", 0] },
+              null
+            ]
+          },
+          "productDetails.estimatedDate": {
+            $ifNull: [
+              { $arrayElemAt: ["$productInfo.estimatedDate", 0] },
+              null
+            ]
+          },
           "productDetails.totalAmount": {
             $multiply: [
               "$productDetails.productPrice",

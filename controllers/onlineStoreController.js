@@ -2940,10 +2940,17 @@ export const onlineStoreCartDetails = async (req, res) => {
             const unit = cartItem.unitId;
             const quantity = cartItem.quantity;
 
-            if (!product || !unit) return null;
+            // Validate that both product and unit exist
+            if (!product || !unit) {
+                console.warn('Cart item has missing product or unit:', cartItem._id);
+                return null;
+            }
 
             // Fetch subcategory details to get percentageOff
-            const subCategory = await ProductSubCategory.findById(product.subCategoryId);
+            let subCategory = null;
+            if (product.subCategoryId) {
+                subCategory = await ProductSubCategory.findById(product.subCategoryId);
+            }
             const percentageOff = subCategory?.percentageOff || 0;
 
             let modifiedUnit = { ...unit.toObject() };
@@ -2986,6 +2993,15 @@ export const onlineStoreCartDetails = async (req, res) => {
         let couponCodeDiscount = 0;
 
         if (coupon) {
+            // Validate coupon ID format before querying
+            if (!mongoose.Types.ObjectId.isValid(coupon)) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    message: 'Invalid coupon ID format'
+                });
+            }
+            
             const couponCode = await CouponCode.findById(coupon);
 
             if (!couponCode || couponCode.deleted) {
@@ -3652,61 +3668,85 @@ export const onlineOrderDetails = async (req, res) => {
             });
         }
 
-        const details = await OnlineOrder.aggregate([
-            {
-                $match: {
-                    _id: new mongoose.Types.ObjectId(id),
-                    createdBy: new mongoose.Types.ObjectId(req.user._id)
-                }
-            },
-            {
-                $unwind: {
-                    path: "$productDetails",
-                    preserveNullAndEmptyArrays: true
-                }
-            },
-            {
-                $lookup: {
-                    from: "online_products",
-                    localField: "productDetails.productId",
-                    foreignField: "_id",
-                    as: "productInfo"
-                }
-            },
-            {
-                $unwind: {
-                    path: "$productInfo",
-                    preserveNullAndEmptyArrays: true
-                }
-            },
-            {
-                $addFields: {
-                    "productDetails.productName": "$productInfo.name",
-                    "productDetails.productImages": "$productInfo.images",
-                    "productDetails.manufacturer": "$productInfo.manufacturer",
-                    "productDetails.totalAmount": {
-                        $multiply: ["$productDetails.productPrice", "$productDetails.quantity"]
+        let details = [];
+        try {
+            details = await OnlineOrder.aggregate([
+                {
+                    $match: {
+                        _id: new mongoose.Types.ObjectId(id),
+                        createdBy: new mongoose.Types.ObjectId(req.user._id)
+                    }
+                },
+                {
+                    $unwind: {
+                        path: "$productDetails",
+                        preserveNullAndEmptyArrays: true
+                    }
+                },
+                {
+                    $lookup: {
+                        from: "online_products",
+                        localField: "productDetails.productId",
+                        foreignField: "_id",
+                        as: "productInfo"
+                    }
+                },
+                {
+                    $unwind: {
+                        path: "$productInfo",
+                        preserveNullAndEmptyArrays: true
+                    }
+                },
+                {
+                    $addFields: {
+                        "productDetails.productName": {
+                            $ifNull: [
+                                { $arrayElemAt: ["$productInfo.name", 0] },
+                                "Product Not Found"
+                            ]
+                        },
+                        "productDetails.productImages": {
+                            $ifNull: [
+                                { $arrayElemAt: ["$productInfo.images", 0] },
+                                []
+                            ]
+                        },
+                        "productDetails.manufacturer": {
+                            $ifNull: [
+                                { $arrayElemAt: ["$productInfo.manufacturer", 0] },
+                                "Unknown"
+                            ]
+                        },
+                        "productDetails.totalAmount": {
+                            $multiply: ["$productDetails.productPrice", "$productDetails.quantity"]
+                        }
+                    }
+                },
+                {
+                    $group: {
+                        _id: "$_id",
+                        orderId: { $first: "$orderId" },
+                        estimatedDate: { $first: "$estimatedDate" },
+                        deliverdTime: { $first: "$deliverdTime" },
+                        status: { $first: "$status" },
+                        isReturn: { $first: "$isReturn" },
+                        returnStatus: { $first: "$returnStatus"},
+                        summary: { $first: "$summary" },
+                        invoiceUrl: { $first: "$invoiceUrl" },
+                        createdAt: { $first: "$createdAt" },
+                        updatedAt: { $first: "$updatedAt" },
+                        address: { $first: "$address" },
+                        products: { $push: "$productDetails" }
                     }
                 }
-            },
-            {
-                $group: {
-                    _id: "$_id",
-                    orderId: { $first: "$orderId" },
-                    estimatedDate: { $first: "$estimatedDate" },
-                    deliverdTime: { $first: "$deliverdTime" },
-                    status: { $first: "$status" },
-                    isReturn: { $first: "$isReturn" },
-                    returnStatus: { $first: "$returnStatus"},
-                    summary: { $first: "$summary" },
-                    invoiceUrl: { $first: "$invoiceUrl" },
-                    createdAt: { $first: "$createdAt" },
-                    updatedAt: { $first: "$updatedAt" },
-                    address: { $first: "$address" },
-                    products: { $push: "$productDetails" }
-                }
-            }
-        ]);
+            ]);
+        } catch (aggregateError) {
+            console.error('Error in onlineOrderDetails aggregation:', aggregateError.message);
+            return res.status(500).json({
+                success: false,
+                message: "Failed to retrieve order details due to a server error"
+            });
+        }
 
         if (!details.length) {
             return res.status(404).json({

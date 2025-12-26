@@ -138,3 +138,4 @@ sellerRouter.post("/seller/ads/payment/session/v1", sellerAuthentication, create
 sellerRouter.get("/seller/ads/:id([a-fA-F0-9]{24})/payment/info/v1", sellerAuthentication, getAdPaymentInfo);
 
 export default sellerRouter;
+
