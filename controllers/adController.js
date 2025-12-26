@@ -1578,22 +1578,32 @@ export const getActiveAds = async (req, res) => {
     const normalizedLocation = location ? normalizeLocation(location) : null;
     const now = new Date();
 
+    // Get seller user IDs for legacy filtering
+    const sellerUsers = await User.find({ role: "seller" }).select("_id").lean();
+    const sellerIds = sellerUsers.map((u) => u._id);
+
     const filter = {
       status: "active",
       startDate: { $lte: now },
       endDate: { $gte: now },
       deleted: { $ne: true },
-      sellerId: { $exists: true }, // ✅ Only ads with sellerId (seller ads)
     };
 
     if (normalizedLocation && AD_LOCATIONS.includes(normalizedLocation)) {
       filter.location = normalizedLocation;
     }
 
-    // ✅ seller and retailer ids
-    const sellerAndRetailerUsers = await User.find({ role: { $in: ["seller", "retailer"] } }).select("_id").lean();
-    const sellerAndRetailerIds = sellerAndRetailerUsers.map((u) => u._id);
-    filter.sellerId = { $in: sellerAndRetailerIds };
+    // ✅ Only seller ads for online store (not retailer ads)
+    // Use $or to support both new and legacy ownership models
+    filter.$or = [
+      // New ownership model: adOwnerType is 'seller'
+      { adOwnerType: "seller" },
+      // Legacy model: sellerId exists and belongs to a seller
+      {
+        sellerId: { $in: sellerIds },
+        adOwnerType: { $in: [null, undefined] }, // Not using new ownership model
+      }
+    ];
 
     const sellerAds = await Ad.find(filter)
       .populate("sellerId", "name phone role")
@@ -1730,12 +1740,15 @@ export const getRetailerLocalStoreAds = async (req, res) => {
     const { location } = req.query;
     const now = new Date();
 
+    // Get retailer user IDs for legacy filtering
+    const retailerUsers = await User.find({ role: "retailer" }).select("_id").lean();
+    const retailerIds = retailerUsers.map(u => u._id);
+
     const filter = {
       status: "active",
       startDate: { $lte: now },
       endDate: { $gte: now },
       deleted: { $ne: true },
-      sellerId: { $exists: true }, // ✅ Only ads with sellerId (retailer ads use sellerId field)
     };
 
     // Filter by location if provided
@@ -1743,13 +1756,17 @@ export const getRetailerLocalStoreAds = async (req, res) => {
       filter.location = location;
     }
 
-    // ✅ Use aggregation to filter by retailer role
-    // First, get all retailer user IDs
-    const retailerUsers = await User.find({ role: "retailer" }).select("_id").lean();
-    const retailerIds = retailerUsers.map(u => u._id);
-
-    // Filter ads by retailerIds
-    filter.sellerId = { $in: retailerIds };
+    // ✅ Only retailer ads for local store (not seller ads)
+    // Use $or to support both new and legacy ownership models
+    filter.$or = [
+      // New ownership model: adOwnerType is 'retailer'
+      { adOwnerType: "retailer" },
+      // Legacy model: sellerId exists and belongs to a retailer
+      {
+        sellerId: { $in: retailerIds },
+        adOwnerType: { $in: [null, undefined] }, // Not using new ownership model
+      }
+    ];
 
     const ads = await Ad.find(filter)
       .populate("sellerId", "name phone role")

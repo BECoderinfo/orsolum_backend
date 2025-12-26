@@ -629,7 +629,7 @@ export const listProducts = async (req, res) => {
         });
 
         const list = await OnlineProduct.aggregate(pipeline);
-        
+
         // Debug: Log the pipeline and results
         console.log("📦 Online Products Query:", {
             totalProducts: list.length,
@@ -814,7 +814,7 @@ export const onlineStoreHomePage = async (req, res) => {
             { $match: { deleted: false } },
             { $sort: { createdAt: -1 } }
         ]);
-        
+
         // Normalize subcategories to ensure icon field is properly included
         const subCategories = subCategoriesRaw.map(normalizeSubCategory);
 
@@ -842,9 +842,9 @@ export const onlineStoreHomePage = async (req, res) => {
         const allowedCreatorIds = [...sellerIds, ...adminIds];
 
         // ✅ If no allowed creators, return empty trending products
-        const trendingMatch = allowedCreatorIds.length > 0 
-            ? { 
-                deleted: false, 
+        const trendingMatch = allowedCreatorIds.length > 0
+            ? {
+                deleted: false,
                 autoTrending: true, // ✅ Use autoTrending instead of manual trending flag
                 createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
             }
@@ -853,7 +853,7 @@ export const onlineStoreHomePage = async (req, res) => {
         // Fetch trending products (limit 5) - only seller and admin products
         // We now calculate trending automatically based on Delivered orders
         const trendingProducts = await OnlineProduct.aggregate([
-            { 
+            {
                 $match: {
                     deleted: false,
                     createdBy: { $in: allowedCreatorIds }
@@ -1003,20 +1003,20 @@ export const allTrendingProducts = async (req, res) => {
 
         // Build match conditions
         const matchConditions = allowedCreatorIds.length > 0
-            ? { 
-                deleted: false, 
+            ? {
+                deleted: false,
                 autoTrending: true, // ✅ Use autoTrending instead of manual trending flag
                 createdBy: { $in: allowedCreatorIds } // ✅ Only show seller and admin products
             }
             : { deleted: false, autoTrending: true, _id: { $in: [] } }; // Empty match if no creators
-        
+
         // Add search filter if provided
         if (search) {
             matchConditions.name = { $regex: search, $options: 'i' };
         }
 
         const trendingProducts = await OnlineProduct.aggregate([
-            { 
+            {
                 $match: {
                     deleted: false,
                     createdBy: { $in: allowedCreatorIds },
@@ -1114,7 +1114,7 @@ export const allTrendingProducts = async (req, res) => {
 
         // Build count match conditions (same as main query - must match only those with orders)
         const trendingStats = await OnlineProduct.aggregate([
-            { 
+            {
                 $match: {
                     deleted: false,
                     createdBy: { $in: allowedCreatorIds },
@@ -1267,7 +1267,7 @@ export const allSubCategories = async (req, res) => {
             }
             // ✅ NO LIMIT - Return all subcategories
         ]);
-        
+
         // Normalize subcategories to ensure icon field is properly included
         const data = dataRaw.map(normalizeSubCategory);
 
@@ -1279,14 +1279,14 @@ export const allSubCategories = async (req, res) => {
             })
         }
 
-        res.status(status.OK).json({ 
-            status: jsonStatus.OK, 
-            success: true, 
-            data: { 
-                data, 
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: {
+                data,
                 totalCartCount,
                 total: data.length // ✅ Add total count for reference
-            } 
+            }
         });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
@@ -1430,7 +1430,7 @@ export const onlineStoreDiscovery = async (req, res) => {
             // So we need to return SubCategories as Categories for user app
             const [items, total] = await Promise.all([
                 SubCategory.aggregate([
-                    { 
+                    {
                         $match: {
                             ...exploreMatch,
                             deleted: false,
@@ -1563,7 +1563,7 @@ export const onlineStoreExploreCards = async (req, res) => {
         // So we need to return SubCategories as Categories for user app
         const [items, total] = await Promise.all([
             SubCategory.aggregate([
-                { 
+                {
                     $match: {
                         ...match,
                         deleted: false,
@@ -1811,7 +1811,7 @@ export const onlineStorePopularCategoriesFromAdmin = async (req, res) => {
             popularCategories.map(async (popularCat) => {
                 // Find matching online Category by name (case-insensitive, trim spaces, handle special characters)
                 const popularCatName = popularCat.name.trim();
-                
+
                 // Normalize names for better matching (remove extra spaces, handle special chars)
                 const normalizeName = (name) => {
                     return name
@@ -1821,9 +1821,9 @@ export const onlineStorePopularCategoriesFromAdmin = async (req, res) => {
                         .replace(/&/g, 'and') // & to and
                         .replace(/[^\w\s]/g, ''); // Remove special chars except spaces
                 };
-                
+
                 const normalizedPopularName = normalizeName(popularCatName);
-                
+
                 // Strategy 1: Try exact match first (do not restrict by storeType to ensure matching with all product categories)
                 let matchingCategory = await Category.findOne({
                     deleted: false,
@@ -1832,7 +1832,7 @@ export const onlineStorePopularCategoriesFromAdmin = async (req, res) => {
                         { name: { $regex: new RegExp(popularCatName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } }
                     ]
                 });
-                
+
                 // Strategy 2: If PopularCategory has storeCategoryId, try matching via StoreCategory name
                 if (!matchingCategory && popularCat.storeCategoryId) {
                     const storeCategory = await StoreCategory.findById(popularCat.storeCategoryId).lean();
@@ -1847,17 +1847,17 @@ export const onlineStorePopularCategoriesFromAdmin = async (req, res) => {
                         });
                     }
                 }
-                
+
                 // Strategy 3: If still not found, try normalized matching with all categories
                 if (!matchingCategory) {
                     const allCategories = await Category.find({
                         deleted: false
                     }).lean();
-                    
+
                     // Find best match using normalized names
                     for (const cat of allCategories) {
                         const normalizedCatName = normalizeName(cat.name);
-                        if (normalizedCatName === normalizedPopularName || 
+                        if (normalizedCatName === normalizedPopularName ||
                             normalizedCatName.includes(normalizedPopularName) ||
                             normalizedPopularName.includes(normalizedCatName)) {
                             matchingCategory = cat;
@@ -1887,11 +1887,11 @@ export const onlineStorePopularCategoriesFromAdmin = async (req, res) => {
                     };
 
                     // ✅ If matching category found, use categoryId; otherwise, fetch all products and filter by category name
-                    const productMatch = matchingCategory 
+                    const productMatch = matchingCategory
                         ? {
                             ...productMatchBase,
                             categoryId: matchingCategory._id
-                          }
+                        }
                         : productMatchBase;
 
                     // ✅ Build aggregation pipeline
@@ -2174,7 +2174,7 @@ export const onlineProductsList = async (req, res) => {
             // If category not provided, still ensure categoryId exists
             query.categoryId = { $exists: true, $ne: null };
         }
-        
+
         if (subcategory) {
             query.subCategoryId = new ObjectId(subcategory);
         } else {
@@ -2365,14 +2365,14 @@ export const onlineProductsList = async (req, res) => {
         // Get all seller user IDs first
         const sellerUsers = await User.find({ role: "seller" }).select("_id");
         const sellerUserIds = sellerUsers.map(u => u._id);
-        
+
         // ✅ Count products that match all criteria: seller role, category filter (if provided), subcategory filter (if provided), and have units
         // Use the same query object which already has category/subcategory filters applied
-        const countQuery = { 
-            ...query, 
+        const countQuery = {
+            ...query,
             createdBy: { $in: sellerUserIds }
         };
-        
+
         // Also check that products have units
         const productsWithUnits = await OnlineProduct.aggregate([
             { $match: countQuery },
@@ -2396,7 +2396,7 @@ export const onlineProductsList = async (req, res) => {
                 $count: "total"
             }
         ]);
-        
+
         const totalCount = productsWithUnits[0]?.total || 0;
 
         res.status(status.OK).json({
@@ -2991,6 +2991,7 @@ export const onlineStoreCartDetails = async (req, res) => {
         const address = await Address.findOne({ createdBy: userId });
 
         let couponCodeDiscount = 0;
+        let couponCode = null;
 
         if (coupon) {
             // Validate coupon ID format before querying
@@ -3001,8 +3002,8 @@ export const onlineStoreCartDetails = async (req, res) => {
                     message: 'Invalid coupon ID format'
                 });
             }
-            
-            const couponCode = await CouponCode.findById(coupon);
+
+            couponCode = await CouponCode.findById(coupon);
 
             if (!couponCode || couponCode.deleted) {
                 return res.status(status.NotFound).json({
@@ -3083,469 +3084,470 @@ export const onlineStoreCartDetails = async (req, res) => {
 
 export const createOnlineOrder = async (req, res) => {
     try {
-      const { coupon, donate = 0, addressId, coinUsed = 0 } = req.body;
-      const userId = req.user._id;
-  
-      // 1️⃣ Fetch cart items for the user
-      const carts = await OnlineStoreCart.find({ createdBy: userId, deleted: false })
-        .populate("productId")
-        .populate("unitId");
-  
-      if (carts.length < 1) {
-        return res.status(400).json({ success: false, message: "Cart is empty" });
-      }
-  
-      // 2️⃣ Fetch the address
-      const address = await Address.findOne({ createdBy: userId, _id: addressId });
-      if (!address) {
-        return res.status(400).json({ success: false, message: "Invalid address" });
-      }
-  
-      // 3️⃣ Process cart items
-      let totalAmount = 0;
-      const productDetails = [];
-  
-      for (const cart of carts) {
-        const product = cart.productId;
-        const unit = cart.unitId;
-        const quantity = cart.quantity || 1;
-  
-        if (!product || !unit) continue;
-  
-        const subCategory = await ProductSubCategory.findById(product.subCategoryId);
-        const percentageOff = subCategory?.percentageOff || 0;
-  
-        let finalSellingPrice = unit.sellingPrice || 0;
-        let finalMrp = unit.mrp || finalSellingPrice;
-  
-        // Apply premium discount if applicable
-        if (req.user.isPremium && percentageOff > 0) {
-          finalSellingPrice = Math.round(unit.sellingPrice * (1 - percentageOff / 100));
-          finalMrp = unit.sellingPrice; // Original price as MRP
+        const { coupon, donate = 0, addressId, coinUsed = 0 } = req.body;
+        const userId = req.user._id;
+
+        // 1️⃣ Fetch cart items for the user
+        const carts = await OnlineStoreCart.find({ createdBy: userId, deleted: false })
+            .populate("productId")
+            .populate("unitId");
+
+        if (carts.length < 1) {
+            return res.status(400).json({ success: false, message: "Cart is empty" });
         }
-  
-        totalAmount += finalSellingPrice * quantity;
-  
-        productDetails.push({
-          productId: product._id instanceof mongoose.Types.ObjectId ? product._id : new mongoose.Types.ObjectId(product._id),
-          productPrice: finalSellingPrice,
-          mrp: finalMrp,
-          qty: unit.qty,
-          quantity
+
+        // 2️⃣ Fetch the address
+        const address = await Address.findOne({ createdBy: userId, _id: addressId });
+        if (!address) {
+            return res.status(400).json({ success: false, message: "Invalid address" });
+        }
+
+        // 3️⃣ Process cart items
+        let totalAmount = 0;
+        const productDetails = [];
+
+        for (const cart of carts) {
+            const product = cart.productId;
+            const unit = cart.unitId;
+            const quantity = cart.quantity || 1;
+
+            if (!product || !unit) continue;
+
+            const subCategory = await ProductSubCategory.findById(product.subCategoryId);
+            const percentageOff = subCategory?.percentageOff || 0;
+
+            let finalSellingPrice = unit.sellingPrice || 0;
+            let finalMrp = unit.mrp || finalSellingPrice;
+
+            // Apply premium discount if applicable
+            if (req.user.isPremium && percentageOff > 0) {
+                finalSellingPrice = Math.round(unit.sellingPrice * (1 - percentageOff / 100));
+                finalMrp = unit.sellingPrice; // Original price as MRP
+            }
+
+            totalAmount += finalSellingPrice * quantity;
+
+            productDetails.push({
+                productId: product._id instanceof mongoose.Types.ObjectId ? product._id : new mongoose.Types.ObjectId(product._id),
+                productPrice: finalSellingPrice,
+                mrp: finalMrp,
+                qty: unit.qty,
+                quantity
+            });
+        }
+
+        if (productDetails.length === 0) {
+            return res.status(400).json({ success: false, message: "No valid products found in cart." });
+        }
+
+        // 4️⃣ Coupon logic
+        let couponCodeDiscount = 0;
+        let couponCode = null;
+        if (coupon) {
+            couponCode = await CouponCode.findById(coupon);
+            if (!couponCode || couponCode.deleted) {
+                return res.status(404).json({ success: false, message: "Coupon not found or deleted" });
+            }
+
+            if (couponCode.use === "one") {
+                const alreadyUsed = await CouponHistory.findOne({ couponId: couponCode._id, userId });
+                if (alreadyUsed) {
+                    return res.status(400).json({ success: false, message: "Coupon already used" });
+                }
+            }
+
+            if (couponCode.minPrice && totalAmount < couponCode.minPrice) {
+                return res.status(400).json({ success: false, message: `Minimum purchase of ${couponCode.minPrice} required for this coupon` });
+            }
+
+            const rawDiscount = (totalAmount * couponCode.discount) / 100;
+            couponCodeDiscount = couponCode.upto ? Math.min(rawDiscount, couponCode.upto) : rawDiscount;
+        }
+
+        // 5️⃣ Shipping fee
+        const shippingFee = totalAmount > 500 ? 0 : 50;
+        const grandTotal = totalAmount - couponCodeDiscount + shippingFee + Number(donate) - Number(coinUsed);
+
+        // ✅ Validate grandTotal
+        if (!grandTotal || grandTotal <= 0) {
+            return res.status(400).json({ success: false, message: "Order amount must be greater than zero" });
+        }
+
+        // 6️⃣ Cashfree payment session
+        const paymentData = {
+            order_currency: "INR",
+            order_amount: grandTotal,
+            order_tags: {
+                forPayment: "OnlineStore",
+                coupon: coupon || "",
+                donate: donate.toString(),
+                addressId,
+                userId: userId.toString(),
+                coinUsed: coinUsed.toString()
+            },
+            customer_details: {
+                customer_id: userId,
+                customer_phone: req.user.phone.replace("+91", "").trim()
+            }
+        };
+
+        const headers = {
+            "x-api-version": process.env.CF_API_VERSION,
+            "x-client-id": process.env.CF_CLIENT_ID,
+            "x-client-secret": process.env.CF_CLIENT_SECRET,
+            "Content-Type": "application/json"
+        };
+
+        const cashFreeSession = await axios.post(process.env.CF_CREATE_PRODUCT_URL, paymentData, { headers });
+
+        // 7️⃣ Save the order in MongoDB
+        const newOrder = new OnlineOrder({
+            createdBy: userId,
+            address: address.toObject ? address.toObject() : address,
+            productDetails,
+            orderId: `ONLINE_ORDER_${Date.now()}`,
+            cf_order_id: cashFreeSession.data.order_id,
+            status: "Pending",
+            summary: {
+                totalAmount,
+                discountAmount: couponCodeDiscount,
+                shippingFee,
+                donate: Number(donate),
+                grandTotal,
+                coinUsed: Number(coinUsed)
+            }
         });
-      }
-  
-      if (productDetails.length === 0) {
-        return res.status(400).json({ success: false, message: "No valid products found in cart." });
-      }
-  
-      // 4️⃣ Coupon logic
-      let couponCodeDiscount = 0;
-      if (coupon) {
-        const couponCode = await CouponCode.findById(coupon);
-        if (!couponCode || couponCode.deleted) {
-          return res.status(404).json({ success: false, message: "Coupon not found or deleted" });
-        }
-  
-        if (couponCode.use === "one") {
-          const alreadyUsed = await CouponHistory.findOne({ couponId: couponCode._id, userId });
-          if (alreadyUsed) {
-            return res.status(400).json({ success: false, message: "Coupon already used" });
-          }
-        }
-  
-        if (couponCode.minPrice && totalAmount < couponCode.minPrice) {
-          return res.status(400).json({ success: false, message: `Minimum purchase of ${couponCode.minPrice} required for this coupon` });
-        }
-  
-        const rawDiscount = (totalAmount * couponCode.discount) / 100;
-        couponCodeDiscount = couponCode.upto ? Math.min(rawDiscount, couponCode.upto) : rawDiscount;
-      }
-  
-      // 5️⃣ Shipping fee
-      const shippingFee = totalAmount > 500 ? 0 : 50;
-      const grandTotal = totalAmount - couponCodeDiscount + shippingFee + Number(donate) - Number(coinUsed);
-  
-      // ✅ Validate grandTotal
-      if (!grandTotal || grandTotal <= 0) {
-        return res.status(400).json({ success: false, message: "Order amount must be greater than zero" });
-      }
-  
-      // 6️⃣ Cashfree payment session
-      const paymentData = {
-        order_currency: "INR",
-        order_amount: grandTotal,
-        order_tags: {
-          forPayment: "OnlineStore",
-          coupon: coupon || "",
-          donate: donate.toString(),
-          addressId,
-          userId: userId.toString(),
-          coinUsed: coinUsed.toString()
-        },
-        customer_details: {
-          customer_id: userId,
-          customer_phone: req.user.phone.replace("+91", "").trim()
-        }
-      };
-  
-      const headers = {
-        "x-api-version": process.env.CF_API_VERSION,
-        "x-client-id": process.env.CF_CLIENT_ID,
-        "x-client-secret": process.env.CF_CLIENT_SECRET,
-        "Content-Type": "application/json"
-      };
-  
-      const cashFreeSession = await axios.post(process.env.CF_CREATE_PRODUCT_URL, paymentData, { headers });
-  
-      // 7️⃣ Save the order in MongoDB
-      const newOrder = new OnlineOrder({
-        createdBy: userId,
-        address: address.toObject ? address.toObject() : address,
-        productDetails,
-        orderId: `ONLINE_ORDER_${Date.now()}`,
-        cf_order_id: cashFreeSession.data.order_id,
-        status: "Pending",
-        summary: {
-          totalAmount,
-          discountAmount: couponCodeDiscount,
-          shippingFee,
-          donate: Number(donate),
-          grandTotal,
-          coinUsed: Number(coinUsed)
-        }
-      });
-  
-      const savedOrder = await newOrder.save();
-      console.log("Saved Order:", savedOrder);
 
-      if (!savedOrder || !savedOrder._id) {
-        return res.status(500).json({
-          success: false,
-          message: "Order created but ID could not be retrieved. Check server logs."
+        const savedOrder = await newOrder.save();
+        console.log("Saved Order:", savedOrder);
+
+        if (!savedOrder || !savedOrder._id) {
+            return res.status(500).json({
+                success: false,
+                message: "Order created but ID could not be retrieved. Check server logs."
+            });
+        }
+
+        // ✅ Clear cart items immediately after order creation (before payment)
+        // This ensures cart doesn't show items that are already in an order
+        await OnlineStoreCart.updateMany(
+            { createdBy: userId, deleted: false },
+            { $set: { deleted: true } }
+        );
+
+        // Calculate enhanced bill summary
+        const billSummary = {
+            itemTotal: totalAmount,
+            donationAmount: Number(donate),
+            couponDiscount: couponCodeDiscount,
+            couponCode: coupon ? couponCode.code : null,
+            shippingFee: shippingFee,
+            totalPayable: grandTotal,
+            saved: couponCodeDiscount // Amount saved through coupon
+        };
+
+        return res.status(200).json({
+            success: true,
+            message: "Order created successfully",
+            billSummary, // Include complete bill summary
+            data: {
+                _id: savedOrder._id.toString(),
+                paymentSessionId: cashFreeSession.data.payment_session_id,
+                cf_order_id: cashFreeSession.data.order_id
+            }
         });
-      }
-
-      // ✅ Clear cart items immediately after order creation (before payment)
-      // This ensures cart doesn't show items that are already in an order
-      await OnlineStoreCart.updateMany(
-        { createdBy: userId, deleted: false },
-        { $set: { deleted: true } }
-      );
-
-      // Calculate enhanced bill summary
-      const billSummary = {
-        itemTotal: totalAmount,
-        donationAmount: Number(donate),
-        couponDiscount: couponCodeDiscount,
-        couponCode: coupon ? couponCode.code : null,
-        shippingFee: shippingFee,
-        totalPayable: grandTotal,
-        saved: couponCodeDiscount // Amount saved through coupon
-      };
-      
-      return res.status(200).json({
-        success: true,
-        message: "Order created successfully",
-        billSummary, // Include complete bill summary
-        data: {
-          _id: savedOrder._id.toString(),
-          paymentSessionId: cashFreeSession.data.payment_session_id,
-          cf_order_id: cashFreeSession.data.order_id
-        }
-      });
     } catch (error) {
-      console.error("Error in createOnlineOrder:", error);
-      // ✅ Avoid duplicate response
-      if (!res.headersSent) {
-        res.status(500).json({ success: false, message: error.message || "Internal server error" });
-      }
-      return catchError("createOnlineOrder", error, req, res);
+        console.error("Error in createOnlineOrder:", error);
+        // ✅ Avoid duplicate response
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, message: error.message || "Internal server error" });
+        }
+        return catchError("createOnlineOrder", error, req, res);
     }
-  };
+};
 
 export const cancelOnlineOrder = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!id) {
-      return res.status(400).json({
-        status: 400,
-        success: false,
-        message: "Order ID is missing in URL",
-      });
-    }
-
-    const orderIdentifier = String(id).trim();
-
-    // 1️⃣ Check order exists for this user (allow either Mongo _id or human readable orderId)
-    const orderQuery = { createdBy: new ObjectId(req.user._id) };
-    
-    // Try to convert to ObjectId if valid, otherwise use as orderId string
-    if (ObjectId.isValid(orderIdentifier)) {
-      try {
-        orderQuery._id = new ObjectId(orderIdentifier);
-      } catch (e) {
-        orderQuery.orderId = orderIdentifier;
-      }
-    } else {
-      orderQuery.orderId = orderIdentifier;
-    }
-
-    const order = await OnlineOrder.findOne(orderQuery);
-
-    if (!order) {
-      return res.status(404).json({
-        status: 404,
-        success: false,
-        message: "Order not found with this ID",
-      });
-    }
-
-    // Check if order is already cancelled
-    if (order.status === "Cancelled") {
-      return res.status(400).json({
-        status: 400,
-        success: false,
-        message: "Order is already cancelled",
-      });
-    }
-
-    // Validate order summary exists
-    if (!order.summary || typeof order.summary.grandTotal !== 'number') {
-      return res.status(400).json({
-        status: 400,
-        success: false,
-        message: "Invalid order data. Order summary is missing.",
-      });
-    }
-  
-    // 2️⃣ Get payment details (handle legacy field paymentResonse + new paymentResponse)
-    let payment = null;
     try {
-      const paymentResult = await Payment.findOne({ 
-        onlineOrderId: new ObjectId(order._id) 
-      });
-      // Ensure payment is a valid object
-      if (paymentResult && typeof paymentResult === 'object' && paymentResult._id) {
-        payment = paymentResult;
-      }
-    } catch (paymentError) {
-      console.log("Payment lookup error:", paymentError);
-      payment = null; // Explicitly set to null
-    }
+        const { id } = req.params;
 
-    // Safely extract cfOrderId with proper null checks - using optional chaining everywhere
-    let cfOrderId = null;
-    if (payment && typeof payment === 'object' && payment !== null) {
-      try {
-        // Try new field first with optional chaining
-        const paymentResponse = payment?.paymentResponse;
-        if (paymentResponse && typeof paymentResponse === 'object') {
-          cfOrderId = paymentResponse?.order?.order_id || null;
+        if (!id) {
+            return res.status(400).json({
+                status: 400,
+                success: false,
+                message: "Order ID is missing in URL",
+            });
         }
-        
-        // Try legacy typo field with optional chaining (only if cfOrderId not found)
-        if (!cfOrderId) {
-          const paymentResonse = payment?.paymentResonse;
-          if (paymentResonse && typeof paymentResonse === 'object') {
-            cfOrderId = paymentResonse?.order?.order_id || null;
-          }
+
+        const orderIdentifier = String(id).trim();
+
+        // 1️⃣ Check order exists for this user (allow either Mongo _id or human readable orderId)
+        const orderQuery = { createdBy: new ObjectId(req.user._id) };
+
+        // Try to convert to ObjectId if valid, otherwise use as orderId string
+        if (ObjectId.isValid(orderIdentifier)) {
+            try {
+                orderQuery._id = new ObjectId(orderIdentifier);
+            } catch (e) {
+                orderQuery.orderId = orderIdentifier;
+            }
+        } else {
+            orderQuery.orderId = orderIdentifier;
         }
-        
-        // Try direct field with optional chaining (only if cfOrderId not found)
-        if (!cfOrderId && payment?.cfoOrder_id) {
-          cfOrderId = String(payment.cfoOrder_id);
+
+        const order = await OnlineOrder.findOne(orderQuery);
+
+        if (!order) {
+            return res.status(404).json({
+                status: 404,
+                success: false,
+                message: "Order not found with this ID",
+            });
         }
-      } catch (e) {
-        console.log("Error extracting cfOrderId from payment:", e);
+
+        // Check if order is already cancelled
+        if (order.status === "Cancelled") {
+            return res.status(400).json({
+                status: 400,
+                success: false,
+                message: "Order is already cancelled",
+            });
+        }
+
+        // Validate order summary exists
+        if (!order.summary || typeof order.summary.grandTotal !== 'number') {
+            return res.status(400).json({
+                status: 400,
+                success: false,
+                message: "Invalid order data. Order summary is missing.",
+            });
+        }
+
+        // 2️⃣ Get payment details (handle legacy field paymentResonse + new paymentResponse)
+        let payment = null;
         try {
-          console.log("Payment object type:", typeof payment);
-          if (payment && typeof payment === 'object') {
-            console.log("Payment has _id:", !!payment._id);
-          }
-        } catch (logError) {
-          console.log("Could not log payment details");
+            const paymentResult = await Payment.findOne({
+                onlineOrderId: new ObjectId(order._id)
+            });
+            // Ensure payment is a valid object
+            if (paymentResult && typeof paymentResult === 'object' && paymentResult._id) {
+                payment = paymentResult;
+            }
+        } catch (paymentError) {
+            console.log("Payment lookup error:", paymentError);
+            payment = null; // Explicitly set to null
         }
-        // Set payment to null if extraction fails to prevent further errors
-        payment = null;
-      }
-    }
-    
-    // Fallback to order's cf_order_id if payment doesn't have it
-    if (!cfOrderId && order.cf_order_id) {
-      cfOrderId = String(order.cf_order_id);
-    }
 
-    // If no payment or no cfOrderId, just cancel the order without refund
-    if (!payment || !cfOrderId) {
-      try {
+        // Safely extract cfOrderId with proper null checks - using optional chaining everywhere
+        let cfOrderId = null;
+        if (payment && typeof payment === 'object' && payment !== null) {
+            try {
+                // Try new field first with optional chaining
+                const paymentResponse = payment?.paymentResponse;
+                if (paymentResponse && typeof paymentResponse === 'object') {
+                    cfOrderId = paymentResponse?.order?.order_id || null;
+                }
+
+                // Try legacy typo field with optional chaining (only if cfOrderId not found)
+                if (!cfOrderId) {
+                    const paymentResonse = payment?.paymentResonse;
+                    if (paymentResonse && typeof paymentResonse === 'object') {
+                        cfOrderId = paymentResonse?.order?.order_id || null;
+                    }
+                }
+
+                // Try direct field with optional chaining (only if cfOrderId not found)
+                if (!cfOrderId && payment?.cfoOrder_id) {
+                    cfOrderId = String(payment.cfoOrder_id);
+                }
+            } catch (e) {
+                console.log("Error extracting cfOrderId from payment:", e);
+                try {
+                    console.log("Payment object type:", typeof payment);
+                    if (payment && typeof payment === 'object') {
+                        console.log("Payment has _id:", !!payment._id);
+                    }
+                } catch (logError) {
+                    console.log("Could not log payment details");
+                }
+                // Set payment to null if extraction fails to prevent further errors
+                payment = null;
+            }
+        }
+
+        // Fallback to order's cf_order_id if payment doesn't have it
+        if (!cfOrderId && order.cf_order_id) {
+            cfOrderId = String(order.cf_order_id);
+        }
+
+        // If no payment or no cfOrderId, just cancel the order without refund
+        if (!payment || !cfOrderId) {
+            try {
+                await OnlineOrder.findByIdAndUpdate(order._id, {
+                    status: "Cancelled",
+                    refund: false,
+                });
+
+                // Refund coins if they were used (even without payment)
+                const coinUsed = order.summary?.coinUsed || 0;
+                if (coinUsed > 0) {
+                    try {
+                        await User.findByIdAndUpdate(req.user._id, {
+                            $inc: { coins: coinUsed },
+                        });
+
+                        await CoinHistory.create({
+                            createdBy: req.user._id,
+                            coins: coinUsed,
+                            orderId: order._id,
+                            type: "Refunded",
+                        });
+                    } catch (coinError) {
+                        console.log("Coin refund error:", coinError);
+                        // Continue even if coin refund fails
+                    }
+                }
+
+                return res.status(200).json({
+                    status: 200,
+                    success: true,
+                    message: "Order cancelled successfully. Payment was not captured, so no refund required.",
+                });
+            } catch (updateError) {
+                console.log("Order update error:", updateError);
+                return res.status(500).json({
+                    status: 500,
+                    success: false,
+                    message: "Failed to cancel order. Please try again.",
+                });
+            }
+        }
+
+        // 3️⃣ Create refund via Cashfree API (only if payment exists)
+        const refundId = `REFUND_${Date.now()}_${order._id.toString().slice(-6)}`;
+        let refundResponse = null;
+
+        try {
+            const refundUrl = `${process.env.CF_CREATE_PRODUCT_URL}/${cfOrderId}/refunds`;
+
+            if (!process.env.CF_CLIENT_ID || !process.env.CF_CLIENT_SECRET) {
+                throw new Error("Cashfree credentials not configured");
+            }
+
+            const refund = await axios.post(
+                refundUrl,
+                {
+                    refund_amount: order.summary.grandTotal,
+                    refund_id: refundId,
+                },
+                {
+                    headers: {
+                        "x-api-version": process.env.CF_API_VERSION || "2023-08-01",
+                        "x-client-id": process.env.CF_CLIENT_ID,
+                        "x-client-secret": process.env.CF_CLIENT_SECRET,
+                        "Content-Type": "application/json",
+                    },
+                    timeout: 30000, // 30 second timeout
+                }
+            );
+
+            refundResponse = refund.data;
+        } catch (refundError) {
+            console.log("Cashfree refund API error:", refundError?.response?.data || refundError.message);
+
+            // If refund API fails, still cancel the order but mark it appropriately
+            await OnlineOrder.findByIdAndUpdate(order._id, {
+                status: "Cancelled",
+                refund: false,
+            });
+
+            return res.status(200).json({
+                status: 200,
+                success: true,
+                message: "Order cancelled. Refund processing failed, please contact support.",
+                note: "Order has been cancelled but refund needs manual processing.",
+            });
+        }
+
+        // 4️⃣ Save refund record
+        try {
+            await Refund.create({
+                type: "OnlineStore",
+                cfOrderId: cfOrderId,
+                cfOrderResponseId: cfOrderId,
+                refundResponse: refundResponse,
+                userId: req.user._id,
+                onlineOrderId: order._id,
+                amount: order.summary.grandTotal,
+                refundId,
+                cancelled: true,
+            });
+        } catch (refundSaveError) {
+            console.log("Refund save error:", refundSaveError);
+            // Continue even if refund record save fails
+        }
+
+        // 5️⃣ Mark refund in payment
+        if (payment && payment._id) {
+            try {
+                await Payment.findByIdAndUpdate(payment._id, {
+                    refund: true,
+                    refundId,
+                });
+            } catch (paymentUpdateError) {
+                console.log("Payment update error:", paymentUpdateError);
+                // Continue even if payment update fails
+            }
+        }
+
+        // 6️⃣ Update order
         await OnlineOrder.findByIdAndUpdate(order._id, {
-          status: "Cancelled",
-          refund: false,
+            status: "Cancelled",
+            refund: true,
+            refundId,
         });
 
-        // Refund coins if they were used (even without payment)
+        // 7️⃣ Refund coins if they were used in the order
         const coinUsed = order.summary?.coinUsed || 0;
         if (coinUsed > 0) {
-          try {
-            await User.findByIdAndUpdate(req.user._id, {
-              $inc: { coins: coinUsed },
-            });
+            try {
+                await User.findByIdAndUpdate(req.user._id, {
+                    $inc: { coins: coinUsed },
+                });
 
-            await CoinHistory.create({
-              createdBy: req.user._id,
-              coins: coinUsed,
-              orderId: order._id,
-              type: "Refunded",
-            });
-          } catch (coinError) {
-            console.log("Coin refund error:", coinError);
-            // Continue even if coin refund fails
-          }
+                await CoinHistory.create({
+                    createdBy: req.user._id,
+                    coins: coinUsed,
+                    orderId: order._id,
+                    type: "Refunded",
+                });
+            } catch (coinError) {
+                console.log("Coin refund error:", coinError);
+                // Continue even if coin refund fails
+            }
         }
 
         return res.status(200).json({
-          status: 200,
-          success: true,
-          message: "Order cancelled successfully. Payment was not captured, so no refund required.",
+            status: 200,
+            success: true,
+            message: "Order cancelled and refund processed successfully",
         });
-      } catch (updateError) {
-        console.log("Order update error:", updateError);
-        return res.status(500).json({
-          status: 500,
-          success: false,
-          message: "Failed to cancel order. Please try again.",
-        });
-      }
-    }
 
-    // 3️⃣ Create refund via Cashfree API (only if payment exists)
-    const refundId = `REFUND_${Date.now()}_${order._id.toString().slice(-6)}`;
-    let refundResponse = null;
+    } catch (error) {
+        console.log("❌ Cancel Order Error:", error);
+        console.log("Error stack:", error.stack);
 
-    try {
-      const refundUrl = `${process.env.CF_CREATE_PRODUCT_URL}/${cfOrderId}/refunds`;
-      
-      if (!process.env.CF_CLIENT_ID || !process.env.CF_CLIENT_SECRET) {
-        throw new Error("Cashfree credentials not configured");
-      }
-
-      const refund = await axios.post(
-        refundUrl,
-        {
-          refund_amount: order.summary.grandTotal,
-          refund_id: refundId,
-        },
-        {
-          headers: {
-            "x-api-version": process.env.CF_API_VERSION || "2023-08-01",
-            "x-client-id": process.env.CF_CLIENT_ID,
-            "x-client-secret": process.env.CF_CLIENT_SECRET,
-            "Content-Type": "application/json",
-          },
-          timeout: 30000, // 30 second timeout
+        // Ensure response is sent only once
+        if (!res.headersSent) {
+            return res.status(500).json({
+                status: 500,
+                success: false,
+                message: error.message || "Internal Server Error",
+            });
         }
-      );
-
-      refundResponse = refund.data;
-    } catch (refundError) {
-      console.log("Cashfree refund API error:", refundError?.response?.data || refundError.message);
-      
-      // If refund API fails, still cancel the order but mark it appropriately
-      await OnlineOrder.findByIdAndUpdate(order._id, {
-        status: "Cancelled",
-        refund: false,
-      });
-
-      return res.status(200).json({
-        status: 200,
-        success: true,
-        message: "Order cancelled. Refund processing failed, please contact support.",
-        note: "Order has been cancelled but refund needs manual processing.",
-      });
     }
-
-    // 4️⃣ Save refund record
-    try {
-      await Refund.create({
-        type: "OnlineStore",
-        cfOrderId: cfOrderId,
-        cfOrderResponseId: cfOrderId,
-        refundResponse: refundResponse,
-        userId: req.user._id,
-        onlineOrderId: order._id,
-        amount: order.summary.grandTotal,
-        refundId,
-        cancelled: true,
-      });
-    } catch (refundSaveError) {
-      console.log("Refund save error:", refundSaveError);
-      // Continue even if refund record save fails
-    }
-
-    // 5️⃣ Mark refund in payment
-    if (payment && payment._id) {
-      try {
-        await Payment.findByIdAndUpdate(payment._id, {
-          refund: true,
-          refundId,
-        });
-      } catch (paymentUpdateError) {
-        console.log("Payment update error:", paymentUpdateError);
-        // Continue even if payment update fails
-      }
-    }
-
-    // 6️⃣ Update order
-    await OnlineOrder.findByIdAndUpdate(order._id, {
-      status: "Cancelled",
-      refund: true,
-      refundId,
-    });
-
-    // 7️⃣ Refund coins if they were used in the order
-    const coinUsed = order.summary?.coinUsed || 0;
-    if (coinUsed > 0) {
-      try {
-        await User.findByIdAndUpdate(req.user._id, {
-          $inc: { coins: coinUsed },
-        });
-
-        await CoinHistory.create({
-          createdBy: req.user._id,
-          coins: coinUsed,
-          orderId: order._id,
-          type: "Refunded",
-        });
-      } catch (coinError) {
-        console.log("Coin refund error:", coinError);
-        // Continue even if coin refund fails
-      }
-    }
-
-    return res.status(200).json({
-      status: 200,
-      success: true,
-      message: "Order cancelled and refund processed successfully",
-    });
-  
-  } catch (error) {
-    console.log("❌ Cancel Order Error:", error);
-    console.log("Error stack:", error.stack);
-  
-    // Ensure response is sent only once
-    if (!res.headersSent) {
-      return res.status(500).json({
-        status: 500,
-        success: false,
-        message: error.message || "Internal Server Error",
-      });
-    }
-  }
 };
-  
-  
+
+
 
 export const onlineOrderList = async (req, res) => {
     try {
@@ -3650,7 +3652,7 @@ export const onlineOrderList = async (req, res) => {
         return catchError('onlineOrderList', error, req, res);
     }
 };
-    
+
 export const onlineOrderDetails = async (req, res) => {
     try {
         const { id } = req.params;
@@ -3730,7 +3732,7 @@ export const onlineOrderDetails = async (req, res) => {
                         deliverdTime: { $first: "$deliverdTime" },
                         status: { $first: "$status" },
                         isReturn: { $first: "$isReturn" },
-                        returnStatus: { $first: "$returnStatus"},
+                        returnStatus: { $first: "$returnStatus" },
                         summary: { $first: "$summary" },
                         invoiceUrl: { $first: "$invoiceUrl" },
                         createdAt: { $first: "$createdAt" },
@@ -3800,308 +3802,308 @@ export const onlineOrderDetails = async (req, res) => {
 };
 
 export const returnChangeStatus = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { ReturnStatus, reason, comment } = req.body;
+    try {
+        const { id } = req.params;
+        const { ReturnStatus, reason, comment } = req.body;
 
-    let returnImage;
+        let returnImage;
 
-    if (req.file) {
-      returnImage = req.file.key
+        if (req.file) {
+            returnImage = req.file.key
+        }
+
+        if (!ReturnStatus) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Return status can't be empty",
+            });
+        }
+
+        if (!reason) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                messages: "Reason can't be empty"
+            });
+        }
+
+        const statusArr = ["Pending"];
+
+        if (!statusArr.includes(ReturnStatus)) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Please enter valid refund status status",
+            });
+        }
+
+        const orderData = await OnlineOrder.findById(id);
+
+        if (!orderData) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Order not found",
+            });
+        }
+
+        const today = new Date();
+        const orderDate = new Date(orderData.createdAt);
+        const daysBetween = Math.ceil(
+            Math.abs(today - orderDate) / (1000 * 60 * 60 * 24)
+        );
+        if (daysBetween > 7) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Order can't be return after 7 days",
+            });
+        }
+
+        let changeReturnStatus = {};
+
+        if (ReturnStatus === "Pending") {
+
+            const returnRecord = await Return.create({
+                order: id,
+                reason,
+                comment: comment || undefined,
+                returnImage: returnImage || undefined,
+            });
+
+            if (!returnRecord) {
+                return res.status(status.BadRequest).json({
+                    status: jsonStatus.BadRequest,
+                    success: false,
+                    messages: "Error Creating Return Order"
+                })
+            }
+
+            changeReturnStatus = await OnlineOrder.findByIdAndUpdate(
+                id,
+                { returnStatus: ReturnStatus, isReturn: true },
+                { new: true, runValidators: true }
+            );
+
+        }
+
+        res
+            .status(status.OK)
+            .json({ status: jsonStatus.OK, success: true, data: changeReturnStatus });
+    } catch (error) {
+        console.error("error", error);
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message,
+        });
+        return catchError("refundChangeStatus", error, req, res);
     }
-
-    if (!ReturnStatus) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Return status can't be empty",
-      });
-    }
-
-    if(!reason) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        messages: "Reason can't be empty"
-      });
-    }
-
-    const statusArr = ["Pending"];
-
-    if (!statusArr.includes(ReturnStatus)) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Please enter valid refund status status",
-      });
-    }
-
-    const orderData = await OnlineOrder.findById(id);
-    
-    if (!orderData) {
-      return res.status(status.NotFound).json({
-        status: jsonStatus.NotFound,
-        success: false,
-        message: "Order not found",
-      });
-    }
-
-    const today = new Date();
-    const orderDate = new Date(orderData.createdAt);
-    const daysBetween = Math.ceil(
-      Math.abs(today - orderDate) / (1000 * 60 * 60 * 24)
-    );
-    if (daysBetween > 7) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Order can't be return after 7 days",
-      });
-    }
-
-    let changeReturnStatus = {};
-
-    if (ReturnStatus === "Pending") {
-
-       const returnRecord = await Return.create({
-        order: id,
-        reason,
-        comment: comment || undefined,
-        returnImage: returnImage || undefined,
-      });      
-
-      if(!returnRecord) {
-        return res.status(status.BadRequest).json({
-          status: jsonStatus.BadRequest,
-          success: false,
-          messages: "Error Creating Return Order"
-        })
-      }
-
-      changeReturnStatus = await OnlineOrder.findByIdAndUpdate(
-        id,
-        { returnStatus: ReturnStatus, isReturn: true },
-        { new: true, runValidators: true }
-      );
-      
-    }
-
-    res
-      .status(status.OK)
-      .json({ status: jsonStatus.OK, success: true, data: changeReturnStatus });
-  } catch (error) {
-    console.error("error", error);
-    res.status(status.InternalServerError).json({
-      status: jsonStatus.InternalServerError,
-      success: false,
-      message: error.message,
-    });
-    return catchError("refundChangeStatus", error, req, res);
-  }
 };
 
 export const returnCancellStatus = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { ReturnStatus } = req.body;
+    try {
+        const { id } = req.params;
+        const { ReturnStatus } = req.body;
 
-    if (!ReturnStatus) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Refund status can't be empty",
-      });
+        if (!ReturnStatus) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Refund status can't be empty",
+            });
+        }
+
+        const statusArr = ["Cancelled"];
+
+        if (!statusArr.includes(ReturnStatus)) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Please enter valid refund status status",
+            });
+        }
+
+        const isOrder = await OnlineOrder.findById(id);
+        if (!isOrder) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Order not found",
+            });
+        }
+
+        // const today = new Date();
+        // const orderDate = new Date(isOrder.createdAt);
+        // const daysBetween = Math.ceil(
+        //   Math.abs(today - orderDate) / (1000 * 60 * 60 * 24)
+        // );
+        // if (daysBetween > 7) {
+        //   return res.status(status.BadRequest).json({
+        //     status: jsonStatus.BadRequest,
+        //     success: false,
+        //     message: "Order can't be return after 7 days",
+        //   });
+        // }
+
+        let changeReturnStatus = {};
+
+        if (isOrder.returnStatus === "Approved") {
+            return res.status(status.NotAcceptable).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                messages: "Return order already accepted by admin"
+            })
+        }
+
+        if (ReturnStatus === "Cancelled") {
+            changeReturnStatus = await OnlineOrder.findByIdAndUpdate(
+                id,
+                { retundStatus: ReturnStatus },
+                { new: true, runValidators: true }
+            );
+        }
+
+        res
+            .status(status.OK)
+            .json({ status: jsonStatus.OK, success: true, data: changeReturnStatus });
+    } catch (error) {
+        console.error("error", error);
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message,
+        });
     }
-
-    const statusArr = ["Cancelled"];
-
-    if (!statusArr.includes(ReturnStatus)) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Please enter valid refund status status",
-      });
-    }
-
-    const isOrder = await OnlineOrder.findById(id);
-    if (!isOrder) {
-      return res.status(status.NotFound).json({
-        status: jsonStatus.NotFound,
-        success: false,
-        message: "Order not found",
-      });
-    }
-
-    // const today = new Date();
-    // const orderDate = new Date(isOrder.createdAt);
-    // const daysBetween = Math.ceil(
-    //   Math.abs(today - orderDate) / (1000 * 60 * 60 * 24)
-    // );
-    // if (daysBetween > 7) {
-    //   return res.status(status.BadRequest).json({
-    //     status: jsonStatus.BadRequest,
-    //     success: false,
-    //     message: "Order can't be return after 7 days",
-    //   });
-    // }
-
-    let changeReturnStatus = {};
-
-    if (isOrder.returnStatus === "Approved") {
-      return res.status(status.NotAcceptable).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        messages: "Return order already accepted by admin"
-      })
-    }
-
-    if (ReturnStatus === "Cancelled") {
-      changeReturnStatus = await OnlineOrder.findByIdAndUpdate(
-        id,
-        { retundStatus: ReturnStatus },
-        { new: true, runValidators: true }
-      );
-    }
-
-    res
-      .status(status.OK)
-      .json({ status: jsonStatus.OK, success: true, data: changeReturnStatus });
-  } catch (error) {
-    console.error("error", error);
-    res.status(status.InternalServerError).json({
-      status: jsonStatus.InternalServerError,
-      success: false,
-      message: error.message,
-    });
-  }
 };
 
 export const onlineOrderChangeStatus = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { orderStatus , estimatedDate } = req.body;
+    try {
+        const { id } = req.params;
+        const { orderStatus, estimatedDate } = req.body;
 
-    if (!orderStatus) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Order status can't be empty",
-      });
+        if (!orderStatus) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Order status can't be empty",
+            });
+        }
+
+        const statusArr = [
+            "Accepted",
+            "Rejected",
+            "Product shipped",
+            "On the way",
+            "Out for delivery",
+            "Your Destination",
+            "Delivered",
+            "Cancelled",
+        ];
+
+        if (!statusArr.includes(orderStatus)) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Please enter valid order status status",
+            });
+        }
+
+        const isOrder = await OnlineOrder.findById(id);
+        if (!isOrder) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Order not found",
+            });
+        }
+
+        let changeOrderStatus = {};
+
+        if (orderStatus === "Delivered") {
+            changeOrderStatus = await OnlineOrder.findByIdAndUpdate(
+                id,
+                { status: orderStatus, estimatedDate },
+                { new: true, runValidators: true }
+            );
+        }
+
+        // if (orderStatus === "Accepted") {
+        //   changeOrderStatus = await Order.findByIdAndUpdate(
+        //     id,
+        //     { status: orderStatus, estimatedDate },
+        //     { new: true, runValidators: true }
+        //   );
+        // } else if (orderStatus === "Delivered") {
+        //   changeOrderStatus = await Order.findByIdAndUpdate(
+        //     id,
+        //     { status: orderStatus, deliverdTime: new Date() },
+        //     { new: true, runValidators: true }
+        //   );
+        // } else if (orderStatus === "Rejected") {
+        //   // refund
+        //   const paymentResponse = await Payment.findOne({ orderId: id });
+
+        //   const refundId = `REFUND_${Date.now()}`;
+        //   const refund = await axios.post(
+        //     `${process.env.CF_CREATE_PRODUCT_URL}/${paymentResponse.paymentResonse.order.order_id}/refunds`,
+        //     {
+        //       refund_amount: isOrder.summary.grandTotal,
+        //       refund_id: refundId,
+        //     },
+        //     {
+        //       headers: {
+        //         "x-api-version": "2023-08-01",
+        //         "x-client-id": process.env.CF_CLIENT_ID,
+        //         "x-client-secret": process.env.CF_CLIENT_SECRET,
+        //         "Content-Type": "application/json",
+        //       },
+        //     }
+        //   );
+
+        //   let newRefund = new Refund({
+        //     type: "LocalStore",
+        //     cfOrderId: isOrder.cf_order_id,
+        //     cfOrderResponseId: paymentResponse.paymentResonse.order.order_id,
+        //     refundResponse: refund.data,
+        //     userId: req.user._id,
+        //     orderId: isOrder._id,
+        //     amount: isOrder.summary.grandTotal,
+        //     refundId,
+        //     rejected: true,
+        //     retailerId: req.user._id,
+        //   });
+        //   newRefund = await newRefund.save();
+
+        //   await Payment.findByIdAndUpdate(paymentResponse._id, {
+        //     refund: true,
+        //     refundId,
+        //   });
+
+        //   changeOrderStatus = await Order.findByIdAndUpdate(
+        //     id,
+        //     { status: orderStatus, refund: true, refundId },
+        //     { new: true, runValidators: true }
+        //   );
+        // } else {
+        //   changeOrderStatus = await Order.findByIdAndUpdate(
+        //     id,
+        //     { status: orderStatus },
+        //     { new: true, runValidators: true }
+        //   );
+        // }
+
+        res
+            .status(status.OK)
+            .json({ status: jsonStatus.OK, success: true, data: changeOrderStatus });
+    } catch (error) {
+        console.error("error", error);
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message,
+        });
+        return catchError("orderChangeStatus", error, req, res);
     }
-
-    const statusArr = [
-      "Accepted",
-      "Rejected",
-      "Product shipped",
-      "On the way",
-      "Out for delivery",
-      "Your Destination",
-      "Delivered",
-      "Cancelled",
-    ];
-
-    if (!statusArr.includes(orderStatus)) {
-      return res.status(status.BadRequest).json({
-        status: jsonStatus.BadRequest,
-        success: false,
-        message: "Please enter valid order status status",
-      });
-    }
-
-    const isOrder = await OnlineOrder.findById(id);
-    if (!isOrder) {
-      return res.status(status.NotFound).json({
-        status: jsonStatus.NotFound,
-        success: false,
-        message: "Order not found",
-      });
-    }
-
-    let changeOrderStatus = {};
-
-    if (orderStatus === "Delivered") {
-      changeOrderStatus = await OnlineOrder.findByIdAndUpdate(
-        id,
-        { status: orderStatus, estimatedDate },
-        { new: true, runValidators: true }
-      );
-    }
-
-    // if (orderStatus === "Accepted") {
-    //   changeOrderStatus = await Order.findByIdAndUpdate(
-    //     id,
-    //     { status: orderStatus, estimatedDate },
-    //     { new: true, runValidators: true }
-    //   );
-    // } else if (orderStatus === "Delivered") {
-    //   changeOrderStatus = await Order.findByIdAndUpdate(
-    //     id,
-    //     { status: orderStatus, deliverdTime: new Date() },
-    //     { new: true, runValidators: true }
-    //   );
-    // } else if (orderStatus === "Rejected") {
-    //   // refund
-    //   const paymentResponse = await Payment.findOne({ orderId: id });
-
-    //   const refundId = `REFUND_${Date.now()}`;
-    //   const refund = await axios.post(
-    //     `${process.env.CF_CREATE_PRODUCT_URL}/${paymentResponse.paymentResonse.order.order_id}/refunds`,
-    //     {
-    //       refund_amount: isOrder.summary.grandTotal,
-    //       refund_id: refundId,
-    //     },
-    //     {
-    //       headers: {
-    //         "x-api-version": "2023-08-01",
-    //         "x-client-id": process.env.CF_CLIENT_ID,
-    //         "x-client-secret": process.env.CF_CLIENT_SECRET,
-    //         "Content-Type": "application/json",
-    //       },
-    //     }
-    //   );
-
-    //   let newRefund = new Refund({
-    //     type: "LocalStore",
-    //     cfOrderId: isOrder.cf_order_id,
-    //     cfOrderResponseId: paymentResponse.paymentResonse.order.order_id,
-    //     refundResponse: refund.data,
-    //     userId: req.user._id,
-    //     orderId: isOrder._id,
-    //     amount: isOrder.summary.grandTotal,
-    //     refundId,
-    //     rejected: true,
-    //     retailerId: req.user._id,
-    //   });
-    //   newRefund = await newRefund.save();
-
-    //   await Payment.findByIdAndUpdate(paymentResponse._id, {
-    //     refund: true,
-    //     refundId,
-    //   });
-
-    //   changeOrderStatus = await Order.findByIdAndUpdate(
-    //     id,
-    //     { status: orderStatus, refund: true, refundId },
-    //     { new: true, runValidators: true }
-    //   );
-    // } else {
-    //   changeOrderStatus = await Order.findByIdAndUpdate(
-    //     id,
-    //     { status: orderStatus },
-    //     { new: true, runValidators: true }
-    //   );
-    // }
-
-    res
-      .status(status.OK)
-      .json({ status: jsonStatus.OK, success: true, data: changeOrderStatus });
-  } catch (error) {
-    console.error("error", error);
-    res.status(status.InternalServerError).json({
-      status: jsonStatus.InternalServerError,
-      success: false,
-      message: error.message,
-    });
-    return catchError("orderChangeStatus", error, req, res);
-  }
 };
