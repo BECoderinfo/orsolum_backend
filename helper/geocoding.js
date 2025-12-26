@@ -3,7 +3,7 @@ import fetch from "node-fetch";
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
 /**
- * Get coordinates from address using Google Geocoding API
+ * Get coordinates from address using Google Geocoding API with Nominatim Fallback
  * @param {string} address - Full address string
  * @returns {Promise<{lat: number, lng: number, formatted_address: string} | null>}
  */
@@ -14,27 +14,45 @@ export const getCoordinatesFromAddress = async (address) => {
             return null;
         }
 
-        if (!GOOGLE_MAPS_API_KEY) {
-            console.error("GOOGLE_MAPS_API_KEY not configured in .env");
-            return null;
+        // 1. Try Google Maps if Key exists
+        if (GOOGLE_MAPS_API_KEY) {
+            try {
+                const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${GOOGLE_MAPS_API_KEY}`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.status === "OK" && data.results && data.results.length > 0) {
+                    const result = data.results[0];
+                    return {
+                        lat: result.geometry.location.lat,
+                        lng: result.geometry.location.lng,
+                        formatted_address: result.formatted_address,
+                        place_id: result.place_id,
+                        source: 'google'
+                    };
+                }
+            } catch (googleErr) {
+                console.warn("Google Geocoding failed, falling back to Nominatim:", googleErr.message);
+            }
         }
 
-        const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${GOOGLE_MAPS_API_KEY}`;
+        // 2. Fallback to OpenStreetMap (Nominatim)
+        console.log("Using Nominatim for geocoding...");
+        const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`;
+        const nominatimResp = await fetch(nominatimUrl, {
+            headers: { 'User-Agent': 'OrsolumApp/1.0' }
+        });
+        const nominatimData = await nominatimResp.json();
 
-        const response = await fetch(url);
-        const data = await response.json();
-
-        if (data.status === "OK" && data.results && data.results.length > 0) {
-            const result = data.results[0];
+        if (nominatimData && nominatimData.length > 0) {
             return {
-                lat: result.geometry.location.lat,
-                lng: result.geometry.location.lng,
-                formatted_address: result.formatted_address,
-                place_id: result.place_id,
+                lat: parseFloat(nominatimData[0].lat),
+                lng: parseFloat(nominatimData[0].lon),
+                formatted_address: nominatimData[0].display_name,
+                source: 'nominatim'
             };
         }
 
-        console.error("Geocoding failed:", data.status);
         return null;
     } catch (error) {
         console.error("Error in getCoordinatesFromAddress:", error.message);
@@ -43,7 +61,7 @@ export const getCoordinatesFromAddress = async (address) => {
 };
 
 /**
- * Get address from coordinates using Google Reverse Geocoding API
+ * Get address from coordinates using Google Reverse Geocoding API with Nominatim Fallback
  * @param {number} lat - Latitude
  * @param {number} lng - Longitude
  * @returns {Promise<{address: string, city: string, state: string, pincode: string, country: string} | null>}
@@ -55,51 +73,63 @@ export const getAddressFromCoordinates = async (lat, lng) => {
             return null;
         }
 
-        if (!GOOGLE_MAPS_API_KEY) {
-            console.error("GOOGLE_MAPS_API_KEY not configured in .env");
-            return null;
+        // 1. Try Google Maps if Key exists
+        if (GOOGLE_MAPS_API_KEY) {
+            try {
+                const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.status === "OK" && data.results && data.results.length > 0) {
+                    const result = data.results[0];
+
+                    // Extract address components
+                    let city = "";
+                    let state = "";
+                    let pincode = "";
+                    let country = "";
+
+                    result.address_components.forEach(component => {
+                        if (component.types.includes("locality")) city = component.long_name;
+                        if (component.types.includes("administrative_area_level_1")) state = component.long_name;
+                        if (component.types.includes("postal_code")) pincode = component.long_name;
+                        if (component.types.includes("country")) country = component.long_name;
+                    });
+
+                    return {
+                        address: result.formatted_address,
+                        city,
+                        state,
+                        pincode,
+                        country,
+                        place_id: result.place_id,
+                        source: 'google'
+                    };
+                }
+            } catch (googleErr) {
+                console.warn("Google Reverse Geocoding failed, falling back to Nominatim:", googleErr.message);
+            }
         }
 
-        const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}`;
+        // 2. Fallback to OpenStreetMap (Nominatim)
+        console.log("Using Nominatim for reverse geocoding...");
+        const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`;
+        const nominatimResp = await fetch(nominatimUrl, {
+            headers: { 'User-Agent': 'OrsolumApp/1.0' }
+        });
+        const nominatimData = await nominatimResp.json();
 
-        const response = await fetch(url);
-        const data = await response.json();
-
-        if (data.status === "OK" && data.results && data.results.length > 0) {
-            const result = data.results[0];
-
-            // Extract address components
-            let city = "";
-            let state = "";
-            let pincode = "";
-            let country = "";
-
-            result.address_components.forEach(component => {
-                if (component.types.includes("locality")) {
-                    city = component.long_name;
-                }
-                if (component.types.includes("administrative_area_level_1")) {
-                    state = component.long_name;
-                }
-                if (component.types.includes("postal_code")) {
-                    pincode = component.long_name;
-                }
-                if (component.types.includes("country")) {
-                    country = component.long_name;
-                }
-            });
-
+        if (nominatimData && nominatimData.address) {
             return {
-                address: result.formatted_address,
-                city,
-                state,
-                pincode,
-                country,
-                place_id: result.place_id,
+                address: nominatimData.display_name,
+                city: nominatimData.address.city || nominatimData.address.town || nominatimData.address.village || '',
+                state: nominatimData.address.state || '',
+                pincode: nominatimData.address.postcode || '',
+                country: nominatimData.address.country || '',
+                source: 'nominatim'
             };
         }
 
-        console.error("Reverse geocoding failed:", data.status);
         return null;
     } catch (error) {
         console.error("Error in getAddressFromCoordinates:", error.message);
@@ -141,16 +171,16 @@ export const getDetailedAddressFromCoordinates = async (lat, lng) => {
             try {
                 const response = await fetch(url);
                 const data = await response.json();
-                    
+
                 if (data.status === "OK" && data.results && data.results.length > 0) {
                     const result = data.results[0];
-                        
+
                     // Extract address components
                     let city = "";
                     let state = "";
                     let pincode = "";
                     let country = "";
-                        
+
                     result.address_components.forEach(component => {
                         if (component.types.includes("locality")) {
                             city = component.long_name;
@@ -162,7 +192,7 @@ export const getDetailedAddressFromCoordinates = async (lat, lng) => {
                             country = component.long_name;
                         }
                     });
-                        
+
                     return {
                         address: result.formatted_address,
                         city,
@@ -242,7 +272,7 @@ export const detectLocationByIP = async () => {
         // Using ipapi.co for IP-based geolocation (free tier available)
         const response = await fetch('https://ipapi.co/json/');
         const data = await response.json();
-        
+
         if (data.latitude && data.longitude) {
             return {
                 lat: data.latitude,
@@ -251,7 +281,7 @@ export const detectLocationByIP = async () => {
                 state: data.region || ''
             };
         }
-        
+
         return null;
     } catch (error) {
         console.error("IP-based location detection failed:", error.message);

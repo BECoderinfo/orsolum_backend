@@ -537,6 +537,12 @@ export const addProductToCart = async (req, res) => {
     const availableStock =
       typeof productDetails.stock === "number" ? productDetails.stock : null;
 
+    // Define low stock variables in outer scope
+    const lowStockThreshold = typeof productDetails.lowStockThreshold === "number"
+      ? productDetails.lowStockThreshold
+      : 0;
+    const isLowStock = availableStock !== null && lowStockThreshold > 0 && availableStock <= lowStockThreshold;
+
     const findProductInCart = await Cart.findOne({
       createdBy: req.user._id,
       productId,
@@ -559,13 +565,6 @@ export const addProductToCart = async (req, res) => {
       if (tentativeTotal > availableStock) {
         const remaining = Math.max(availableStock - existingQty, 0);
 
-        // Check if product has low stock threshold
-        const lowStockThreshold = typeof findProduct.lowStockThreshold === "number"
-          ? findProduct.lowStockThreshold
-          : 0;
-
-        const isLowStock = lowStockThreshold > 0 && availableStock <= lowStockThreshold;
-
         return res.status(status.BadRequest).json({
           status: jsonStatus.BadRequest,
           success: false,
@@ -577,7 +576,7 @@ export const addProductToCart = async (req, res) => {
             availableStock,
             lowStockThreshold,
             isLowStock,
-            productId: findProduct._id
+            productId: productDetails._id
           }
         });
       }
@@ -1325,12 +1324,12 @@ export const cartDetails = async (req, res) => {
         ? Math.min(rawDiscount, couponCode.upto)
         : rawDiscount;
 
-      overallGrandTotal =
-        overallTotalAmount -
-        overallDiscountAmount -
-        couponCodeDiscount +
-        overallShippingFee;
+      // Subtract coupon discount from existing Grand Total (which includes charges & shipping)
+      overallGrandTotal -= couponCodeDiscount;
     }
+
+    // Add donation to grand total
+    overallGrandTotal += donate;
 
     let storesIds = enhancedList.map((store) => new ObjectId(store._id));
     let similarProducts = [];
@@ -1790,6 +1789,24 @@ export const createAddress = async (req, res) => {
         }
       } catch (err) {
         console.warn("Failed to extract coordinates from mapLink in createAddress:", err.message);
+      }
+    }
+
+    // Fallback: Try to fetch coordinates from Pincode/Address if still 0
+    if (finalLat === "0" || finalLong === "0") {
+      try {
+        const { getCoordinatesFromAddress } = await import("../helper/geocoding.js");
+        const query = pincodeStr || address_1; // Use pincode or address string
+        if (query) {
+          const geoCoords = await getCoordinatesFromAddress(query);
+          if (geoCoords) {
+            console.log(`Resolved coordinates for ${query}:`, geoCoords);
+            finalLat = geoCoords.lat.toString();
+            finalLong = geoCoords.lng.toString();
+          }
+        }
+      } catch (geoErr) {
+        console.warn("Geocoding fallback failed:", geoErr.message);
       }
     }
 
