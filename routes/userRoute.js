@@ -8,6 +8,7 @@ import { uploadUserImage } from "../helper/uploadImage.js";
 import { getUserNotifications, markUserNotificationRead, dismissUserNotification, clearUserNotifications } from "../controllers/notificationController.js";
 import User from "../models/User.js";
 import { getCoordinatesFromAddress, getAddressFromCoordinates, searchPlaces, getDetailedAddressFromCoordinates, detectLocationByIP } from "../helper/geocoding.js";
+import { getActiveAds } from "../controllers/adController.js";
 const userRouter = express.Router();
 
 // image upload
@@ -56,6 +57,9 @@ userRouter.post('/add/product/in/cart/v1', userAuthentication, addProductToCart)
 
 // App Theme Settings (Public - no auth required for user app)
 userRouter.get('/app/theme/settings/v1', getAppThemeSettings);
+
+// 📣 Public Ads API (For Online Store Home Screen - no auth required)
+userRouter.get('/ads/active/v1', getActiveAds);
 
 // 🗺️ Location & Geocoding Services
 // Get coordinates from address

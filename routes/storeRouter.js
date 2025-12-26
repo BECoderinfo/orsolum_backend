@@ -18,7 +18,7 @@ import {
 } from "../controllers/storeController.js";
 import { retailerAuthentication } from "../middlewares/middleware.js";
 import { uploadStoreImagesMulter } from "../helper/uploadImage.js";
-import { getActiveAds, getRetailerLocalStoreAds, getAdDetails } from "../controllers/adController.js";
+import { getActiveAds, getRetailerLocalStoreAds } from "../controllers/adController.js";
 
 const retailerRouter = express.Router();
 
