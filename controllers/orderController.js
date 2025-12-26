@@ -200,7 +200,7 @@ export const createOrder = async (req, res) => {
         typeof detail.product.lowStockThreshold === "number"
           ? detail.product.lowStockThreshold
           : 5; // Default threshold of 5
-      
+
       if (newStock <= lowStockThreshold && newStock > 0) {
         lowStockWarnings.push({
           productName: detail.product.productName,
@@ -255,17 +255,17 @@ export const createOrder = async (req, res) => {
           couponCodeDiscount = Math.min(couponCodeDiscount, couponCode.maxDiscountAmount);
         }
       }
-      
+
       // Ensure discount doesn't exceed order total
       couponCodeDiscount = Math.min(couponCodeDiscount, overallTotalAmount);
-      
+
       appliedCoupon = couponCode;
     }
 
     // Calculate total with discounts and donation
     let totalWithDiscount = overallTotalAmount - couponCodeDiscount;
     let totalWithDonation = totalWithDiscount + donationAmount;
-    
+
     // Calculate shipping fee (example logic - you can adjust based on your business rules)
     const shippingFee = totalWithDiscount > 500 ? 0 : 50; // Free shipping above ₹500
     const finalTotal = totalWithDonation + shippingFee;
@@ -277,7 +277,7 @@ export const createOrder = async (req, res) => {
         const itemRatio = item.totalAmount / overallTotalAmount;
         const itemDiscount = couponCodeDiscount * itemRatio;
         const itemTotalAfterDiscount = item.totalAmount - itemDiscount;
-        
+
         // Calculate final item total with proportional donation and shipping
         const itemDonation = donationAmount * itemRatio;
         const itemShipping = shippingFee * itemRatio;
@@ -367,15 +367,15 @@ export const createOrder = async (req, res) => {
 
     // Record coupon usage if coupon was applied
     if (appliedCoupon) {
-      await new CouponHistory({ 
-        couponId: appliedCoupon._id, 
+      await new CouponHistory({
+        couponId: appliedCoupon._id,
         userId: req.user._id,
         orderId: orderId, // Link to the order
         discountAmount: couponCodeDiscount,
         orderTotalBeforeDiscount: overallTotalAmount,
         orderTotalAfterDiscount: finalTotal
       }).save();
-      
+
       // Increment coupon usage count
       appliedCoupon.usageCount = (appliedCoupon.usageCount || 0) + 1;
       await appliedCoupon.save();
@@ -414,7 +414,7 @@ export const createOrder = async (req, res) => {
         })
       );
     }
-    
+
     // Calculate final bill summary
     const billSummary = {
       itemTotal: overallTotalAmount,
@@ -430,7 +430,7 @@ export const createOrder = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: lowStockWarnings.length > 0 
+      message: lowStockWarnings.length > 0
         ? "Order created successfully & synced with Shiprocket. Note: Some products are running low on stock and the order may not be fulfilled as expected."
         : "Order created successfully & synced with Shiprocket",
       lowStockWarnings: lowStockWarnings.length > 0 ? lowStockWarnings : undefined,
@@ -558,14 +558,14 @@ export const addProductToCart = async (req, res) => {
       const tentativeTotal = existingQty + safeQuantity;
       if (tentativeTotal > availableStock) {
         const remaining = Math.max(availableStock - existingQty, 0);
-        
+
         // Check if product has low stock threshold
-        const lowStockThreshold = typeof findProduct.lowStockThreshold === "number" 
-          ? findProduct.lowStockThreshold 
+        const lowStockThreshold = typeof findProduct.lowStockThreshold === "number"
+          ? findProduct.lowStockThreshold
           : 0;
-        
+
         const isLowStock = lowStockThreshold > 0 && availableStock <= lowStockThreshold;
-        
+
         return res.status(status.BadRequest).json({
           status: jsonStatus.BadRequest,
           success: false,
@@ -693,12 +693,12 @@ export const incrementProductQuantityInCart = async (req, res) => {
           message: "Product is currently out of stock.",
         });
       }
-      
+
       // Check for low stock warning
-      const lowStockThreshold = typeof findProduct.lowStockThreshold === "number" 
-        ? findProduct.lowStockThreshold 
+      const lowStockThreshold = typeof findProduct.lowStockThreshold === "number"
+        ? findProduct.lowStockThreshold
         : 0;
-      
+
       const isLowStock = lowStockThreshold > 0 && availableStock <= lowStockThreshold;
 
       let newCart = new Cart({
@@ -745,12 +745,12 @@ export const incrementProductQuantityInCart = async (req, res) => {
       // Check for low stock warning
       const product = await Product.findById(findCart.productId);
       const availableStock = typeof product.stock === "number" ? product.stock : null;
-      const lowStockThreshold = typeof product.lowStockThreshold === "number" 
-        ? product.lowStockThreshold 
+      const lowStockThreshold = typeof product.lowStockThreshold === "number"
+        ? product.lowStockThreshold
         : 0;
-      
+
       const isLowStock = lowStockThreshold > 0 && availableStock <= lowStockThreshold;
-      
+
       findCart.quantity += 1;
       await findCart.save();
 
@@ -1180,8 +1180,8 @@ export const cartDetails = async (req, res) => {
 
         // ✅ Check if product is running low on stock
         const isLowStock = product.stock !== undefined && product.lowStockThreshold !== undefined &&
-                          product.stock > 0 && product.stock <= product.lowStockThreshold;
-        
+          product.stock > 0 && product.stock <= product.lowStockThreshold;
+
         storeOffers.forEach((offer) => {
           if (
             offer.offerType === "percentage_discount" &&
@@ -1284,9 +1284,10 @@ export const cartDetails = async (req, res) => {
     });
 
     let couponCodeDiscount = 0;
+    let couponCode = null;
 
     if (coupon) {
-      const couponCode = await CouponCode.findById(coupon);
+      couponCode = await CouponCode.findById(coupon);
 
       if (!couponCode || couponCode.deleted) {
         return res.status(status.NotFound).json({
@@ -1630,7 +1631,7 @@ export const allCartDetails = async (req, res) => {
       totalPayable: overallGrandTotal,
       saved: overallDiscountAmount + couponCodeDiscount // How much user saved
     };
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -1818,7 +1819,7 @@ export const createAddress = async (req, res) => {
         message: "Invalid latitude value",
       });
     }
-    
+
     if (long && isNaN(parseFloat(long))) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
@@ -1828,16 +1829,16 @@ export const createAddress = async (req, res) => {
     }
 
     console.log("Final address data to save:", addressData);
-    
+
     let newAddress = new Address(addressData);
     newAddress = await newAddress.save();
-    
+
     console.log("Address saved successfully with ID:", newAddress._id);
 
     // Update user's default location if this is their first address
     const userAddressCount = await Address.countDocuments({ createdBy: req.user._id });
     console.log("User address count:", userAddressCount);
-    
+
     if (userAddressCount === 1 && finalLat !== "0" && finalLong !== "0") {
       console.log("Updating user default location");
       await User.findByIdAndUpdate(req.user._id, {
@@ -1867,7 +1868,7 @@ export const createAddress = async (req, res) => {
         message: error.message || "Validation error",
       });
     }
-    
+
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
@@ -2003,7 +2004,7 @@ export const editAddress = async (req, res) => {
         message: error.message || "Validation error",
       });
     }
-    
+
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
@@ -2089,9 +2090,9 @@ export const getUserAllAddress = async (req, res) => {
 
     return res
       .status(status.OK)
-      .json({ 
-        status: jsonStatus.OK, 
-        success: true, 
+      .json({
+        status: jsonStatus.OK,
+        success: true,
         data: enhancedAddresses || [],
         count: enhancedAddresses.length
       });
@@ -2112,9 +2113,9 @@ export const getAllAddress = async (req, res) => {
 
     return res
       .status(status.OK)
-      .json({ 
-        status: jsonStatus.OK, 
-        success: true, 
+      .json({
+        status: jsonStatus.OK,
+        success: true,
         data: address || [],
         count: address.length
       });
@@ -2222,9 +2223,9 @@ export const setDefaultAddress = async (req, res) => {
 
     return res
       .status(status.OK)
-      .json({ 
-        status: jsonStatus.OK, 
-        success: true, 
+      .json({
+        status: jsonStatus.OK,
+        success: true,
         message: "Default address set successfully",
         data: address
       });
@@ -2422,7 +2423,7 @@ export const createOrderV2 = async (req, res) => {
       }
 
       storeTotal += productPrice * quantity;
-    
+
       productDetails.push({
         productId: cart.productId._id,
         productPrice,
@@ -2432,7 +2433,7 @@ export const createOrderV2 = async (req, res) => {
         appliedOffers,
       });
     }
-    
+
     // ✅ Coupon Logic (enhanced)
     let couponCodeDiscount = 0;
     let appliedCoupon = null;
@@ -2445,7 +2446,7 @@ export const createOrderV2 = async (req, res) => {
           message: "Coupon not found or deleted",
         });
       }
-    
+
       // Check if coupon is valid for this user
       if (couponCode.use === "one") {
         const alreadyUsed = await CouponHistory.findOne({
@@ -2460,7 +2461,7 @@ export const createOrderV2 = async (req, res) => {
           });
         }
       }
-    
+
       // Check minimum order value
       if (couponCode.minOrderValue && storeTotal < couponCode.minOrderValue) {
         return res.status(status.BadRequest).json({
@@ -2469,7 +2470,7 @@ export const createOrderV2 = async (req, res) => {
           message: `Minimum purchase of ₹${couponCode.minOrderValue} required for this coupon`,
         });
       }
-        
+
       // Calculate discount based on discount type
       if (couponCode.discountType === 'flat') {
         couponCodeDiscount = Math.min(couponCode.discountValue, storeTotal);
@@ -2479,13 +2480,13 @@ export const createOrderV2 = async (req, res) => {
           couponCodeDiscount = Math.min(couponCodeDiscount, couponCode.maxDiscountAmount);
         }
       }
-        
+
       // Ensure discount doesn't exceed order total
       couponCodeDiscount = Math.min(couponCodeDiscount, storeTotal);
-        
+
       appliedCoupon = couponCode;
     }
-    
+
     const charges = buildCharges({
       store,
       products: productDetails,
@@ -2616,18 +2617,18 @@ export const createOrderV2 = async (req, res) => {
       });
 
       await newOrder.save();
-      
+
       // ✅ Record coupon usage if coupon was applied
       if (appliedCoupon) {
-        await new CouponHistory({ 
-          couponId: appliedCoupon._id, 
+        await new CouponHistory({
+          couponId: appliedCoupon._id,
           userId: req.user._id,
           orderId: newOrder._id, // Link to the order
           discountAmount: couponCodeDiscount,
           orderTotalBeforeDiscount: storeTotal,
           orderTotalAfterDiscount: grandTotal
         }).save();
-        
+
         // Increment coupon usage count
         appliedCoupon.usageCount = (appliedCoupon.usageCount || 0) + 1;
         await appliedCoupon.save();
@@ -2690,7 +2691,7 @@ export const createOrderV2 = async (req, res) => {
         })
       );
     }
-    
+
     // Calculate final bill summary with standardized structure
     const billSummary = {
       itemTotal: storeTotal,
@@ -3252,7 +3253,7 @@ export const orderDetails = async (req, res) => {
       _id: new ObjectId(id),
       createdBy: new ObjectId(req.user._id)
     });
-    
+
     if (!order) {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
@@ -3303,29 +3304,29 @@ export const orderDetails = async (req, res) => {
     if (details.length > 0) {
       // Calculate enhanced summary fields for consistency
       const summary = details[0].summary || {};
-      
+
       // For this simple version, use the existing productDetails structure
       const product = details[0].productDetails || {};
       const item_total = (product.sellingPrice || 0) * (product.quantity || 1);
-      
+
       // Calculate additional fields based on existing summary data
       const total_discount = summary.discountAmount || 0;
       const shipping_fee = summary.shippingFee || 0;
       const grandTotal = summary.grandTotal || 0;
-      
+
       // Calculate total_payable as grandTotal (the final amount user paid)
       const total_payable = grandTotal;
-      
+
       // Calculate saved as the difference between total MRP and final price
       const total_mrp = (product.mrp || product.sellingPrice || 0) * (product.quantity || 1);
       const saved = total_mrp - grandTotal;
-      
+
       // Calculate coupon discount separately if available in summary
       const coupon_discount = summary.couponCodeDiscount || summary.discountAmount || 0;
-      
+
       // Plant a tree - this would be a fixed value or calculated based on your business logic
       const plant_a_tree = 0;
-      
+
       const enhancedSummary = {
         ...summary,
         item_total,
@@ -3336,7 +3337,7 @@ export const orderDetails = async (req, res) => {
         total_payable,
         saved,
       };
-      
+
       // Update the details with enhanced summary
       details[0].summary = enhancedSummary;
     }
@@ -3357,8 +3358,6 @@ export const orderDetails = async (req, res) => {
 export const orderDetailsV2 = async (req, res) => {
   try {
     const { id } = req.params;
-    console.log('Order ID requested:', id);
-    console.log('User ID from token:', req.user._id);
 
     // 1️⃣ Validate order ID parameter
     if (!id) {
@@ -3369,44 +3368,18 @@ export const orderDetailsV2 = async (req, res) => {
       });
     }
 
-    // 1️⃣ Try to find order by _id or alternate IDs (orderId / cf_order_id)
+    // 2️⃣ Try to find order by _id or alternate IDs (orderId / cf_order_id)
     let orderExists = null;
+    const query = { $or: [{ orderId: id }, { cf_order_id: id }] };
 
     if (mongoose.Types.ObjectId.isValid(id)) {
-      console.log('Looking up by ObjectId');
-      orderExists = await Order.findOne({
-        _id: new mongoose.Types.ObjectId(id),
-        createdBy: new mongoose.Types.ObjectId(req.user._id),
-      });
-      
-      if (!orderExists) {
-        // Let's check if order exists but belongs to different user
-        const orderCheck = await Order.findById(new mongoose.Types.ObjectId(id));
-        if (orderCheck) {
-          console.log('Order exists but belongs to different user:', orderCheck.createdBy.toString());
-          console.log('Expected user:', req.user._id.toString());
-          console.log('Order created by:', orderCheck.createdBy.toString());
-          // Return error indicating ownership issue
-          return res.status(404).json({
-            status: 404,
-            success: false,
-            message: "Order not found with this ID",
-          });
-        }
-      }
+      query.$or.push({ _id: new mongoose.Types.ObjectId(id) });
     }
 
-    if (!orderExists) {
-      console.log('Looking up by orderId or cf_order_id');
-      orderExists = await Order.findOne({
-        createdBy: new mongoose.Types.ObjectId(req.user._id),
-        $or: [{ orderId: id }, { cf_order_id: id }],
-      });
-    }
+    // First find matching order
+    orderExists = await Order.findOne(query);
 
-    // 2️⃣ If no order found, return clean message
     if (!orderExists) {
-      console.log('Order not found for user:', req.user._id, 'with ID:', id);
       return res.status(404).json({
         status: 404,
         success: false,
@@ -3414,14 +3387,20 @@ export const orderDetailsV2 = async (req, res) => {
       });
     }
 
-    console.log('Order found:', orderExists._id);
-    
-    // 3️⃣ Run aggregation pipeline for full details - ensure user ownership in match
+    // Check authorization
+    if (orderExists.createdBy.toString() !== req.user._id.toString()) {
+      return res.status(404).json({
+        status: 404, // Return 404 to mask existence
+        success: false,
+        message: "Order not found with this ID",
+      });
+    }
+
+    // 3️⃣ Run aggregation pipeline for full details
     const details = await Order.aggregate([
       {
         $match: {
-          _id: new mongoose.Types.ObjectId(orderExists._id),
-          createdBy: new mongoose.Types.ObjectId(req.user._id), // Ensure user ownership in aggregation
+          _id: orderExists._id
         },
       },
       {
@@ -3457,6 +3436,12 @@ export const orderDetailsV2 = async (req, res) => {
       { $unwind: { path: "$storeDetails", preserveNullAndEmptyArrays: true } },
       { $unwind: { path: "$paymentDetails", preserveNullAndEmptyArrays: true } },
       {
+        $unwind: {
+          path: "$productDetails",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
         $lookup: {
           from: "products",
           localField: "productDetails.productId",
@@ -3465,49 +3450,19 @@ export const orderDetailsV2 = async (req, res) => {
         },
       },
       {
+        $unwind: {
+          path: "$productInfo",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
         $addFields: {
-          "productDetails.productName": {
-            $ifNull: [
-              { $arrayElemAt: ["$productInfo.productName", 0] },
-              "Product Not Found"
-            ]
-          },
-          "productDetails.productImages": {
-            $ifNull: [
-              { $arrayElemAt: ["$productInfo.productImages", 0] },
-              []
-            ]
-          },
-          "productDetails.companyName": {
-            $ifNull: [
-              { $arrayElemAt: ["$productInfo.companyName", 0] },
-              ""
-            ]
-          },
-          "productDetails.qty": {
-            $ifNull: [
-              { $arrayElemAt: ["$productInfo.qty", 0] },
-              null
-            ]
-          },
-          "productDetails.deliverdTime": {
-            $ifNull: [
-              { $arrayElemAt: ["$productInfo.deliverdTime", 0] },
-              null
-            ]
-          },
-          "productDetails.estimatedDate": {
-            $ifNull: [
-              { $arrayElemAt: ["$productInfo.estimatedDate", 0] },
-              null
-            ]
-          },
-          "productDetails.totalAmount": {
-            $multiply: [
-              "$productDetails.productPrice",
-              "$productDetails.quantity",
-            ],
-          },
+          "productDetails.productName": { $ifNull: ["$productInfo.productName", "Product Not Found"] },
+          "productDetails.productImages": { $ifNull: ["$productInfo.productImages", []] },
+          "productDetails.companyName": { $ifNull: ["$productInfo.companyName", ""] },
+          "productDetails.mrp": { $ifNull: ["$productInfo.mrp", null] },
+          "productDetails.deliverdTime": { $ifNull: ["$productInfo.deliverdTime", null] },
+          "productDetails.estimatedDate": { $ifNull: ["$productInfo.estimatedDate", null] },
         },
       },
       {
@@ -3525,56 +3480,63 @@ export const orderDetailsV2 = async (req, res) => {
           createdAt: { $first: "$createdAt" },
           updatedAt: { $first: "$updatedAt" },
           address: { $first: "$address" },
-          products: { $push: "$productDetails" },
-        },
-      },
+          products: { $push: "$productDetails" }
+        }
+      }
     ]);
 
     if (!details.length) {
       return res.status(404).json({
         status: 404,
         success: false,
-        message: "Order details not found",
+        message: "Order details processing failed",
       });
     }
 
     // 4️⃣ Format the output with complete order details
-    const paymentInfo = details[0].paymentDetails || {};
-    
+    const orderDetail = details[0];
+    const paymentInfo = orderDetail.paymentDetails || {};
+
     // Calculate enhanced summary fields according to standardized response structure
-    const summary = details[0].summary || {};
-    
+    const summary = orderDetail.summary || {};
+
     // Extract individual product prices to calculate item total
-    const products = details[0].products || [];
-    const item_total = products.reduce((sum, product) => {
-      const totalAmount = (product.totalAmount || 0);
-      return sum + totalAmount;
-    }, 0);
-    
+    const productsList = orderDetail.products || [];
+
+    // Calculate item total from products if not in summary or if we want recalculation
+    let item_total = summary.itemTotal;
+    if (!item_total) {
+      item_total = productsList.reduce((sum, product) => {
+        const price = product.productPrice || 0;
+        const qty = product.quantity || 1;
+        return sum + (price * qty);
+      }, 0);
+    }
+
     // Calculate additional fields based on existing summary data
     const total_discount = summary.discountAmount || 0;
     const shipping_fee = summary.shippingFee || 0;
     const grandTotal = summary.grandTotal || 0;
-    
+    const donationAmount = summary.donate || 0;
+
     // Calculate total_payable as grandTotal (the final amount user paid)
     const total_payable = grandTotal;
-    
+
     // Calculate saved as the difference between total MRP and final price
-    const total_mrp = products.reduce((sum, product) => {
-      const mrp = product.mrp || product.price || 0;
-      const quantity = product.quantity || 1;
-      return sum + (mrp * quantity);
-    }, 0);
-    const saved = Math.max(total_mrp - grandTotal, 0); // Ensure saved is not negative
-    
+    let saved = summary.saved;
+    if (saved === undefined) {
+      const total_mrp = productsList.reduce((sum, p) => sum + ((p.mrp || p.productPrice || 0) * (p.quantity || 1)), 0);
+      saved = Math.max(total_mrp - grandTotal, 0);
+    }
+
     // Calculate coupon discount separately if available in summary
     // Assuming coupon discount is part of total discount
     const coupon_discount = summary.couponCodeDiscount || summary.discountAmount || 0;
-    
+
     // Plant a tree - this would be a fixed value or calculated based on your business logic
     // For now, setting it to 0, but you can adjust based on your requirements
     const plant_a_tree = 0;
-    
+
     const enhancedSummary = {
       ...summary,
       item_total: Number(item_total.toFixed(2)),
@@ -3584,33 +3546,34 @@ export const orderDetailsV2 = async (req, res) => {
       shipping_fee: Number(shipping_fee.toFixed(2)),
       total_payable: Number(total_payable.toFixed(2)),
       saved: Number(saved.toFixed(2)),
+      donationAmount: Number(donationAmount),
     };
-    
+
     const formattedDetails = {
-      _id: details[0]._id,
-      store: details[0].storeDetails
+      _id: orderDetail._id,
+      store: orderDetail.storeDetails
         ? {
-          _id: details[0].storeDetails._id,
-          name: details[0].storeDetails.name,
-          address: details[0].storeDetails.address,
-          contact: details[0].storeDetails.contact,
+          _id: orderDetail.storeDetails._id,
+          name: orderDetail.storeDetails.name,
+          address: orderDetail.storeDetails.address,
+          contact: orderDetail.storeDetails.contact,
         }
         : null,
-      orderId: details[0].orderId,
-      cf_order_id: details[0].cf_order_id || paymentInfo.cf_order_id || null,
-      estimatedDate: details[0].estimatedDate || null,
-      status: details[0].status,
-      paymentStatus: details[0].paymentStatus || paymentInfo.paymentStatus || paymentInfo.status || "PENDING",
+      orderId: orderDetail.orderId,
+      cf_order_id: orderDetail.cf_order_id || paymentInfo.cf_order_id || null,
+      estimatedDate: orderDetail.estimatedDate || null,
+      status: orderDetail.status,
+      paymentStatus: orderDetail.paymentStatus || paymentInfo.paymentStatus || paymentInfo.status || "PENDING",
       paymentMethod: paymentInfo.paymentMethod || paymentInfo.paymentGateway || null,
-      totalPrice: details[0].summary?.grandTotal || 0,
-      discountAmount: details[0].summary?.discountAmount || 0,
-      shippingFee: details[0].summary?.shippingFee || 0,
-      createdAt: details[0].createdAt,
-      updatedAt: details[0].updatedAt,
+      totalPrice: orderDetail.summary?.grandTotal || 0,
+      discountAmount: orderDetail.summary?.discountAmount || 0,
+      shippingFee: orderDetail.summary?.shippingFee || 0,
+      createdAt: orderDetail.createdAt,
+      updatedAt: orderDetail.updatedAt,
       summary: enhancedSummary, // Use enhanced summary with standardized fields
-      invoiceUrl: details[0].invoiceUrl || null,
-      address: details[0].address,
-      products: details[0].products.map((product) => ({
+      invoiceUrl: orderDetail.invoiceUrl || null,
+      address: orderDetail.address,
+      products: productsList.map((product) => ({
         productName: product.productName,
         companyName: product.companyName,
         qty: product.qty || null,
@@ -3621,7 +3584,7 @@ export const orderDetailsV2 = async (req, res) => {
         mrp: product.mrp || null,
         quantity: product.quantity,
         freeQuantity: product.freeQuantity || 0,
-        totalAmount: product.totalAmount,
+        totalAmount: (product.productPrice || 0) * (product.quantity || 1),
         appliedOffers: product.appliedOffers || [],
       })),
     };
