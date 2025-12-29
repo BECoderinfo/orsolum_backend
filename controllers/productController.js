@@ -163,6 +163,9 @@ const S3_BASE_URL =
     "https://orsolum.s3.ap-south-1.amazonaws.com/";
 
 const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => {
+    const parsedLat = toNumberOrNull(lat);
+    const parsedLong = toNumberOrNull(long);
+    
     let storeCategoryIds = await collectNearbyStoreCategoryIds({ lat, long, maxDistance: 6000 });
 
     // If nothing found in 6km, retry with 8km to avoid empty UI
@@ -271,13 +274,16 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => 
                 }
             }
 
-            // If we found a match (by ID or name), include this popular category
+            // If we found a match (by ID or name), include this popular category ONLY if it's in range
             if (matchingStoreCategory) {
-                matchedCategories.push({
-                    ...popularCat,
-                    storeCategory: matchingStoreCategory,
-                    storeCategoryId: matchingStoreCategory._id
-                });
+                // Only include if storeCategoryId is in nearby categories (within range)
+                if (storeCategoryIds.length === 0 || storeCategoryIds.some(id => id.toString() === matchingStoreCategory._id.toString())) {
+                    matchedCategories.push({
+                        ...popularCat,
+                        storeCategory: matchingStoreCategory,
+                        storeCategoryId: matchingStoreCategory._id
+                    });
+                }
             } else if (storeCategoryIds.length === 0) {
                 // If no location filter, include all popular categories
                 matchedCategories.push({
@@ -291,16 +297,31 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => 
         rows = matchedCategories;
     }
 
-    // ✅ Attach store images to popular categories based on category name matching
+    // ✅ Attach store images to popular categories based on category name matching - ONLY stores within range
     if (rows.length > 0) {
-        // Get all stores with their categories
-        const stores = await Store.aggregate([
+        // Build store aggregation pipeline with location filtering
+        const storePipeline = [
             {
                 $match: {
                     status: "A",
                     ...(storeCategoryIds.length > 0 && { category: { $in: storeCategoryIds } })
                 }
-            },
+            }
+        ];
+
+        // ✅ Add geoNear if location is available to filter stores within range
+        if (parsedLat !== null && parsedLong !== null && Number.isFinite(parsedLat) && Number.isFinite(parsedLong)) {
+            storePipeline.unshift({
+                $geoNear: {
+                    near: { type: "Point", coordinates: [parsedLong, parsedLat] },
+                    distanceField: "distance",
+                    maxDistance: 6000, // 6 km radius
+                    spherical: true
+                }
+            });
+        }
+
+        storePipeline.push(
             {
                 $lookup: {
                     from: "users",
@@ -344,10 +365,14 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => 
                     coverImage: 1,
                     images: 1,
                     category_name: 1,
-                    name: 1
+                    name: 1,
+                    category: 1
                 }
             }
-        ]);
+        );
+
+        // Get stores with their categories - filtered by location
+        const stores = await Store.aggregate(storePipeline);
 
         // Normalize function for name matching
         const normalizeName = (name) => {
@@ -360,12 +385,12 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => 
                 .replace(/[^\w\s]/g, '');
         };
 
-        // Attach store images to each popular category
+        // Attach store images to each popular category - only show stores within range
         rows = rows.map((popularCat) => {
             const popularCatName = popularCat.name || popularCat.storeCategory?.name || '';
             const normalizedPopularName = normalizeName(popularCatName);
 
-            // Find stores matching this category
+            // Find stores matching this category - only stores within range are already filtered
             const matchingStores = stores.filter(store => {
                 if (!store.category_name) return false;
                 const normalizedStoreCatName = normalizeName(store.category_name);
@@ -396,7 +421,7 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => 
                         ? popularCat.image
                         : `${S3_BASE_URL}${popularCat.image}`
                     : null,
-                storeImages: storeImages // Attach store images
+                storeImages: storeImages // Attach store images (max 2)
             };
         });
     } else {
@@ -1930,21 +1955,31 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
         let searchLat = Number.isFinite(parsedLat) ? parsedLat : null;
         let searchLong = Number.isFinite(parsedLong) ? parsedLong : null;
 
-        // ✅ Optimize location handling - update asynchronously to avoid blocking response
+        // ✅ Priority: Always use coordinates from request first (for location refresh)
+        // This ensures when user changes location, new data is fetched immediately
         if (Number.isFinite(parsedLat) && Number.isFinite(parsedLong)) {
             // Use fresh coordinates immediately
             searchLat = parsedLat;
             searchLong = parsedLong;
 
-            // Update user location asynchronously (non-blocking)
+            // Update user location asynchronously (non-blocking) with city/area if provided
+            const updateData = { lat: parsedLat, long: parsedLong };
+            if (city && city.trim()) {
+                updateData.city = city.trim();
+            }
+            if (area && area.trim()) {
+                updateData.address = area.trim();
+            }
+            
             User.findByIdAndUpdate(
                 req.user._id,
-                { lat: parsedLat, long: parsedLong },
-                { new: true, runValidators: true }
+                { $set: updateData },
+                { new: false, runValidators: false } // Don't wait, just update
             ).catch(err => {
                 console.warn("Failed to update user location:", err.message);
             });
         } else if (userDetails?.lat && userDetails?.long) {
+            // Fallback to saved location only if no new coordinates provided
             const savedLat = parseFloat(userDetails.lat);
             const savedLong = parseFloat(userDetails.long);
             if (Number.isFinite(savedLat) && Number.isFinite(savedLong)) {
@@ -1953,11 +1988,12 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
             }
         }
 
+        // ✅ Priority: Use city/area from request first (for location refresh)
         const searchCity =
             (city && city.trim()) ||
             (userDetails?.city ? userDetails.city.trim() : "");
 
-        // Extract area from parameter, user address, or detect from coordinates
+        // Extract area from parameter first, then user address
         let searchArea = null;
         if (area && area.trim()) {
             searchArea = area.trim().toLowerCase();
@@ -2879,11 +2915,12 @@ export const getStoreDetails = async (req, res) => {
                     latitude: store.location.coordinates[1],
                     longitude: store.location.coordinates[0]
                 };
-                distance = getDistance(userLocationGeo, storeLocationGeo) / 1000; // Convert to km
+                const distanceInMeters = getDistance(userLocationGeo, storeLocationGeo);
+                distance = parseFloat((distanceInMeters / 1000).toFixed(2)); // Convert to km with 2 decimals
                 const speedKmPerHour = 30; // Adjust based on travel mode (e.g., walking ~5 km/h, car ~30 km/h)
-                estimatedTime = (distance / speedKmPerHour) * 60; // Convert to minutes
-                distance = Math.ceil(distance);
-                estimatedTime = Math.ceil(estimatedTime);
+                if (distance !== null && distance > 0) {
+                    estimatedTime = Math.ceil((distance / speedKmPerHour) * 60); // Convert to minutes
+                }
             }
         }
 

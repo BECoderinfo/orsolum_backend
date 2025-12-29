@@ -787,14 +787,22 @@ export const addProductToCart = async (req, res) => {
       });
     }
 
-    // Generic error response
-    res.status(status.InternalServerError).json({
+    // Check for database connection errors
+    if (error.name === 'MongoError' || error.name === 'MongoServerError') {
+      return res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: "Database connection error. Please try again later.",
+      });
+    }
+
+    // Generic error response with more descriptive message
+    const errorMessage = error.message || "Failed to add product to cart. Please try again.";
+    return res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
-      message: error.message || "An unexpected error occurred. Please try again.",
+      message: errorMessage,
     });
-    
-    return catchError("addProductToCart", error, req, res);
   }
 };
 
