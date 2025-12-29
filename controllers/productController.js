@@ -1802,15 +1802,36 @@ export const getLocalStoreHomePageData = async (req, res) => {
 
             const userLocation = { lat: parsedLat, lng: parsedLong };
 
-            // Use the distance from MongoDB's $geoNear calculation (in meters), convert to km
+            // ✅ Calculate distance for all stores with fallback
             const storesWithDistance = stores.map((store) => {
                 let distanceInKm = null;
                 let estimatedTime = null;
                 
-                if (store.distance !== undefined) {
-                    // Use distance from $geoNear (in meters)
-                    distanceInKm = Math.ceil(store.distance / 1000);
-                    // Calculate estimated time (30 km/h average speed)
+                // ✅ Try to use distance from $geoNear first (in meters)
+                if (store.distance !== undefined && store.distance !== null && Number.isFinite(store.distance)) {
+                    distanceInKm = parseFloat((store.distance / 1000).toFixed(2)); // Convert meters to km with 2 decimals
+                } else if (store.location && store.location.coordinates && Array.isArray(store.location.coordinates)) {
+                    // ✅ Fallback: Calculate distance manually if $geoNear didn't provide it
+                    const storeLat = store.location.coordinates[1];
+                    const storeLong = store.location.coordinates[0];
+                    
+                    if (Number.isFinite(storeLat) && Number.isFinite(storeLong) && parsedLat !== null && parsedLong !== null) {
+                        // Use getDistance from geolib for accurate calculation
+                        const userLocationGeo = {
+                            latitude: parsedLat,
+                            longitude: parsedLong
+                        };
+                        const storeLocationGeo = {
+                            latitude: storeLat,
+                            longitude: storeLong
+                        };
+                        const distanceInMeters = getDistance(userLocationGeo, storeLocationGeo);
+                        distanceInKm = parseFloat((distanceInMeters / 1000).toFixed(2));
+                    }
+                }
+                
+                // Calculate estimated time (30 km/h average speed)
+                if (distanceInKm !== null && distanceInKm > 0) {
                     const speedKmPerHour = 30;
                     estimatedTime = Math.ceil((distanceInKm / speedKmPerHour) * 60);
                 }
@@ -2063,7 +2084,9 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                             address: 1,
                             images: 1,
                             location: 1,
-                            distance: 1
+                            distance: 1, // ✅ Include distance field from $geoNear
+                            coverImage: 1,
+                            createdAt: 1
                         }
                     },
                     { $sort: { createdAt: -1 } },
@@ -2327,15 +2350,36 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
         if (searchLat !== null && searchLong !== null) {
             const userLocation = { lat: searchLat, lng: searchLong };
 
-            // Use the distance from MongoDB's $geoNear calculation (in meters), convert to km
+            // ✅ Calculate distance for all stores with fallback
             const storesWithDistance = stores.map((store) => {
                 let distanceInKm = null;
                 let estimatedTime = null;
                 
-                if (store.distance !== undefined) {
-                    // Use distance from $geoNear (in meters)
-                    distanceInKm = Math.ceil(store.distance / 1000);
-                    // Calculate estimated time (30 km/h average speed)
+                // ✅ Try to use distance from $geoNear first (in meters)
+                if (store.distance !== undefined && store.distance !== null && Number.isFinite(store.distance)) {
+                    distanceInKm = parseFloat((store.distance / 1000).toFixed(2)); // Convert meters to km with 2 decimals
+                } else if (store.location && store.location.coordinates && Array.isArray(store.location.coordinates)) {
+                    // ✅ Fallback: Calculate distance manually if $geoNear didn't provide it
+                    const storeLat = store.location.coordinates[1];
+                    const storeLong = store.location.coordinates[0];
+                    
+                    if (Number.isFinite(storeLat) && Number.isFinite(storeLong) && parsedLat !== null && parsedLong !== null) {
+                        // Use getDistance from geolib for accurate calculation
+                        const userLocationGeo = {
+                            latitude: parsedLat,
+                            longitude: parsedLong
+                        };
+                        const storeLocationGeo = {
+                            latitude: storeLat,
+                            longitude: storeLong
+                        };
+                        const distanceInMeters = getDistance(userLocationGeo, storeLocationGeo);
+                        distanceInKm = parseFloat((distanceInMeters / 1000).toFixed(2));
+                    }
+                }
+                
+                // Calculate estimated time (30 km/h average speed)
+                if (distanceInKm !== null && distanceInKm > 0) {
                     const speedKmPerHour = 30;
                     estimatedTime = Math.ceil((distanceInKm / speedKmPerHour) * 60);
                 }
@@ -2478,7 +2522,14 @@ export const getAllStores = async (req, res) => {
         const effectiveLimit = nearMe === "1"
             ? (Number(customLimit) > 0 ? Number(customLimit) : 50)
             : limit;
-        const { lat, long } = req.user || {};
+        
+        // ✅ Get location from multiple sources: body, query, or user profile
+        const lat = req.body?.lat ?? req.query?.lat ?? req.user?.lat;
+        const long = req.body?.long ?? req.query?.long ?? req.user?.long;
+        
+        // Parse coordinates
+        const parsedLat = lat !== undefined && lat !== null && lat !== "" ? parseFloat(lat) : null;
+        const parsedLong = long !== undefined && long !== null && long !== "" ? parseFloat(long) : null;
 
         let matchObj = {
             status: "A",
@@ -2499,17 +2550,18 @@ export const getAllStores = async (req, res) => {
 
         const aggregationPipeline = [];
 
-        // Always enforce 5km when coordinates are present
-        if (lat && long) {
+        // ✅ Always enforce 5km when coordinates are present
+        if (parsedLat !== null && parsedLong !== null && Number.isFinite(parsedLat) && Number.isFinite(parsedLong)) {
             aggregationPipeline.unshift({
                 $geoNear: {
                     near: {
                         type: "Point",
-                        coordinates: [parseFloat(long), parseFloat(lat)]
+                        coordinates: [parsedLong, parsedLat] // Longitude first, then latitude
                     },
                     distanceField: "distance",
                     maxDistance: 6000, // strict 6 km radius for 5-7km range
-                    spherical: true
+                    spherical: true,
+                    query: { status: "A" } // Only active stores
                 }
             });
         }
@@ -2583,7 +2635,11 @@ export const getAllStores = async (req, res) => {
                     address: 1,
                     storeOffersCount: 1,
                     images: 1,
-                    location: 1
+                    location: 1,
+                    distance: 1, // ✅ Include distance field from $geoNear
+                    _id: 1,
+                    createdAt: 1,
+                    coverImage: 1
                 }
             }
         );
@@ -2607,18 +2663,40 @@ export const getAllStores = async (req, res) => {
 
         let stores = await Store.aggregate(aggregationPipeline);
 
-        if (lat && long) {
-            const userLocation = { lat: parseFloat(lat), lng: parseFloat(long) };
+        // ✅ Calculate distance for all stores if user location is available
+        if (parsedLat !== null && parsedLong !== null && Number.isFinite(parsedLat) && Number.isFinite(parsedLong)) {
+            const userLocation = { lat: parsedLat, lng: parsedLong };
 
-            // Use the distance from MongoDB's $geoNear calculation (in meters), convert to km
+            // Calculate distance for each store
             const storesWithDistance = stores.map((store) => {
                 let distanceInKm = null;
                 let estimatedTime = null;
                 
-                if (store.distance !== undefined) {
-                    // Use distance from $geoNear (in meters)
-                    distanceInKm = Math.ceil(store.distance / 1000);
-                    // Calculate estimated time (30 km/h average speed)
+                // ✅ Try to use distance from $geoNear first (in meters)
+                if (store.distance !== undefined && store.distance !== null && Number.isFinite(store.distance)) {
+                    distanceInKm = parseFloat((store.distance / 1000).toFixed(2)); // Convert meters to km with 2 decimals
+                } else if (store.location && store.location.coordinates && Array.isArray(store.location.coordinates)) {
+                    // ✅ Fallback: Calculate distance manually if $geoNear didn't provide it
+                    const storeLat = store.location.coordinates[1];
+                    const storeLong = store.location.coordinates[0];
+                    
+                    if (Number.isFinite(storeLat) && Number.isFinite(storeLong)) {
+                        // Use getDistance from geolib for accurate calculation
+                        const userLocationGeo = {
+                            latitude: parsedLat,
+                            longitude: parsedLong
+                        };
+                        const storeLocationGeo = {
+                            latitude: storeLat,
+                            longitude: storeLong
+                        };
+                        const distanceInMeters = getDistance(userLocationGeo, storeLocationGeo);
+                        distanceInKm = parseFloat((distanceInMeters / 1000).toFixed(2));
+                    }
+                }
+                
+                // Calculate estimated time (30 km/h average speed)
+                if (distanceInKm !== null && distanceInKm > 0) {
                     const speedKmPerHour = 30;
                     estimatedTime = Math.ceil((distanceInKm / speedKmPerHour) * 60);
                 }

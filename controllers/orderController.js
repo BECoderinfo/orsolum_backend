@@ -445,6 +445,15 @@ export const createOrder = async (req, res) => {
 
 export const addProductToCart = async (req, res) => {
   try {
+    // ✅ Validate user authentication first
+    if (!req.user || !req.user._id) {
+      return res.status(status.Unauthorized).json({
+        status: jsonStatus.Unauthorized,
+        success: false,
+        message: "User authentication required. Please login to continue.",
+      });
+    }
+
     const { productId, storeId, quantity } = req.body;
 
     // ✅ Enhanced validation with proper error messages
@@ -481,7 +490,19 @@ export const addProductToCart = async (req, res) => {
       });
     }
 
-    const productDetails = await Product.findById(productId).populate("storeId");
+    // ✅ Validate and fetch product with error handling
+    let productDetails;
+    try {
+      productDetails = await Product.findById(productId).populate("storeId");
+    } catch (dbError) {
+      console.error("Database error while fetching product:", dbError);
+      return res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: "Failed to fetch product details. Please try again.",
+      });
+    }
+
     if (!productDetails) {
       return res.status(status.NotFound).json({
         status: jsonStatus.NotFound,
@@ -531,11 +552,21 @@ export const addProductToCart = async (req, res) => {
 
     // ✅ Enforce single-store cart with replace prompt
     const replaceCart = req.body?.replace === true || req.body?.replace === "1" || req.body?.replace === 1;
-    const otherStoreCart = await Cart.findOne({
-      createdBy: req.user._id,
-      deleted: false,
-      storeId: { $ne: storeId },
-    }).populate("storeId", "name address");
+    let otherStoreCart;
+    try {
+      otherStoreCart = await Cart.findOne({
+        createdBy: req.user._id,
+        deleted: false,
+        storeId: { $ne: storeId },
+      }).populate("storeId", "name address");
+    } catch (dbError) {
+      console.error("Database error while checking other store cart:", dbError);
+      return res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: "Failed to check cart. Please try again.",
+      });
+    }
 
     if (otherStoreCart && !replaceCart) {
       return res.status(409).json({
@@ -550,10 +581,19 @@ export const addProductToCart = async (req, res) => {
     }
 
     if (otherStoreCart && replaceCart) {
-      await Cart.updateMany(
-        { createdBy: req.user._id, deleted: false, storeId: { $ne: storeId } },
-        { $set: { deleted: true } }
-      );
+      try {
+        await Cart.updateMany(
+          { createdBy: req.user._id, deleted: false, storeId: { $ne: storeId } },
+          { $set: { deleted: true } }
+        );
+      } catch (dbError) {
+        console.error("Database error while replacing cart:", dbError);
+        return res.status(status.InternalServerError).json({
+          status: jsonStatus.InternalServerError,
+          success: false,
+          message: "Failed to replace cart. Please try again.",
+        });
+      }
     }
 
     const normalizedQuantity = Number(quantity);
@@ -570,12 +610,22 @@ export const addProductToCart = async (req, res) => {
       : 0;
     const isLowStock = availableStock !== null && lowStockThreshold > 0 && availableStock <= lowStockThreshold;
 
-    const findProductInCart = await Cart.findOne({
-      createdBy: req.user._id,
-      productId,
-      storeId,
-      deleted: false,
-    });
+    let findProductInCart;
+    try {
+      findProductInCart = await Cart.findOne({
+        createdBy: req.user._id,
+        productId,
+        storeId,
+        deleted: false,
+      });
+    } catch (dbError) {
+      console.error("Database error while finding product in cart:", dbError);
+      return res.status(status.InternalServerError).json({
+        status: jsonStatus.InternalServerError,
+        success: false,
+        message: "Failed to check cart. Please try again.",
+      });
+    }
 
     const existingQty = findProductInCart ? findProductInCart.quantity : 0;
 
@@ -610,33 +660,42 @@ export const addProductToCart = async (req, res) => {
     }
 
     if (findProductInCart) {
-      findProductInCart.quantity = existingQty + safeQuantity;
-      await findProductInCart.save();
+      try {
+        findProductInCart.quantity = existingQty + safeQuantity;
+        await findProductInCart.save();
 
-      let totalCartCount = 0;
-      const carts = await Cart.find({
-        deleted: false,
-        createdBy: req.user._id,
-      });
-      if (carts.length > 0) {
-        carts.map((elem) => {
-          totalCartCount += elem.quantity;
+        let totalCartCount = 0;
+        const carts = await Cart.find({
+          deleted: false,
+          createdBy: req.user._id,
+        });
+        if (carts.length > 0) {
+          carts.map((elem) => {
+            totalCartCount += elem.quantity;
+          });
+        }
+
+        return res.status(status.OK).json({
+          status: jsonStatus.OK,
+          success: true,
+          message: isLowStock ? `Product added to Cart (Low Stock: ${availableStock} units remaining)` : "Product added in to the Cart",
+          count: findProductInCart.quantity,
+          totalCartCount,
+          data: isLowStock ? {
+            lowStockWarning: true,
+            availableStock,
+            lowStockThreshold,
+            message: `Only ${availableStock} units left in stock`
+          } : null
+        });
+      } catch (dbError) {
+        console.error("Database error while updating cart:", dbError);
+        return res.status(status.InternalServerError).json({
+          status: jsonStatus.InternalServerError,
+          success: false,
+          message: "Failed to update cart. Please try again.",
         });
       }
-
-      res.status(status.OK).json({
-        status: jsonStatus.OK,
-        success: true,
-        message: isLowStock ? `Product added to Cart (Low Stock: ${availableStock} units remaining)` : "Product added in to the Cart",
-        count: findProductInCart.quantity,
-        totalCartCount,
-        data: isLowStock ? {
-          lowStockWarning: true,
-          availableStock,
-          lowStockThreshold,
-          message: `Only ${availableStock} units left in stock`
-        } : null
-      });
     } else {
       if (availableStock !== null && safeQuantity > availableStock) {
         return res.status(status.BadRequest).json({
@@ -646,39 +705,95 @@ export const addProductToCart = async (req, res) => {
         });
       }
 
-      let newCart = new Cart({
-        productId,
-        storeId,
-        createdBy: req.user._id,
-        quantity: safeQuantity || 1,
-      });
-      newCart = await newCart.save();
+      try {
+        let newCart = new Cart({
+          productId,
+          storeId,
+          createdBy: req.user._id,
+          quantity: safeQuantity || 1,
+        });
+        newCart = await newCart.save();
 
-      let totalCartCount = 0;
-      const carts = await Cart.find({
-        deleted: false,
-        createdBy: req.user._id,
-      });
-      if (carts.length > 0) {
-        carts.map((elem) => {
-          totalCartCount += elem.quantity;
+        let totalCartCount = 0;
+        const carts = await Cart.find({
+          deleted: false,
+          createdBy: req.user._id,
+        });
+        if (carts.length > 0) {
+          carts.map((elem) => {
+            totalCartCount += elem.quantity;
+          });
+        }
+
+        return res.status(status.OK).json({
+          status: jsonStatus.OK,
+          success: true,
+          message: "Product added in to the Cart",
+          count: newCart.quantity,
+          totalCartCount,
+        });
+      } catch (dbError) {
+        console.error("Database error while creating cart:", dbError);
+        
+        // Check for validation errors
+        if (dbError.name === 'ValidationError') {
+          const validationErrors = Object.values(dbError.errors || {}).map(err => err.message).join(', ');
+          return res.status(status.BadRequest).json({
+            status: jsonStatus.BadRequest,
+            success: false,
+            message: `Validation error: ${validationErrors}`,
+          });
+        }
+
+        // Check for duplicate key errors
+        if (dbError.code === 11000) {
+          return res.status(status.BadRequest).json({
+            status: jsonStatus.BadRequest,
+            success: false,
+            message: "Product already exists in cart. Please update quantity instead.",
+          });
+        }
+
+        return res.status(status.InternalServerError).json({
+          status: jsonStatus.InternalServerError,
+          success: false,
+          message: "Failed to add product to cart. Please try again.",
         });
       }
-
-      res.status(status.OK).json({
-        status: jsonStatus.OK,
-        success: true,
-        message: "Product added in to the Cart",
-        count: newCart.quantity,
-        totalCartCount,
-      });
     }
   } catch (error) {
+    console.error("Error in addProductToCart:", error);
+    
+    // Check if response has already been sent
+    if (res.headersSent) {
+      return catchError("addProductToCart", error, req, res);
+    }
+
+    // Handle specific error types
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors || {}).map(err => err.message).join(', ');
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: `Validation error: ${validationErrors}`,
+      });
+    }
+
+    if (error.name === 'CastError') {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid data format. Please check your input.",
+      });
+    }
+
+    // Generic error response
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
-      message: error.message,
+      message: error.message || "An unexpected error occurred. Please try again.",
     });
+    
     return catchError("addProductToCart", error, req, res);
   }
 };
