@@ -447,11 +447,37 @@ export const addProductToCart = async (req, res) => {
   try {
     const { productId, storeId, quantity } = req.body;
 
-    if (!productId || !storeId) {
+    // ✅ Enhanced validation with proper error messages
+    if (!productId) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
-        message: `Please enter Product ID and Store ID`,
+        message: "Product ID is required",
+      });
+    }
+
+    if (!storeId) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Store ID is required",
+      });
+    }
+
+    // ✅ Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid Product ID format",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(storeId)) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Invalid Store ID format",
       });
     }
 
@@ -1325,12 +1351,16 @@ export const cartDetails = async (req, res) => {
         ? Math.min(rawDiscount, couponCode.upto)
         : rawDiscount;
 
-      // Subtract coupon discount from existing Grand Total (which includes charges & shipping)
-      overallGrandTotal -= couponCodeDiscount;
+      // ✅ Fix: Calculate grand total correctly - subtract coupon from total before adding shipping/charges
+      // Don't subtract from overallGrandTotal here, calculate it properly below
     }
 
-    // Add donation to grand total
-    overallGrandTotal += donate;
+    // ✅ Fix: Calculate grand total correctly
+    // Add donation to grand total, then subtract coupon discount
+    overallGrandTotal = overallGrandTotal + donate - couponCodeDiscount;
+    
+    // ✅ Ensure grand total is never negative
+    overallGrandTotal = Math.max(0, overallGrandTotal);
 
     let storesIds = enhancedList.map((store) => new ObjectId(store._id));
     let similarProducts = [];
@@ -1390,18 +1420,33 @@ export const cartDetails = async (req, res) => {
       ]);
     }
 
-    // Calculate enhanced bill summary with all components
+    // ✅ Calculate enhanced bill summary with all components and proper formatting
+    // Ensure all values are complete and properly calculated
+    const itemTotalValue = parseFloat(overallTotalAmount.toFixed(2));
+    const discountAmountValue = parseFloat(overallDiscountAmount.toFixed(2));
+    const couponDiscountValue = parseFloat(couponCodeDiscount.toFixed(2));
+    const shippingFeeValue = parseFloat(overallShippingFee.toFixed(2));
+    const donationAmountValue = parseFloat(donate.toFixed(2));
+    const chargesValue = parseFloat(overallCharges.toFixed(2));
+    const platformFeeValue = parseFloat(PLATFORM_FEE.toFixed(2));
+    const totalPayableValue = parseFloat(overallGrandTotal.toFixed(2));
+    const savedValue = parseFloat((overallDiscountAmount + couponCodeDiscount).toFixed(2));
+
     const billSummary = {
-      itemTotal: overallTotalAmount,
-      discountAmount: overallDiscountAmount,
-      couponDiscount: couponCodeDiscount,
+      itemTotal: itemTotalValue,
+      discountAmount: discountAmountValue,
+      couponDiscount: couponDiscountValue,
       couponCode: couponCode ? couponCode.code : null,
-      shippingFee: overallShippingFee,
-      donationAmount: donate,
-      charges: overallCharges,
-      platformFee: PLATFORM_FEE,
-      totalPayable: overallGrandTotal,
-      saved: overallDiscountAmount + couponCodeDiscount // How much user saved
+      couponId: couponCode ? couponCode._id.toString() : null, // ✅ Add coupon ID for persistence
+      shippingFee: shippingFeeValue,
+      donationAmount: donationAmountValue,
+      charges: chargesValue,
+      platformFee: platformFeeValue,
+      totalPayable: totalPayableValue,
+      saved: savedValue,
+      // ✅ Additional breakdown for clarity
+      subtotal: itemTotalValue - discountAmountValue, // After store discounts
+      finalTotal: totalPayableValue // Final amount to pay
     };
 
     res.status(status.OK).json({
@@ -1618,18 +1663,23 @@ export const allCartDetails = async (req, res) => {
         ? Math.min(rawDiscount, couponCode.upto)
         : rawDiscount;
 
-      overallGrandTotal -= couponCodeDiscount;
+      // ✅ Fix: Calculate grand total correctly
+      overallGrandTotal = overallGrandTotal - couponCodeDiscount;
+      
+      // ✅ Ensure grand total is never negative
+      overallGrandTotal = Math.max(0, overallGrandTotal);
     }
 
-    // Calculate enhanced bill summary for all cart details
+    // ✅ Calculate enhanced bill summary for all cart details with proper formatting
     const billSummary = {
-      itemTotal: overallTotalAmount,
-      discountAmount: overallDiscountAmount,
-      couponDiscount: couponCodeDiscount,
+      itemTotal: parseFloat(overallTotalAmount.toFixed(2)),
+      discountAmount: parseFloat(overallDiscountAmount.toFixed(2)),
+      couponDiscount: parseFloat(couponCodeDiscount.toFixed(2)),
       couponCode: couponCode ? couponCode.code : null,
-      shippingFee: overallShippingFee,
-      totalPayable: overallGrandTotal,
-      saved: overallDiscountAmount + couponCodeDiscount // How much user saved
+      couponId: couponCode ? couponCode._id.toString() : null, // ✅ Add coupon ID for persistence
+      shippingFee: parseFloat(overallShippingFee.toFixed(2)),
+      totalPayable: parseFloat(overallGrandTotal.toFixed(2)),
+      saved: parseFloat((overallDiscountAmount + couponCodeDiscount).toFixed(2)) // How much user saved
     };
 
     res.status(200).json({
@@ -1734,23 +1784,39 @@ export const createAddress = async (req, res) => {
       req.body;
 
     // Enhanced logging for debugging
-    console.log("Creating address with data:", req.body);
+    console.log("Creating address with data:", JSON.stringify(req.body, null, 2));
     console.log("User ID:", req.user._id);
 
-    // Required fields validation with enhanced type safety
-    if (!address_1 || (typeof address_1 === 'string' && address_1.trim() === "")) {
+    // ✅ Enhanced validation with better error messages
+    if (!address_1) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
-        message: "Address (address_1) is required",
+        message: "Address is required",
       });
     }
 
-    if (!pincode || (typeof pincode === 'string' && pincode.trim() === "")) {
+    if (typeof address_1 === 'string' && address_1.trim() === "") {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Address cannot be empty",
+      });
+    }
+
+    if (!pincode) {
       return res.status(status.BadRequest).json({
         status: jsonStatus.BadRequest,
         success: false,
         message: "Pincode is required",
+      });
+    }
+
+    if (typeof pincode === 'string' && pincode.trim() === "") {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: "Pincode cannot be empty",
       });
     }
 
@@ -1846,12 +1912,41 @@ export const createAddress = async (req, res) => {
       });
     }
 
-    console.log("Final address data to save:", addressData);
+    console.log("Final address data to save:", JSON.stringify(addressData, null, 2));
 
-    let newAddress = new Address(addressData);
-    newAddress = await newAddress.save();
+    // ✅ Validate address data before saving
+    let newAddress;
+    try {
+      newAddress = new Address(addressData);
+      
+      // Validate the document before saving
+      const validationError = newAddress.validateSync();
+      if (validationError) {
+        console.error("Address validation error:", validationError);
+        const errorMessages = Object.values(validationError.errors || {}).map(err => err.message).join(", ");
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: errorMessages || "Validation error",
+        });
+      }
 
-    console.log("Address saved successfully with ID:", newAddress._id);
+      newAddress = await newAddress.save();
+      console.log("Address saved successfully with ID:", newAddress._id);
+    } catch (saveError) {
+      console.error("Error saving address:", saveError);
+      
+      // Handle duplicate key errors
+      if (saveError.code === 11000) {
+        return res.status(status.BadRequest).json({
+          status: jsonStatus.BadRequest,
+          success: false,
+          message: "Address already exists",
+        });
+      }
+      
+      throw saveError; // Re-throw to be caught by outer catch
+    }
 
     // Update user's default location if this is their first address
     const userAddressCount = await Address.countDocuments({ createdBy: req.user._id });
@@ -1868,13 +1963,34 @@ export const createAddress = async (req, res) => {
       });
     }
 
+    // ✅ Return address in proper format for Flutter app
+    // Note: newAddress is available here because it was saved in the try block above
+    const addressResponse = {
+      _id: newAddress._id,
+      address_1: newAddress.address_1,
+      flatHouse: newAddress.flatHouse || "",
+      name: newAddress.name,
+      pincode: newAddress.pincode,
+      city: newAddress.city || "",
+      state: newAddress.state || "",
+      country: newAddress.country || "India",
+      landmark: newAddress.landmark || "",
+      lat: newAddress.lat || "0",
+      long: newAddress.long || "0",
+      mapLink: newAddress.mapLink || "",
+      type: newAddress.type || "Home",
+      number: newAddress.number || "",
+      createdAt: newAddress.createdAt,
+      updatedAt: newAddress.updatedAt
+    };
+
     return res
       .status(status.OK)
       .json({
         status: jsonStatus.OK,
         success: true,
         message: "Address created successfully",
-        data: newAddress
+        data: addressResponse
       });
   } catch (error) {
     // Handle validation errors

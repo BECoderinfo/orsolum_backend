@@ -2667,8 +2667,38 @@ export const addOnlineProductToCart = async (req, res) => {
     try {
         const { productId, unitId, quantity } = req.body;
 
-        if (!productId || !unitId) {
-            return res.status(status.BadRequest).json({ status: jsonStatus.BadRequest, success: false, message: `Please enter Product ID and Unit ID` });
+        // ✅ Enhanced validation with proper error messages
+        if (!productId) {
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: "Product ID is required" 
+            });
+        }
+
+        if (!unitId) {
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: "Unit ID is required" 
+            });
+        }
+
+        // ✅ Validate ObjectId format
+        if (!mongoose.Types.ObjectId.isValid(productId)) {
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: "Invalid Product ID format" 
+            });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(unitId)) {
+            return res.status(status.BadRequest).json({ 
+                status: jsonStatus.BadRequest, 
+                success: false, 
+                message: "Invalid Unit ID format" 
+            });
         }
 
         const productDetails = await resolveOnlineProductByAnyId(productId);
@@ -3062,17 +3092,30 @@ export const onlineStoreCartDetails = async (req, res) => {
 
         // Apply shipping fee logic (example: free shipping above ₹500)
         overallShippingFee = overallTotalAmount > 500 ? 0 : 50;
-        overallGrandTotal = overallTotalAmount - couponCodeDiscount + overallShippingFee + donate;
+        
+        // ✅ Fix: Calculate grand total correctly - ensure it's never negative
+        overallGrandTotal = Math.max(0, overallTotalAmount - couponCodeDiscount + overallShippingFee + donate);
 
-        // Calculate enhanced bill summary
+        // ✅ Calculate enhanced bill summary with proper values - ensure all fields are complete
+        const itemTotalValue = parseFloat(overallTotalAmount.toFixed(2));
+        const donationAmountValue = parseFloat(donate.toFixed(2));
+        const couponDiscountValue = parseFloat(couponCodeDiscount.toFixed(2));
+        const shippingFeeValue = parseFloat(overallShippingFee.toFixed(2));
+        const totalPayableValue = parseFloat(overallGrandTotal.toFixed(2));
+        const savedValue = parseFloat(couponCodeDiscount.toFixed(2));
+
         const billSummary = {
-            itemTotal: overallTotalAmount,
-            donationAmount: donate,
-            couponDiscount: couponCodeDiscount,
+            itemTotal: itemTotalValue,
+            donationAmount: donationAmountValue,
+            couponDiscount: couponDiscountValue,
             couponCode: couponCode ? couponCode.code : null,
-            shippingFee: overallShippingFee,
-            totalPayable: overallGrandTotal,
-            saved: couponCodeDiscount // Amount saved through coupon
+            couponId: couponCode ? couponCode._id.toString() : null, // ✅ Add coupon ID for persistence
+            shippingFee: shippingFeeValue,
+            totalPayable: totalPayableValue,
+            saved: savedValue,
+            // ✅ Additional breakdown for clarity
+            subtotal: itemTotalValue - couponDiscountValue, // After coupon discount
+            finalTotal: totalPayableValue // Final amount to pay
         };
 
         res.status(status.OK).json({
@@ -3675,6 +3718,15 @@ export const onlineOrderDetails = async (req, res) => {
     try {
         const { id } = req.params;
 
+        // ✅ Validate ID format
+        if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Invalid order ID format"
+            });
+        }
+
         // Check if the order exists for the given ID and user
         const orderExists = await OnlineOrder.findOne({
             _id: new ObjectId(id),
@@ -3682,7 +3734,8 @@ export const onlineOrderDetails = async (req, res) => {
         });
 
         if (!orderExists) {
-            return res.status(404).json({
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
                 success: false,
                 message: "Order not found with this ID"
             });
@@ -3721,24 +3774,41 @@ export const onlineOrderDetails = async (req, res) => {
                     $addFields: {
                         "productDetails.productName": {
                             $ifNull: [
-                                { $arrayElemAt: ["$productInfo.name", 0] },
+                                "$productInfo.name",
+                                "$productDetails.productName",
                                 "Product Not Found"
                             ]
                         },
                         "productDetails.productImages": {
                             $ifNull: [
-                                { $arrayElemAt: ["$productInfo.images", 0] },
+                                "$productInfo.images",
+                                "$productDetails.productImages",
                                 []
                             ]
                         },
                         "productDetails.manufacturer": {
                             $ifNull: [
-                                { $arrayElemAt: ["$productInfo.manufacturer", 0] },
+                                "$productInfo.manufacturer",
+                                "$productDetails.manufacturer",
                                 "Unknown"
                             ]
                         },
                         "productDetails.totalAmount": {
-                            $multiply: ["$productDetails.productPrice", "$productDetails.quantity"]
+                            $cond: {
+                                if: {
+                                    $and: [
+                                        { $ne: ["$productDetails.productPrice", null] },
+                                        { $ne: ["$productDetails.quantity", null] }
+                                    ]
+                                },
+                                then: {
+                                    $multiply: [
+                                        { $ifNull: ["$productDetails.productPrice", 0] },
+                                        { $ifNull: ["$productDetails.quantity", 0] }
+                                    ]
+                                },
+                                else: 0
+                            }
                         }
                     }
                 },
@@ -3749,56 +3819,72 @@ export const onlineOrderDetails = async (req, res) => {
                         estimatedDate: { $first: "$estimatedDate" },
                         deliverdTime: { $first: "$deliverdTime" },
                         status: { $first: "$status" },
-                        isReturn: { $first: "$isReturn" },
-                        returnStatus: { $first: "$returnStatus" },
+                        isReturn: { $first: { $ifNull: ["$isReturn", false] } },
+                        returnStatus: { $first: { $ifNull: ["$returnStatus", null] } },
                         summary: { $first: "$summary" },
                         invoiceUrl: { $first: "$invoiceUrl" },
                         createdAt: { $first: "$createdAt" },
                         updatedAt: { $first: "$updatedAt" },
                         address: { $first: "$address" },
-                        products: { $push: "$productDetails" }
+                        products: { 
+                            $push: {
+                                $cond: {
+                                    if: { $ne: ["$productDetails", null] },
+                                    then: "$productDetails",
+                                    else: "$$REMOVE"
+                                }
+                            }
+                        }
                     }
                 }
             ]);
         } catch (aggregateError) {
             console.error('Error in onlineOrderDetails aggregation:', aggregateError.message);
-            return res.status(500).json({
+            console.error('Stack trace:', aggregateError.stack);
+            return res.status(status.InternalServerError).json({
+                status: jsonStatus.InternalServerError,
                 success: false,
                 message: "Failed to retrieve order details due to a server error"
             });
         }
 
-        if (!details.length) {
-            return res.status(404).json({
+        if (!details || !details.length) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
                 success: false,
                 message: "Order details not found"
             });
         }
 
+        const orderDetail = details[0];
+        
+        // ✅ Ensure summary exists with default values
+        const orderSummary = orderDetail.summary || {};
+        
         const formattedDetails = {
-            _id: details[0]._id,
-            orderId: details[0].orderId,
-            estimatedDate: details[0].estimatedDate || null,
-            deliverdTime: details[0].deliverdTime || null,
-            status: details[0].status,
-            isReturn: details[0].isReturn,
-            returnStatus: details[0].returnStatus,
-            totalPrice: details[0].summary.grandTotal,
-            discountAmount: details[0].summary.discountAmount,
-            shippingFee: details[0].summary.shippingFee,
-            createdAt: details[0].createdAt,
-            summary: details[0].summary,
-            invoiceUrl: details[0].invoiceUrl || null,
-            address: details[0].address,
-            products: details[0].products.map(product => ({
-                productName: product.productName,
-                manufacturer: product.manufacturer,
-                productImages: product.productImages,
-                price: product.productPrice,
+            _id: orderDetail._id,
+            orderId: orderDetail.orderId || null,
+            estimatedDate: orderDetail.estimatedDate || null,
+            deliverdTime: orderDetail.deliverdTime || null,
+            status: orderDetail.status || "Pending",
+            isReturn: orderDetail.isReturn || false,
+            returnStatus: orderDetail.returnStatus || null,
+            totalPrice: orderSummary.grandTotal || 0,
+            discountAmount: orderSummary.discountAmount || 0,
+            shippingFee: orderSummary.shippingFee || 0,
+            createdAt: orderDetail.createdAt || new Date(),
+            summary: orderSummary,
+            invoiceUrl: orderDetail.invoiceUrl || null,
+            address: orderDetail.address || null,
+            products: (orderDetail.products || []).filter(p => p !== null && p !== undefined).map(product => ({
+                productName: product.productName || "Product Not Found",
+                manufacturer: product.manufacturer || "Unknown",
+                productImages: Array.isArray(product.productImages) ? product.productImages : (product.productImages ? [product.productImages] : []),
+                price: product.productPrice || 0,
                 mrp: product.mrp || null,
-                quantity: product.quantity,
-                qty: product.qty,
-                totalAmount: product.totalAmount,
+                quantity: product.quantity || 0,
+                qty: product.qty || product.quantity || 0,
+                totalAmount: product.totalAmount || 0,
             }))
         };
 
@@ -3809,11 +3895,12 @@ export const onlineOrderDetails = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("error", error);
+        console.error("Error in onlineOrderDetails:", error.message);
+        console.error("Stack trace:", error.stack);
         res.status(status.InternalServerError).json({
             status: jsonStatus.InternalServerError,
             success: false,
-            message: error.message
+            message: error.message || "Internal server error"
         });
         return catchError('onlineOrderDetails', error, req, res);
     }

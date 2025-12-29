@@ -225,38 +225,87 @@ export const getDetailedAddressFromCoordinates = async (lat, lng) => {
  */
 export const searchPlaces = async (query, lat = null, lng = null) => {
     try {
-        if (!query || typeof query !== "string") {
+        if (!query || typeof query !== "string" || query.trim() === "") {
             console.error("Invalid search query");
             return [];
         }
 
-        if (!GOOGLE_MAPS_API_KEY) {
-            console.error("GOOGLE_MAPS_API_KEY not configured in .env");
+        // ✅ Try Google Places API first if key exists
+        if (GOOGLE_MAPS_API_KEY) {
+            try {
+                // Use Places API Text Search
+                let url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query.trim())}&key=${GOOGLE_MAPS_API_KEY}`;
+
+                // Add location bias if coordinates provided
+                if (lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng))) {
+                    url += `&location=${lat},${lng}&radius=50000`; // 50km radius
+                }
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.status === "OK" && data.results && Array.isArray(data.results)) {
+                    return data.results.map(place => ({
+                        name: place.name || "Unknown Place",
+                        address: place.formatted_address || place.vicinity || "",
+                        lat: place.geometry?.location?.lat || null,
+                        lng: place.geometry?.location?.lng || null,
+                        place_id: place.place_id || null,
+                    }));
+                }
+
+                // Handle different API response statuses
+                if (data.status === "ZERO_RESULTS") {
+                    console.log("No places found for query:", query);
+                    return [];
+                }
+
+                if (data.status === "REQUEST_DENIED") {
+                    console.error("Google Places API request denied. Check API key and billing.");
+                    // Fall through to Nominatim fallback
+                } else {
+                    console.error("Place search failed:", data.status, data.error_message || "");
+                    // Fall through to Nominatim fallback
+                }
+            } catch (googleError) {
+                console.warn("Google Places API error, falling back to Nominatim:", googleError.message);
+                // Fall through to Nominatim fallback
+            }
+        } else {
+            console.warn("GOOGLE_MAPS_API_KEY not configured, using Nominatim fallback");
+        }
+
+        // ✅ Fallback to Nominatim (OpenStreetMap) if Google fails or not configured
+        try {
+            const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query.trim())}&format=json&limit=10&addressdetails=1`;
+            const nominatimResp = await fetch(nominatimUrl, {
+                headers: { 
+                    'User-Agent': 'OrsolumApp/1.0',
+                    'Accept': 'application/json'
+                }
+            });
+            
+            if (!nominatimResp.ok) {
+                throw new Error(`Nominatim request failed: ${nominatimResp.status}`);
+            }
+
+            const nominatimData = await nominatimResp.json();
+
+            if (Array.isArray(nominatimData) && nominatimData.length > 0) {
+                return nominatimData.map(place => ({
+                    name: place.display_name?.split(',')[0] || place.name || "Unknown Place",
+                    address: place.display_name || "",
+                    lat: parseFloat(place.lat) || null,
+                    lng: parseFloat(place.lon) || null,
+                    place_id: place.place_id || null,
+                }));
+            }
+
+            return [];
+        } catch (nominatimError) {
+            console.error("Nominatim fallback also failed:", nominatimError.message);
             return [];
         }
-
-        let url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&key=${GOOGLE_MAPS_API_KEY}`;
-
-        // Add location bias if coordinates provided
-        if (lat && lng) {
-            url += `&location=${lat},${lng}&radius=50000`; // 50km radius
-        }
-
-        const response = await fetch(url);
-        const data = await response.json();
-
-        if (data.status === "OK" && data.results) {
-            return data.results.map(place => ({
-                name: place.name,
-                address: place.formatted_address,
-                lat: place.geometry.location.lat,
-                lng: place.geometry.location.lng,
-                place_id: place.place_id,
-            }));
-        }
-
-        console.error("Place search failed:", data.status);
-        return [];
     } catch (error) {
         console.error("Error in searchPlaces:", error.message);
         return [];

@@ -170,10 +170,8 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => 
         storeCategoryIds = await collectNearbyStoreCategoryIds({ lat, long, maxDistance: 8000 });
     }
 
-    // If still none, return empty array (respect location filter)
-    if (!storeCategoryIds.length) return [];
-
-    const pipeline = [
+    // ✅ Strategy 1: Try to fetch by storeCategoryId first (existing logic)
+    let pipeline = [
         {
             $match: {
                 deleted: false,
@@ -196,23 +194,226 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => 
         { $sort: { createdAt: -1 } },
     ];
 
-    // Only apply limit if explicitly provided
     if (limitCount && Number.isFinite(limitCount)) {
         pipeline.push({ $limit: limitCount });
     }
 
-    const rows = await LocalPopularCategory.aggregate(pipeline);
+    let rows = await LocalPopularCategory.aggregate(pipeline);
 
-    // Attach absolute image URL for client use
-    return rows.map((row) => ({
-        ...row,
-        image: row.image,
-        imageUrl: row.image
-            ? row.image.startsWith("http")
-                ? row.image
-                : `${S3_BASE_URL}${row.image}`
-            : null,
-    }));
+    // ✅ Strategy 2: If no results or some categories missing, use name-matching fallback
+    if (rows.length === 0 || storeCategoryIds.length === 0) {
+        // Fetch all local popular categories and match by name
+        const allPopularCategories = await LocalPopularCategory.find({
+            deleted: false
+        }).lean();
+
+        // Normalize names for better matching
+        const normalizeName = (name) => {
+            return name
+                .toLowerCase()
+                .trim()
+                .replace(/\s+/g, ' ') // Multiple spaces to single space
+                .replace(/&/g, 'and') // & to and
+                .replace(/[^\w\s]/g, ''); // Remove special chars except spaces
+        };
+
+        // Get all store categories for name matching
+        const allStoreCategories = await StoreCategory.find({
+            deleted: false,
+            storeType: 'local'
+        }).lean();
+
+        // Match popular categories with store categories by name
+        const matchedCategories = [];
+        for (const popularCat of allPopularCategories) {
+            const popularCatName = popularCat.name.trim();
+            const normalizedPopularName = normalizeName(popularCatName);
+
+            // Try to find matching store category by name
+            let matchingStoreCategory = null;
+
+            // Strategy 2a: If PopularCategory has storeCategoryId, use it
+            if (popularCat.storeCategoryId) {
+                matchingStoreCategory = allStoreCategories.find(
+                    sc => sc._id.toString() === popularCat.storeCategoryId.toString()
+                );
+            }
+
+            // Strategy 2b: If not found, try name matching
+            if (!matchingStoreCategory) {
+                for (const storeCat of allStoreCategories) {
+                    const normalizedStoreCatName = normalizeName(storeCat.name);
+                    if (normalizedStoreCatName === normalizedPopularName ||
+                        normalizedStoreCatName.includes(normalizedPopularName) ||
+                        normalizedPopularName.includes(normalizedStoreCatName)) {
+                        matchingStoreCategory = storeCat;
+                        break;
+                    }
+                }
+            }
+
+            // Strategy 2c: If still not found, check if any nearby stores have this category name
+            if (!matchingStoreCategory && storeCategoryIds.length > 0) {
+                // Get store category names from nearby stores
+                const nearbyStoreCategories = await StoreCategory.find({
+                    _id: { $in: storeCategoryIds },
+                    deleted: false
+                }).lean();
+
+                for (const storeCat of nearbyStoreCategories) {
+                    const normalizedStoreCatName = normalizeName(storeCat.name);
+                    if (normalizedStoreCatName === normalizedPopularName ||
+                        normalizedStoreCatName.includes(normalizedPopularName) ||
+                        normalizedPopularName.includes(normalizedStoreCatName)) {
+                        matchingStoreCategory = storeCat;
+                        break;
+                    }
+                }
+            }
+
+            // If we found a match (by ID or name), include this popular category
+            if (matchingStoreCategory) {
+                matchedCategories.push({
+                    ...popularCat,
+                    storeCategory: matchingStoreCategory,
+                    storeCategoryId: matchingStoreCategory._id
+                });
+            } else if (storeCategoryIds.length === 0) {
+                // If no location filter, include all popular categories
+                matchedCategories.push({
+                    ...popularCat,
+                    storeCategory: null,
+                    storeCategoryId: popularCat.storeCategoryId
+                });
+            }
+        }
+
+        rows = matchedCategories;
+    }
+
+    // ✅ Attach store images to popular categories based on category name matching
+    if (rows.length > 0) {
+        // Get all stores with their categories
+        const stores = await Store.aggregate([
+            {
+                $match: {
+                    status: "A",
+                    ...(storeCategoryIds.length > 0 && { category: { $in: storeCategoryIds } })
+                }
+            },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "createdBy",
+                    foreignField: "_id",
+                    as: "owner",
+                    pipeline: [{ $project: { role: 1 } }]
+                }
+            },
+            {
+                $addFields: {
+                    ownerRole: { $arrayElemAt: ["$owner.role", 0] }
+                }
+            },
+            {
+                $match: {
+                    ownerRole: "retailer"
+                }
+            },
+            {
+                $lookup: {
+                    from: "store_categories",
+                    localField: "category",
+                    foreignField: "_id",
+                    as: "category_name"
+                }
+            },
+            {
+                $addFields: {
+                    category_name: {
+                        $ifNull: [
+                            { $arrayElemAt: ["$category_name.name", 0] },
+                            null
+                        ]
+                    }
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    coverImage: 1,
+                    images: 1,
+                    category_name: 1,
+                    name: 1
+                }
+            }
+        ]);
+
+        // Normalize function for name matching
+        const normalizeName = (name) => {
+            if (!name) return '';
+            return name
+                .toLowerCase()
+                .trim()
+                .replace(/\s+/g, ' ')
+                .replace(/&/g, 'and')
+                .replace(/[^\w\s]/g, '');
+        };
+
+        // Attach store images to each popular category
+        rows = rows.map((popularCat) => {
+            const popularCatName = popularCat.name || popularCat.storeCategory?.name || '';
+            const normalizedPopularName = normalizeName(popularCatName);
+
+            // Find stores matching this category
+            const matchingStores = stores.filter(store => {
+                if (!store.category_name) return false;
+                const normalizedStoreCatName = normalizeName(store.category_name);
+                return normalizedStoreCatName === normalizedPopularName ||
+                    normalizedStoreCatName.includes(normalizedPopularName) ||
+                    normalizedPopularName.includes(normalizedStoreCatName);
+            });
+
+            // Get up to 2 store images
+            const storeImages = [];
+            for (const store of matchingStores.slice(0, 2)) {
+                const image = store.coverImage || 
+                    (Array.isArray(store.images) && store.images.length > 0 ? store.images[0] : null);
+                if (image) {
+                    storeImages.push({
+                        _id: store._id,
+                        image: image.startsWith("http") ? image : `${S3_BASE_URL}${image}`,
+                        storeName: store.name
+                    });
+                }
+            }
+
+            return {
+                ...popularCat,
+                image: popularCat.image,
+                imageUrl: popularCat.image
+                    ? popularCat.image.startsWith("http")
+                        ? popularCat.image
+                        : `${S3_BASE_URL}${popularCat.image}`
+                    : null,
+                storeImages: storeImages // Attach store images
+            };
+        });
+    } else {
+        // If no rows, still format them properly
+        rows = rows.map((row) => ({
+            ...row,
+            image: row.image,
+            imageUrl: row.image
+                ? row.image.startsWith("http")
+                    ? row.image
+                    : `${S3_BASE_URL}${row.image}`
+                : null,
+            storeImages: []
+        }));
+    }
+
+    return rows;
 };
 
 const parseDescriptionField = (incoming) => {

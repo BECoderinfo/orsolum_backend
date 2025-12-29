@@ -9,6 +9,7 @@ import { getUserNotifications, markUserNotificationRead, dismissUserNotification
 import User from "../models/User.js";
 import { getCoordinatesFromAddress, getAddressFromCoordinates, searchPlaces, getDetailedAddressFromCoordinates, detectLocationByIP } from "../helper/geocoding.js";
 import { getActiveAds } from "../controllers/adController.js";
+import { jsonStatus, status } from "../helper/api.responses.js";
 const userRouter = express.Router();
 
 // image upload
@@ -135,24 +136,41 @@ userRouter.post('/search/places/v1', userAuthentication, async (req, res) => {
     try {
         const { query, lat, lng } = req.body;
 
+        // ✅ Enhanced validation
         if (!query) {
-            return res.status(400).json({
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
                 success: false,
                 message: "Search query is required"
             });
         }
 
-        const results = await searchPlaces(query, lat, lng);
+        if (typeof query !== 'string' || query.trim() === "") {
+            return res.status(status.BadRequest).json({
+                status: jsonStatus.BadRequest,
+                success: false,
+                message: "Search query cannot be empty"
+            });
+        }
 
-        return res.status(200).json({
+        console.log("Searching places for query:", query, "with location bias:", lat, lng);
+
+        const results = await searchPlaces(query.trim(), lat, lng);
+
+        console.log("Search results count:", results.length);
+
+        return res.status(status.OK).json({
+            status: jsonStatus.OK,
             success: true,
+            message: results.length > 0 ? "Places found" : "No places found",
             data: results
         });
     } catch (error) {
         console.error("Place search error:", error);
-        return res.status(500).json({
+        return res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
             success: false,
-            message: error.message
+            message: error.message || "Failed to search places"
         });
     }
 });
