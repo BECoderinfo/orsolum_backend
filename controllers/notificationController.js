@@ -121,8 +121,10 @@ const mapNotificationResponse = (notifications, userId) =>
     const isRead = readBy.some(
       (entry) => entry.userId?.toString() === userId.toString()
     );
+    // ✅ Remove action-type from response
+    const { action, ...notificationWithoutAction } = notification;
     return {
-      ...notification,
+      ...notificationWithoutAction,
       isRead,
     };
   });

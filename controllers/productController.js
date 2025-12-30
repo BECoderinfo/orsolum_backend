@@ -2775,6 +2775,14 @@ export const getStoreDetails = async (req, res) => {
         const { id } = req.params;
         const userId = req.user ? req.user._id : null; // Assume userId is available in the request
 
+        // ✅ Get location from multiple sources: body, query, or user profile (same as getAllStores)
+        const lat = req.body?.lat ?? req.query?.lat ?? req.user?.lat;
+        const long = req.body?.long ?? req.query?.long ?? req.user?.long;
+        
+        // Parse coordinates
+        const parsedLat = lat !== undefined && lat !== null && lat !== "" ? parseFloat(lat) : null;
+        const parsedLong = long !== undefined && long !== null && long !== "" ? parseFloat(long) : null;
+
         const store = await Store.findById(id);
         if (!store) {
             return res.status(status.NotFound).json({ status: jsonStatus.NotFound, success: false, message: "Not Found" });
@@ -2904,20 +2912,44 @@ export const getStoreDetails = async (req, res) => {
         let distance = null;
         let estimatedTime = null;
 
-        if (userId) {
+        // ✅ Calculate distance using same logic as getAllStores
+        // Priority: req.body/query lat/long > user profile lat/long
+        let userLat = parsedLat;
+        let userLong = parsedLong;
+        
+        // If not in request, try to get from user profile
+        if (userLat === null && userLong === null && userId) {
             const user = await User.findById(userId);
             if (user && user.lat && user.long) {
+                userLat = parseFloat(user.lat);
+                userLong = parseFloat(user.long);
+            }
+        }
+
+        // Calculate distance if we have both user and store coordinates
+        if (userLat !== null && userLong !== null && 
+            store.location && store.location.coordinates && 
+            Array.isArray(store.location.coordinates) &&
+            store.location.coordinates.length >= 2) {
+            
+            const storeLat = store.location.coordinates[1];
+            const storeLong = store.location.coordinates[0];
+            
+            if (Number.isFinite(storeLat) && Number.isFinite(storeLong) && 
+                Number.isFinite(userLat) && Number.isFinite(userLong)) {
                 const userLocationGeo = {
-                    latitude: parseFloat(user.lat),
-                    longitude: parseFloat(user.long)
+                    latitude: userLat,
+                    longitude: userLong
                 };
                 const storeLocationGeo = {
-                    latitude: store.location.coordinates[1],
-                    longitude: store.location.coordinates[0]
+                    latitude: storeLat,
+                    longitude: storeLong
                 };
                 const distanceInMeters = getDistance(userLocationGeo, storeLocationGeo);
                 distance = parseFloat((distanceInMeters / 1000).toFixed(2)); // Convert to km with 2 decimals
-                const speedKmPerHour = 30; // Adjust based on travel mode (e.g., walking ~5 km/h, car ~30 km/h)
+                
+                // Calculate estimated time (30 km/h average speed)
+                const speedKmPerHour = 30;
                 if (distance !== null && distance > 0) {
                     estimatedTime = Math.ceil((distance / speedKmPerHour) * 60); // Convert to minutes
                 }

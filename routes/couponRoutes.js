@@ -2,6 +2,7 @@ import express from 'express';
 import { 
   createCoupon, 
   getCoupons, 
+  getCouponById,
   getValidCoupons, 
   getApplicableCoupons,
   getCouponsByStore,
@@ -44,7 +45,8 @@ router.delete('/remove', authenticateToken, (req, res) => {
   res.status(405).json({ message: 'DELETE method not allowed for /remove. Use POST with couponId in body.' });
 });
 
-
+// Get single coupon by ID (admin, owner) - must be after specific routes
+router.get('/:id', authenticateToken, getCouponById);
 
 // Update coupon (admin, owner)
 router.put('/:id', authenticateToken, updateCoupon);

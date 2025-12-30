@@ -116,10 +116,24 @@ export const getCoupons = async (req, res) => {
 
     let query = { deleted: { $ne: true } };
 
-    // Filter by owner if specified
+    // If ownerType and ownerId are provided in query, use them
     if (ownerType && ownerId) {
       query.ownerType = ownerType;
       query.ownerId = new mongoose.Types.ObjectId(ownerId);
+    } else {
+      // Otherwise, filter by logged-in user's role and ID (unless admin)
+      if (req.user.role === 'admin') {
+        // Admin can see all coupons - no filter needed
+      } else if (req.user.role === 'seller' || req.user.role === 'retailer') {
+        // Seller/Retailer can only see their own coupons
+        query.ownerType = req.user.role;
+        query.ownerId = new mongoose.Types.ObjectId(req.user._id);
+      } else {
+        // Other roles cannot access coupons
+        return res.status(403).json(
+          errorResponse('Unauthorized to access coupons')
+        );
+      }
     }
 
     // Filter by active status
@@ -135,6 +149,57 @@ export const getCoupons = async (req, res) => {
     );
   } catch (error) {
     console.error('Error getting coupons:', error);
+    return res.status(500).json(
+      errorResponse('Internal server error')
+    );
+  }
+};
+
+// Get single coupon by ID
+export const getCouponById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json(
+        errorResponse('Invalid coupon ID format')
+      );
+    }
+
+    const coupon = await CouponCode.findById(id);
+    
+    if (!coupon || coupon.deleted) {
+      return res.status(404).json(
+        errorResponse('Coupon not found')
+      );
+    }
+
+    // Check if user is authorized to view this coupon
+    const userRole = req.user.role;
+    const userId = req.user._id.toString();
+    const couponOwnerId = coupon.ownerId ? coupon.ownerId.toString() : null;
+    const couponOwnerType = coupon.ownerType;
+
+    // Admin can view any coupon
+    if (userRole === 'admin') {
+      // Allow access
+    } 
+    // Owner can view their own coupon (seller/retailer)
+    else if (userRole === couponOwnerType && userId === couponOwnerId) {
+      // Allow access
+    } 
+    // Unauthorized
+    else {
+      return res.status(403).json(
+        errorResponse('Unauthorized to view this coupon')
+      );
+    }
+
+    return res.status(200).json(
+      successResponse(coupon, 'Coupon retrieved successfully')
+    );
+  } catch (error) {
+    console.error('Error getting coupon:', error);
     return res.status(500).json(
       errorResponse('Internal server error')
     );
@@ -563,6 +628,12 @@ export const deleteCoupon = async (req, res) => {
   try {
     const { id } = req.params;
 
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json(
+        errorResponse('Invalid coupon ID format')
+      );
+    }
+
     const coupon = await CouponCode.findById(id);
     if (!coupon) {
       return res.status(404).json(
@@ -570,14 +641,36 @@ export const deleteCoupon = async (req, res) => {
       );
     }
 
+    if (coupon.deleted) {
+      return res.status(404).json(
+        errorResponse('Coupon already deleted')
+      );
+    }
+
     // Check if user is authorized to delete this coupon
-    if (req.user.role === 'user') {
-      // Admin can delete any coupon
-    } else if (req.user.role === coupon.ownerType && req.user._id.toString() === coupon.ownerId.toString()) {
-      // Owner can delete their own coupon
-    } else {
+    const userRole = req.user.role;
+    const userId = req.user._id.toString();
+    const couponOwnerId = coupon.ownerId ? coupon.ownerId.toString() : null;
+    const couponOwnerType = coupon.ownerType;
+
+    // Admin can delete any coupon
+    if (userRole === 'admin') {
+      // Allow deletion
+    } 
+    // Owner can delete their own coupon (seller/retailer)
+    else if (userRole === couponOwnerType && userId === couponOwnerId) {
+      // Allow deletion
+    } 
+    // Unauthorized
+    else {
+      console.log('Delete authorization failed:', {
+        userRole,
+        userId,
+        couponOwnerType,
+        couponOwnerId
+      });
       return res.status(403).json(
-        errorResponse('Unauthorized to delete this coupon')
+        errorResponse('Unauthorized to delete this coupon. You can only delete coupons you created.')
       );
     }
 

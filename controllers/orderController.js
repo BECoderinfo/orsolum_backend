@@ -27,6 +27,11 @@ import Payment from "../models/Payment.js";
 import { notifyLowStock } from "../helper/notificationHelper.js";
 import { getCoordinatesFromAddress } from "../helper/geocoding.js";
 import User from "../models/User.js";
+import { 
+  calculateCoinsEarned, 
+  validateAndGetMaxCoinsUsable, 
+  hasPreviousOrders 
+} from "../helper/coinHelper.js";
 // import { image } from "pdfkit";
 
 
@@ -1474,15 +1479,19 @@ export const cartDetails = async (req, res) => {
         ? Math.min(rawDiscount, couponCode.upto)
         : rawDiscount;
 
-      // ✅ Fix: Calculate grand total correctly - subtract coupon from total before adding shipping/charges
-      // Don't subtract from overallGrandTotal here, calculate it properly below
+      // ✅ Ensure coupon discount doesn't exceed the subtotal (itemTotal - storeDiscounts)
+      // This prevents the grand total from becoming negative or zero
+      const subtotalBeforeCoupon = overallTotalAmount - overallDiscountAmount;
+      couponCodeDiscount = Math.min(couponCodeDiscount, subtotalBeforeCoupon);
     }
 
     // ✅ Fix: Calculate grand total correctly
-    // Add donation to grand total, then subtract coupon discount
+    // Formula: (itemTotal - storeDiscount) + shippingFee + charges + donation - couponDiscount
+    // overallGrandTotal already includes: itemTotal - storeDiscount + shippingFee + charges
+    // So we just need to add donation and subtract coupon discount
     overallGrandTotal = overallGrandTotal + donate - couponCodeDiscount;
     
-    // ✅ Ensure grand total is never negative
+    // ✅ Ensure grand total is never negative (shouldn't happen with above fix, but safety check)
     overallGrandTotal = Math.max(0, overallGrandTotal);
 
     let storesIds = enhancedList.map((store) => new ObjectId(store._id));
@@ -1543,6 +1552,41 @@ export const cartDetails = async (req, res) => {
       ]);
     }
 
+    // ✅ Calculate coins flow
+    let coinsEarnable = 0;
+    let coinsUsable = 0;
+    let userCoinBalance = 0;
+    let hasPreviousOrder = false;
+    
+    try {
+      // Check if user has previous orders
+      hasPreviousOrder = await hasPreviousOrders(userId, 'LocalStore');
+      
+      // Calculate coins that will be earned for this order
+      const productDetailsForCoins = enhancedList.flatMap(store => 
+        (store.productList || []).map(product => ({
+          productId: product._id,
+          productPrice: product.sellingPrice || 0,
+          quantity: product.cartDetails?.quantity || 0
+        })).filter(p => p.quantity > 0)
+      );
+      
+      if (productDetailsForCoins.length > 0) {
+        coinsEarnable = await calculateCoinsEarned(productDetailsForCoins);
+      }
+      
+      // Calculate maximum coins user can use (only if they have previous orders)
+      if (hasPreviousOrder) {
+        userCoinBalance = req.user.coins || 0;
+        const totalCoinsCanBeUsed = Math.floor(overallGrandTotal / 10); // 1 coin per ₹10
+        const maxUsable = await validateAndGetMaxCoinsUsable(userId, totalCoinsCanBeUsed, overallGrandTotal);
+        coinsUsable = maxUsable;
+      }
+    } catch (coinError) {
+      console.error("Error calculating coins:", coinError);
+      // Continue without coins if calculation fails
+    }
+
     // ✅ Calculate enhanced bill summary with all components and proper formatting
     // Ensure all values are complete and properly calculated
     const itemTotalValue = parseFloat(overallTotalAmount.toFixed(2));
@@ -1572,6 +1616,48 @@ export const cartDetails = async (req, res) => {
       finalTotal: totalPayableValue // Final amount to pay
     };
 
+    // ✅ Coins information
+    const coinsInfo = {
+      earnable: coinsEarnable,
+      usable: coinsUsable,
+      userBalance: userCoinBalance,
+      hasPreviousOrder: hasPreviousOrder,
+      canUseCoins: hasPreviousOrder && coinsUsable > 0
+    };
+
+    // ✅ Check if address is out of range and return error message
+    if (!isAddressInRange && addressDistanceKm !== null) {
+      return res.status(status.BadRequest).json({
+        status: jsonStatus.BadRequest,
+        success: false,
+        message: `Delivery address is ${addressDistanceKm.toFixed(2)} km away, which is outside the ${LOCAL_STORE_MAX_DISTANCE_KM} km store range. Please choose a nearby address within ${LOCAL_STORE_MAX_DISTANCE_KM} km.`,
+        data: {
+          stores: enhancedList,
+          address,
+          overallTotalAmount,
+          overallDiscountAmount,
+          overallShippingFee,
+          overallGrandTotal: 0, // Set to 0 if out of range
+          donate,
+          platformFee: PLATFORM_FEE,
+          charges: overallCharges,
+          couponCodeDiscount,
+          appliedOffers,
+          similarProducts,
+          billSummary: {
+            ...billSummary,
+            totalPayable: 0 // Set to 0 if out of range
+          },
+          coinsInfo,
+          addressRange: {
+            distanceKm: addressDistanceKm,
+            withinRange: false,
+            maxRangeKm: LOCAL_STORE_MAX_DISTANCE_KM
+          }
+        },
+      });
+    }
+
     res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
@@ -1589,6 +1675,7 @@ export const cartDetails = async (req, res) => {
         appliedOffers,
         similarProducts,
         billSummary, // Enhanced bill summary
+        coinsInfo, // ✅ Coins information
         addressRange: {
           distanceKm: addressDistanceKm,
           withinRange: isAddressInRange,
@@ -3832,14 +3919,22 @@ export const orderDetailsV2 = async (req, res) => {
     // - For COD or successful prepaid orders, we always have a payment record, so their original status is preserved.
     let displayStatus = orderDetail.status;
     let displayPaymentStatus = rawPaymentStatus;
+    let isCancelled = false;
 
     if (!hasPaymentRecord && (!rawPaymentStatus || rawPaymentStatus === "PENDING")) {
       displayStatus = "Cancelled";
       displayPaymentStatus = "FAILED";
+      isCancelled = true;
+    } else if (orderDetail.status === "Cancelled") {
+      isCancelled = true;
     }
 
     // Allow cancel only when real order exists (hasPaymentRecord) and status is Pending
-    const canCancel = Boolean(hasPaymentRecord) && displayStatus === "Pending";
+    // Don't show cancel button if order is already cancelled
+    const canCancel = Boolean(hasPaymentRecord) && displayStatus === "Pending" && !isCancelled;
+    
+    // Show re-order option if order is cancelled
+    const canReOrder = isCancelled;
 
     // Calculate enhanced summary fields according to standardized response structure
     const summary = orderDetail.summary || {};
@@ -3908,7 +4003,9 @@ export const orderDetailsV2 = async (req, res) => {
       estimatedDate: orderDetail.estimatedDate || null,
       status: displayStatus,
       paymentStatus: displayPaymentStatus,
-      canCancel,
+      canCancel, // ✅ Show cancel button only if order can be cancelled
+      canReOrder, // ✅ Show re-order button if order is cancelled
+      isCancelled, // ✅ Flag to indicate if order is cancelled
       paymentMethod: paymentInfo.paymentMethod || paymentInfo.paymentGateway || null,
       totalPrice: orderDetail.summary?.grandTotal || 0,
       discountAmount: orderDetail.summary?.discountAmount || 0,
@@ -4045,6 +4142,9 @@ export const reOrder = async (req, res) => {
 
     // Find the original order
     let originalOrder = null;
+    let isOnlineStoreOrder = false;
+
+    // 1️⃣ Try Local Store order (Order model)
     if (mongoose.isValidObjectId(id)) {
       originalOrder = await Order.findOne({
         _id: new mongoose.Types.ObjectId(id),
@@ -4056,6 +4156,28 @@ export const reOrder = async (req, res) => {
         createdBy: new mongoose.Types.ObjectId(req.user._id),
         $or: [{ orderId: id }, { cf_order_id: id }],
       });
+    }
+
+    // 2️⃣ If not found, try Online Store order (OnlineOrder model)
+    if (!originalOrder && mongoose.isValidObjectId(id)) {
+      originalOrder = await OnlineOrder.findOne({
+        _id: new mongoose.Types.ObjectId(id),
+        createdBy: new mongoose.Types.ObjectId(req.user._id),
+      });
+      if (originalOrder) {
+        isOnlineStoreOrder = true;
+      }
+    }
+
+    if (!originalOrder) {
+      const onlineOrderByAltId = await OnlineOrder.findOne({
+        createdBy: new mongoose.Types.ObjectId(req.user._id),
+        $or: [{ orderId: id }, { cf_order_id: id }],
+      });
+      if (onlineOrderByAltId) {
+        originalOrder = onlineOrderByAltId;
+        isOnlineStoreOrder = true;
+      }
     }
 
     if (!originalOrder) {
@@ -4098,48 +4220,202 @@ export const reOrder = async (req, res) => {
       });
     }
 
-    const store = await Store.findById(originalOrder.storeId);
-    if (!store) {
-      return res.status(404).json({
-        status: 404,
-        success: false,
-        message: "Store not found",
+    // 🔀 Decide flow based on order type
+    const isLocalStoreOrder = !isOnlineStoreOrder && !!originalOrder.storeId;
+
+    if (isLocalStoreOrder) {
+      // =========================
+      // 🛒 LOCAL STORE RE-ORDER
+      // =========================
+      const store = await Store.findById(originalOrder.storeId);
+      if (!store) {
+        return res.status(404).json({
+          status: 404,
+          success: false,
+          message: "Store not found",
+        });
+      }
+
+      // Validate delivery distance
+      const storeCoords = store?.location?.coordinates || [];
+      const storeLat = typeof storeCoords[1] === "number" ? storeCoords[1] : null;
+      const storeLong = typeof storeCoords[0] === "number" ? storeCoords[0] : null;
+      const addressLat = Number(address.lat);
+      const addressLong = Number(address.long);
+
+      if (
+        storeLat === null ||
+        storeLong === null ||
+        !Number.isFinite(addressLat) ||
+        !Number.isFinite(addressLong)
+      ) {
+        return res.status(400).json({
+          status: 400,
+          success: false,
+          message: "Please select an address with a valid location to continue delivery",
+        });
+      }
+
+      const deliveryDistanceKm = calculateDistanceKm(storeLat, storeLong, addressLat, addressLong);
+      if (deliveryDistanceKm === null || deliveryDistanceKm > LOCAL_STORE_MAX_DISTANCE_KM) {
+        return res.status(400).json({
+          status: 400,
+          success: false,
+          message: `Delivery address is outside the ${LOCAL_STORE_MAX_DISTANCE_KM} km store range. Please choose a nearby address.`,
+          distanceKm: deliveryDistanceKm,
+        });
+      }
+
+      // Add products from original order to cart
+      const productDetails = originalOrder.productDetails || [];
+      if (productDetails.length === 0) {
+        return res.status(400).json({
+          status: 400,
+          success: false,
+          message: "Original order has no products to re-order",
+        });
+      }
+
+      // Clear existing cart for this store
+      await Cart.updateMany(
+        { createdBy: req.user._id, storeId: originalOrder.storeId, deleted: false },
+        { $set: { deleted: true } }
+      );
+
+      // Add products to cart
+      const cartItems = [];
+      for (const product of productDetails) {
+        const productDoc = await Product.findById(product.productId);
+        if (!productDoc || productDoc.deleted || productDoc.status !== "A") {
+          continue; // Skip unavailable products
+        }
+
+        // Check stock
+        const requestedQty = product.quantity || 1;
+        if (productDoc.stock < requestedQty) {
+          return res.status(400).json({
+            status: 400,
+            success: false,
+            message: `${productDoc.productName} is out of stock. Available: ${productDoc.stock}`,
+          });
+        }
+
+        const cartItem = new Cart({
+          createdBy: req.user._id,
+          storeId: originalOrder.storeId,
+          productId: product.productId,
+          quantity: requestedQty,
+          sellingPrice: product.productPrice || productDoc.sellingPrice,
+        });
+        await cartItem.save();
+        cartItems.push(cartItem);
+      }
+
+      if (cartItems.length === 0) {
+        return res.status(400).json({
+          status: 400,
+          success: false,
+          message: "No products available for re-order",
+        });
+      }
+
+      // Now create order using createOrderV2 logic (simplified)
+      const donateValue = Number(donate || 0);
+      const validPaymentTypes = ["CARD", "WALLET", "BANK", "COD", "QR"];
+      const finalPaymentType = (paymentType && validPaymentTypes.includes(paymentType.toUpperCase()))
+        ? paymentType.toUpperCase()
+        : "COD";
+
+      // Calculate totals
+      let storeTotal = 0;
+      let storeDiscountAmount = 0;
+      let storeShippingFee = 0;
+      const productDetailsForOrder = [];
+
+      for (const cartItem of cartItems) {
+        const product = await Product.findById(cartItem.productId);
+        if (!product) continue;
+
+        const itemPrice = cartItem.sellingPrice || product.sellingPrice;
+        const itemQty = cartItem.quantity;
+        const itemTotal = itemPrice * itemQty;
+        storeTotal += itemTotal;
+
+        productDetailsForOrder.push({
+          productId: product._id,
+          mrp: product.mrp,
+          productPrice: itemPrice,
+          quantity: itemQty,
+          freeQuantity: 0,
+        });
+      }
+
+      // Apply coupon if provided
+      let couponCodeDiscount = 0;
+      if (coupon) {
+        const couponDoc = await CouponCode.findOne({ code: coupon, deleted: false });
+        if (couponDoc && couponDoc.status === "active") {
+          // TODO: Implement detailed coupon logic if needed
+          couponCodeDiscount = 0;
+        }
+      }
+
+      const grandTotal = storeTotal - storeDiscountAmount - couponCodeDiscount + storeShippingFee + donateValue;
+
+      // Create order
+      const orderId = `ORD_${Date.now()}`;
+      const newOrder = new Order({
+        createdBy: req.user._id,
+        storeId: originalOrder.storeId,
+        orderId,
+        paymentStatus: "PENDING",
+        paymentType: finalPaymentType,
+        address: address.toObject ? address.toObject() : address,
+        summary: {
+          totalAmount: storeTotal,
+          discountAmount: storeDiscountAmount + couponCodeDiscount,
+          shippingFee: storeShippingFee,
+          donate: donateValue,
+          grandTotal,
+        },
+        productDetails: productDetailsForOrder,
+        status: "Pending",
+        shiprocket: store?.shiprocket?.pickup_addresses ? {
+          pickup_addresses: store.shiprocket.pickup_addresses || [],
+          default_pickup_address: store.shiprocket.default_pickup_address || null
+        } : {}
+      });
+
+      await newOrder.save();
+
+      // Clear cart
+      await Cart.updateMany(
+        { createdBy: req.user._id, storeId: originalOrder.storeId, deleted: false },
+        { $set: { deleted: true } }
+      );
+
+      return res.status(200).json({
+        status: 200,
+        success: true,
+        message: "Order re-created successfully",
+        data: {
+          orderId: newOrder.orderId,
+          _id: newOrder._id,
+          grandTotal,
+          paymentType: finalPaymentType,
+        },
       });
     }
 
-    // Validate delivery distance
-    const storeCoords = store?.location?.coordinates || [];
-    const storeLat = typeof storeCoords[1] === "number" ? storeCoords[1] : null;
-    const storeLong = typeof storeCoords[0] === "number" ? storeCoords[0] : null;
-    const addressLat = Number(address.lat);
-    const addressLong = Number(address.long);
+    // =========================
+    // 🌐 ONLINE STORE RE-ORDER
+    // =========================
 
-    if (
-      storeLat === null ||
-      storeLong === null ||
-      !Number.isFinite(addressLat) ||
-      !Number.isFinite(addressLong)
-    ) {
-      return res.status(400).json({
-        status: 400,
-        success: false,
-        message: "Please select an address with a valid location to continue delivery",
-      });
-    }
+    const donateValue = Number(donate || 0);
 
-    const deliveryDistanceKm = calculateDistanceKm(storeLat, storeLong, addressLat, addressLong);
-    if (deliveryDistanceKm === null || deliveryDistanceKm > LOCAL_STORE_MAX_DISTANCE_KM) {
-      return res.status(400).json({
-        status: 400,
-        success: false,
-        message: `Delivery address is outside the ${LOCAL_STORE_MAX_DISTANCE_KM} km store range. Please choose a nearby address.`,
-        distanceKm: deliveryDistanceKm,
-      });
-    }
-
-    // Add products from original order to cart
-    const productDetails = originalOrder.productDetails || [];
-    if (productDetails.length === 0) {
+    // Build product details & totals from original online order
+    const originalProducts = originalOrder.productDetails || [];
+    if (originalProducts.length === 0) {
       return res.status(400).json({
         status: 400,
         success: false,
@@ -4147,42 +4423,25 @@ export const reOrder = async (req, res) => {
       });
     }
 
-    // Clear existing cart for this store
-    await Cart.updateMany(
-      { createdBy: req.user._id, storeId: originalOrder.storeId, deleted: false },
-      { $set: { deleted: true } }
-    );
+    let totalAmount = 0;
+    const productDetailsForOnlineOrder = [];
 
-    // Add products to cart
-    const cartItems = [];
-    for (const product of productDetails) {
-      const productDoc = await Product.findById(product.productId);
-      if (!productDoc || productDoc.deleted || productDoc.status !== "A") {
-        continue; // Skip unavailable products
-      }
+    for (const item of originalProducts) {
+      const qty = item.quantity || 1;
+      const price = item.productPrice || 0;
 
-      // Check stock
-      const requestedQty = product.quantity || 1;
-      if (productDoc.stock < requestedQty) {
-        return res.status(400).json({
-          status: 400,
-          success: false,
-          message: `${productDoc.productName} is out of stock. Available: ${productDoc.stock}`,
-        });
-      }
+      totalAmount += price * qty;
 
-      const cartItem = new Cart({
-        createdBy: req.user._id,
-        storeId: originalOrder.storeId,
-        productId: product.productId,
-        quantity: requestedQty,
-        sellingPrice: product.productPrice || productDoc.sellingPrice,
+      productDetailsForOnlineOrder.push({
+        productId: item.productId,
+        productPrice: price,
+        mrp: item.mrp,
+        qty: item.qty,
+        quantity: qty,
       });
-      await cartItem.save();
-      cartItems.push(cartItem);
     }
 
-    if (cartItems.length === 0) {
+    if (productDetailsForOnlineOrder.length === 0) {
       return res.status(400).json({
         status: 400,
         success: false,
@@ -4190,92 +4449,75 @@ export const reOrder = async (req, res) => {
       });
     }
 
-    // Now create order using createOrderV2 logic
-    // We'll reuse the createOrderV2 function by calling it internally
-    // But for simplicity, we'll create the order directly here
-    const donateValue = Number(donate || 0);
-    const validPaymentTypes = ["CARD", "WALLET", "BANK", "COD", "QR"];
-    const finalPaymentType = (paymentType && validPaymentTypes.includes(paymentType.toUpperCase()))
-      ? paymentType.toUpperCase()
-      : "COD";
-
-    // Calculate totals
-    let storeTotal = 0;
-    let storeDiscountAmount = 0;
-    let storeShippingFee = 0;
-    const productDetailsForOrder = [];
-
-    for (const cartItem of cartItems) {
-      const product = await Product.findById(cartItem.productId);
-      if (!product) continue;
-
-      const itemPrice = cartItem.sellingPrice || product.sellingPrice;
-      const itemQty = cartItem.quantity;
-      const itemTotal = itemPrice * itemQty;
-      storeTotal += itemTotal;
-
-      productDetailsForOrder.push({
-        productId: product._id,
-        mrp: product.mrp,
-        productPrice: itemPrice,
-        quantity: itemQty,
-        freeQuantity: 0,
-      });
-    }
-
-    // Apply coupon if provided
+    // Coupon logic (similar to createOnlineOrder but simplified)
     let couponCodeDiscount = 0;
+    let couponCodeDoc = null;
+
     if (coupon) {
-      const couponDoc = await CouponCode.findOne({ code: coupon, deleted: false });
-      if (couponDoc && couponDoc.status === "active") {
-        // Apply coupon logic here
-        couponCodeDiscount = 0; // Calculate based on coupon type
+      couponCodeDoc = await CouponCode.findById(coupon);
+      if (!couponCodeDoc || couponCodeDoc.deleted) {
+        return res.status(404).json({ success: false, message: "Coupon not found or deleted" });
       }
+
+      if (couponCodeDoc.use === "one") {
+        const alreadyUsed = await CouponHistory.findOne({ couponId: couponCodeDoc._id, userId: req.user._id });
+        if (alreadyUsed) {
+          return res.status(400).json({ success: false, message: "Coupon already used" });
+        }
+      }
+
+      if (couponCodeDoc.minPrice && totalAmount < couponCodeDoc.minPrice) {
+        return res.status(400).json({
+          success: false,
+          message: `Minimum purchase of ${couponCodeDoc.minPrice} required for this coupon`,
+        });
+      }
+
+      const rawDiscount = (totalAmount * couponCodeDoc.discount) / 100;
+      couponCodeDiscount = couponCodeDoc.upto ? Math.min(rawDiscount, couponCodeDoc.upto) : rawDiscount;
     }
 
-    const grandTotal = storeTotal - storeDiscountAmount - couponCodeDiscount + storeShippingFee + donateValue;
+    // Shipping fee rule for Online Store (reuse existing logic: free over 500)
+    const shippingFee = totalAmount > 500 ? 0 : 50;
+    const grandTotal = totalAmount - couponCodeDiscount + shippingFee + donateValue;
 
-    // Create order
-    const orderId = `ORD_${Date.now()}`;
-    const newOrder = new Order({
+    const newOnlineOrderId = `ONLINE_ORDER_${Date.now()}`;
+
+    const newOnlineOrder = new OnlineOrder({
       createdBy: req.user._id,
-      storeId: originalOrder.storeId,
-      orderId,
-      paymentStatus: "PENDING",
-      paymentType: finalPaymentType,
+      cf_order_id: null,
+      productDetails: productDetailsForOnlineOrder,
       address: address.toObject ? address.toObject() : address,
+      orderId: newOnlineOrderId,
+      status: "Pending",
+      isReturn: false,
+      returnStatus: "non",
+      paymentStatus: "PENDING",
       summary: {
-        totalAmount: storeTotal,
-        discountAmount: storeDiscountAmount + couponCodeDiscount,
-        shippingFee: storeShippingFee,
+        totalAmount,
+        discountAmount: couponCodeDiscount,
+        shippingFee,
         donate: donateValue,
         grandTotal,
+        coinUsed: 0,
+        coinsEarned: 0,
+        coinsCredited: false,
       },
-      productDetails: productDetailsForOrder,
-      status: "Pending",
-      shiprocket: store?.shiprocket?.pickup_addresses ? {
-        pickup_addresses: store.shiprocket.pickup_addresses || [],
-        default_pickup_address: store.shiprocket.default_pickup_address || null
-      } : {}
+      refund: false,
+      isPremiumPurchase: false,
     });
 
-    await newOrder.save();
-
-    // Clear cart
-    await Cart.updateMany(
-      { createdBy: req.user._id, storeId: originalOrder.storeId, deleted: false },
-      { $set: { deleted: true } }
-    );
+    await newOnlineOrder.save();
 
     return res.status(200).json({
       status: 200,
       success: true,
-      message: "Order re-created successfully",
+      message: "Online order re-created successfully",
       data: {
-        orderId: newOrder.orderId,
-        _id: newOrder._id,
+        orderId: newOnlineOrder.orderId,
+        _id: newOnlineOrder._id,
         grandTotal,
-        paymentType: finalPaymentType,
+        paymentStatus: newOnlineOrder.paymentStatus,
       },
     });
   } catch (error) {
