@@ -75,7 +75,10 @@ const OrderSchema = new mongoose.Schema({
         discountAmount: { type: Number, required: true, default: 0 },
         shippingFee: { type: Number, required: true, default: 0 },
         donate: { type: Number, required: true },
-        grandTotal: { type: Number, required: true }
+        grandTotal: { type: Number, required: true },
+        coinUsed: { type: Number, default: 0 },
+        coinsEarned: { type: Number, default: 0 },
+        coinsCredited: { type: Boolean, default: false }
     },
     refund: {
         type: Boolean,

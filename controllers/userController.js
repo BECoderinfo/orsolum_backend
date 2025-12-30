@@ -10,6 +10,8 @@ import { sendSms } from '../helper/sendSms.js';
 import axios from 'axios';
 import mongoose from 'mongoose';
 import { processGoogleMapsLink } from '../helper/latAndLong.js';
+import CoinHistory from '../models/CoinHistory.js';
+import { getUserCoinStats } from '../helper/coinHelper.js';
 
 export const uploadProfileImage = async (req, res) => {
     try {
@@ -250,11 +252,83 @@ export const loginUser = async (req, res) => {
 
 export const getMyProfile = async (req, res) => {
     try {
+        // Get coin statistics
+        const coinStats = await getUserCoinStats(req.user._id);
+        
+        const userData = {
+            ...req.user.toObject(),
+            coins: coinStats
+        };
 
-        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: req.user });
+        res.status(status.OK).json({ status: jsonStatus.OK, success: true, data: userData });
     } catch (error) {
         res.status(status.InternalServerError).json({ status: jsonStatus.InternalServerError, success: false, message: error.message });
         return catchError('getMyProfile', error, req, res);
+    }
+};
+
+// Get user coin balance and statistics
+export const getMyCoins = async (req, res) => {
+    try {
+        const coinStats = await getUserCoinStats(req.user._id);
+        
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: coinStats
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('getMyCoins', error, req, res);
+    }
+};
+
+// Get user coin history
+export const getMyCoinHistory = async (req, res) => {
+    try {
+        const { skip = 1, limit: limitParam = 10, type } = req.query;
+        const userId = req.user._id;
+        
+        const limit = Number(limitParam) || 10;
+        const skipValue = (Number(skip) - 1) * limit;
+
+        const query = { createdBy: userId };
+        if (type && ['Added', 'Deducted', 'Used', 'Refunded'].includes(type)) {
+            query.type = type;
+        }
+
+        const histories = await CoinHistory.find(query)
+            .populate('orderId', 'orderId status')
+            .sort({ createdAt: -1 })
+            .skip(skipValue)
+            .limit(limit);
+
+        const total = await CoinHistory.countDocuments(query);
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: {
+                histories,
+                pagination: {
+                    total,
+                    page: Number(skip),
+                    limit,
+                    totalPages: Math.ceil(total / limit)
+                }
+            }
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('getMyCoinHistory', error, req, res);
     }
 };
 

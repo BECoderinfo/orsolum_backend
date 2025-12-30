@@ -1,6 +1,6 @@
 import express from "express";
 import { body } from 'express-validator';
-import { uploadProfileImage, loginUser, registerUser, sendLoginOtp, sendRegisterOtp, getMyProfile, updateMyProfile, deleteMyAccount, purchasePremium, reActivateMyAccount, logoutUser, shareMyProfile } from "../controllers/userController.js";
+import { uploadProfileImage, loginUser, registerUser, sendLoginOtp, sendRegisterOtp, getMyProfile, updateMyProfile, deleteMyAccount, purchasePremium, reActivateMyAccount, logoutUser, shareMyProfile, getMyCoins, getMyCoinHistory } from "../controllers/userController.js";
 import { createAddress, editAddress, deleteAddress, getAddress, getAllAddress, getUserAllAddress, addProductToCart, setDefaultAddress } from "../controllers/orderController.js";
 import { getAppThemeSettings } from "../controllers/adminController.js";
 import { userAuthentication } from "../middlewares/middleware.js";
@@ -35,6 +35,12 @@ userRouter.put('/user/update/my/profile/v1', userAuthentication, uploadUserImage
 userRouter.get('/user/my/profile/share/v1', userAuthentication, shareMyProfile);
 userRouter.delete('/delete/my/account/v1', userAuthentication, deleteMyAccount);
 userRouter.post('/re-activate/my/account/v1', reActivateMyAccount);
+
+// Coins / Loyalty Points
+userRouter.get('/my/coins/v1', userAuthentication, getMyCoins);
+userRouter.get('/my/coins/history/v1', userAuthentication, getMyCoinHistory);
+userRouter.get('/user/my/coins/v1', userAuthentication, getMyCoins);
+userRouter.get('/user/my/coins/history/v1', userAuthentication, getMyCoinHistory);
 
 // premium purchase
 userRouter.post('/purchase/premium/v1', userAuthentication, purchasePremium);

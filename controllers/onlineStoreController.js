@@ -16,6 +16,13 @@ import { signedUrl } from '../helper/s3.config.js';
 import Payment from '../models/Payment.js';
 import Refund from '../models/Refund.js';
 import CoinHistory from '../models/CoinHistory.js';
+import { 
+    calculateCoinsEarned, 
+    validateAndGetMaxCoinsUsable, 
+    deductCoins,
+    refundCoins,
+    hasPreviousOrders 
+} from '../helper/coinHelper.js';
 import User from '../models/User.js';
 import Admin from '../models/Admin.js';
 import PopularCategory from '../models/PopularCategory.js';
@@ -3096,6 +3103,28 @@ export const onlineStoreCartDetails = async (req, res) => {
         // ✅ Fix: Calculate grand total correctly - ensure it's never negative
         overallGrandTotal = Math.max(0, overallTotalAmount - couponCodeDiscount + overallShippingFee + donate);
 
+        // Check if user has previous orders (to determine if coins should be shown)
+        const hasPreviousOrder = await hasPreviousOrders(userId, 'OnlineStore');
+        
+        // Calculate coins that will be earned for this order
+        const productDetailsForCoins = enhancedCart
+            .filter(Boolean)
+            .map(item => ({
+                productId: item._id,
+                productPrice: item.unitDetails.sellingPrice,
+                quantity: item.quantity
+            }));
+        const coinsEarnable = await calculateCoinsEarned(productDetailsForCoins);
+
+        // Calculate maximum coins user can use (only if they have previous orders)
+        let coinsUsable = 0;
+        let userCoinBalance = 0;
+        if (hasPreviousOrder) {
+            userCoinBalance = req.user.coins || 0;
+            const maxUsable = await validateAndGetMaxCoinsUsable(userId, totalCoinsCanBeUsed, overallGrandTotal);
+            coinsUsable = maxUsable;
+        }
+
         // ✅ Calculate enhanced bill summary with proper values - ensure all fields are complete
         const itemTotalValue = parseFloat(overallTotalAmount.toFixed(2));
         const donationAmountValue = parseFloat(donate.toFixed(2));
@@ -3129,7 +3158,14 @@ export const onlineStoreCartDetails = async (req, res) => {
                 overallGrandTotal,
                 donate,
                 couponCodeDiscount,
-                totalCoinsCanBeUsed: totalCoinsCanBeUsed > req.user.coins ? 0 : totalCoinsCanBeUsed, // New field added
+                // Coin information (only shown if user has previous orders)
+                coins: hasPreviousOrder ? {
+                    balance: userCoinBalance,
+                    usable: coinsUsable,
+                    earnable: coinsEarnable,
+                    canBeUsed: totalCoinsCanBeUsed
+                } : null,
+                totalCoinsCanBeUsed: hasPreviousOrder ? (totalCoinsCanBeUsed > req.user.coins ? 0 : totalCoinsCanBeUsed) : 0,
                 billSummary // Enhanced bill summary
             }
         });
@@ -3227,14 +3263,51 @@ export const createOnlineOrder = async (req, res) => {
 
         // 5️⃣ Shipping fee
         const shippingFee = totalAmount > 500 ? 0 : 50;
-        const grandTotal = totalAmount - couponCodeDiscount + shippingFee + Number(donate) - Number(coinUsed);
+        const subtotal = totalAmount - couponCodeDiscount + shippingFee + Number(donate);
+
+        // 6️⃣ Validate and process coin usage
+        let finalCoinUsed = 0;
+        let coinsUsable = 0;
+        const hasPreviousOrder = await hasPreviousOrders(userId, 'OnlineStore');
+
+        if (hasPreviousOrder && Number(coinUsed) > 0) {
+            // Calculate maximum coins user can use based on products
+            let totalCoinsCanBeUsed = 0;
+            for (const cart of carts) {
+                const product = cart.productId;
+                if (product && product.coinCanUsed) {
+                    totalCoinsCanBeUsed += (product.coinCanUsed || 0) * (cart.quantity || 1);
+                }
+            }
+
+            // Validate coins
+            coinsUsable = await validateAndGetMaxCoinsUsable(userId, totalCoinsCanBeUsed, subtotal);
+            finalCoinUsed = Math.min(Number(coinUsed), coinsUsable);
+
+            // Deduct coins if user wants to use them
+            if (finalCoinUsed > 0) {
+                try {
+                    await deductCoins(userId, finalCoinUsed, null, 'OnlineStore'); // Order ID will be set after order creation
+                } catch (coinError) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        message: coinError.message || "Failed to deduct coins" 
+                    });
+                }
+            }
+        }
+
+        const grandTotal = subtotal - finalCoinUsed;
 
         // ✅ Validate grandTotal
         if (!grandTotal || grandTotal <= 0) {
             return res.status(400).json({ success: false, message: "Order amount must be greater than zero" });
         }
 
-        // 6️⃣ Cashfree payment session
+        // 7️⃣ Calculate coins that will be earned (for display, not credited yet)
+        const coinsEarned = await calculateCoinsEarned(productDetails);
+
+        // 8️⃣ Cashfree payment session
         const paymentData = {
             order_currency: "INR",
             order_amount: grandTotal,
@@ -3244,7 +3317,7 @@ export const createOnlineOrder = async (req, res) => {
                 donate: donate.toString(),
                 addressId,
                 userId: userId.toString(),
-                coinUsed: coinUsed.toString()
+                coinUsed: finalCoinUsed.toString()
             },
             customer_details: {
                 customer_id: userId,
@@ -3261,7 +3334,7 @@ export const createOnlineOrder = async (req, res) => {
 
         const cashFreeSession = await axios.post(process.env.CF_CREATE_PRODUCT_URL, paymentData, { headers });
 
-        // 7️⃣ Save the order in MongoDB
+        // 9️⃣ Save the order in MongoDB
         const newOrder = new OnlineOrder({
             createdBy: userId,
             address: address.toObject ? address.toObject() : address,
@@ -3275,7 +3348,9 @@ export const createOnlineOrder = async (req, res) => {
                 shippingFee,
                 donate: Number(donate),
                 grandTotal,
-                coinUsed: Number(coinUsed)
+                coinUsed: finalCoinUsed,
+                coinsEarned: coinsEarned,
+                coinsCredited: false
             }
         });
 
@@ -3283,10 +3358,26 @@ export const createOnlineOrder = async (req, res) => {
         console.log("Saved Order:", savedOrder);
 
         if (!savedOrder || !savedOrder._id) {
+            // Refund coins if order creation failed
+            if (finalCoinUsed > 0) {
+                try {
+                    await refundCoins(userId, finalCoinUsed, null, 'OnlineStore');
+                } catch (refundError) {
+                    console.error("Failed to refund coins after order creation failure:", refundError);
+                }
+            }
             return res.status(500).json({
                 success: false,
                 message: "Order created but ID could not be retrieved. Check server logs."
             });
+        }
+
+        // Update coin history with order ID if coins were used
+        if (finalCoinUsed > 0) {
+            await CoinHistory.updateOne(
+                { createdBy: userId, orderId: null, type: 'Used', coins: finalCoinUsed },
+                { $set: { orderId: savedOrder._id } }
+            );
         }
 
         // ✅ Clear cart items immediately after order creation (before payment)
@@ -4127,6 +4218,40 @@ export const onlineOrderChangeStatus = async (req, res) => {
         let changeOrderStatus = {};
 
         if (orderStatus === "Delivered") {
+            changeOrderStatus = await OnlineOrder.findByIdAndUpdate(
+                id,
+                { 
+                    status: orderStatus, 
+                    estimatedDate,
+                    deliverdTime: new Date()
+                },
+                { new: true, runValidators: true }
+            );
+
+            // ✅ Credit coins only when order is delivered (if not already credited)
+            if (changeOrderStatus && !changeOrderStatus.summary?.coinsCredited) {
+                const coinsEarned = changeOrderStatus.summary?.coinsEarned || 0;
+                if (coinsEarned > 0) {
+                    try {
+                        const { creditCoins } = await import('../helper/coinHelper.js');
+                        await creditCoins(
+                            changeOrderStatus.createdBy.toString(),
+                            coinsEarned,
+                            changeOrderStatus._id,
+                            'OnlineStore'
+                        );
+                        
+                        // Mark coins as credited
+                        await OnlineOrder.findByIdAndUpdate(id, {
+                            'summary.coinsCredited': true
+                        });
+                    } catch (coinError) {
+                        console.error('Error crediting coins on delivery:', coinError);
+                        // Continue even if coin credit fails
+                    }
+                }
+            }
+        } else {
             changeOrderStatus = await OnlineOrder.findByIdAndUpdate(
                 id,
                 { status: orderStatus, estimatedDate },

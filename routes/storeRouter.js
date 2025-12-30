@@ -15,6 +15,7 @@ import {
     createPopularProduct,
     deletePopularProduct,
     searchPopularProduct,
+    shareRetailerStore,
 } from "../controllers/storeController.js";
 import { retailerAuthentication } from "../middlewares/middleware.js";
 import { uploadStoreImagesMulter } from "../helper/uploadImage.js";
@@ -54,6 +55,11 @@ retailerRouter.get(
     "/retailer/store/details/v1",
     retailerAuthentication,
     storeDetails
+);
+retailerRouter.get(
+    "/retailer/share/store/v1",
+    retailerAuthentication,
+    shareRetailerStore
 );
 retailerRouter.put(
     "/retailer/delete/store/image/v1",

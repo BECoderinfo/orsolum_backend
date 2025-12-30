@@ -1,6 +1,7 @@
 import express from "express";
 import { body } from 'express-validator';
 import { createAdmin, loginAdmin, uploadStoreCategoryImage, createStoreCategory, editStoreCategory, deleteStoreCategory, listStoreCategory, listStores, storeDetails, acceptStore, rejectStore, createStore, deleteStore, listProducts, listSellerProducts, productDetails, acceptProduct, rejectProduct, deleteLocalProduct, createCouponCode, updateCouponCode, deleteCouponCode, listCouponCode, createMembership, updateMembership, getMembershipDetails, listUsers, userDetails, inActiveUserDetails, listPayments, paymentDetails, listLocalStoreOrders, localStoreOrderDetails, listOnlineOrders, onlineOrderDetails, getOnlineReturnOrder, getReturnOrderDetails, returnAdminChangeStatus, createOffer, listOffers, updateOffer, deleteOffer, getWelcomeImage, uploadWelcomeImage, deleteWelcomeImage, saveStorePopularProducts, updateStoreRating, resetAllRatings, syncSellerProductsToOnline, fixPurseProductsCategory, getAppThemeSettings, updateAppThemeSettings, getAdminStore, upsertAdminStore, deleteAdminStore, listAdminProducts, createAdminProduct, updateAdminProduct, deleteAdminProduct, uploadThemeMedia } from "../controllers/adminController.js";
+import { listCoinConfigurations, createCoinConfiguration, updateCoinConfiguration, deleteCoinConfiguration, adminGetCoinHistory, adminGetCoinStatistics } from "../controllers/coinController.js";
 import { uploadAdMediaAny, uploadAdMediaMulter, uploadStoreImagesMulter, uploadPopularCategoryImageMulter } from "../helper/uploadImage.js";
 import { adminAuthentication, userAuthentication } from "../middlewares/middleware.js";
 import { createWorkHours, getAllWorkHours, updateWorkHours, deleteWorkHours } from "../controllers/workHoursController.js";
@@ -221,5 +222,13 @@ adminRouter.put('/admin/ads/config/v1', adminAuthentication, adminUpdateAdsConfi
 adminRouter.get('/admin/app/theme/settings/v1', adminAuthentication, getAppThemeSettings);
 adminRouter.put('/admin/app/theme/settings/v1', adminAuthentication, updateAppThemeSettings);
 adminRouter.post('/admin/app/theme/upload/media/v1', adminAuthentication, uploadAdMediaAny, uploadThemeMedia);
+
+// Coins / Loyalty Points Management
+adminRouter.get('/admin/coins/configurations/v1', adminAuthentication, listCoinConfigurations);
+adminRouter.post('/admin/coins/configuration/v1', adminAuthentication, createCoinConfiguration);
+adminRouter.put('/admin/coins/configuration/:id/v1', adminAuthentication, updateCoinConfiguration);
+adminRouter.delete('/admin/coins/configuration/:id/v1', adminAuthentication, deleteCoinConfiguration);
+adminRouter.get('/admin/coins/history/v1', adminAuthentication, adminGetCoinHistory);
+adminRouter.get('/admin/coins/statistics/v1', adminAuthentication, adminGetCoinStatistics);
 
 export default adminRouter;

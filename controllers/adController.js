@@ -108,7 +108,7 @@ const getAdsConfig = async () => {
  * It looks at active ads and paid/approved ads that are already scheduled.
  * IMPORTANT: Only checks ads for the SAME STORE - different stores can have ads in the same location.
  */
-const findOverlappingAds = async ({
+export const findOverlappingAds = async ({
   location,
   projectedStart,
   projectedEnd,
@@ -810,6 +810,20 @@ export const adminUpdateAdStatus = async (req, res) => {
       ad.status = "rejected";
       ad.rejectionReason = rejectionReason || "Rejected by admin";
     } else if (newStatus === "approved") {
+      // ✅ Check for date conflicts BEFORE approving if startDate is provided
+      // This prevents approving ads for dates where ads are already running
+      if (startDate) {
+        const { start } = projectAdDates(startDate);
+        const conflictCheck = await ensureNoActiveConflict(start);
+        if (conflictCheck.conflict) {
+          return res.status(status.BadRequest).json({
+            status: jsonStatus.BadRequest,
+            success: false,
+            message: conflictCheck.message,
+          });
+        }
+      }
+      
       // Mark as approved
       ad.status = "approved";
       ad.approvedBy = adminId;
@@ -823,6 +837,7 @@ export const adminUpdateAdStatus = async (req, res) => {
       const finalPaymentStatus = paymentStatus || ad.paymentStatus;
       if (finalPaymentStatus === "paid") {
         const { start } = projectAdDates(startDate);
+        // Double-check conflict (in case startDate wasn't provided earlier)
         const conflictCheck = await ensureNoActiveConflict(start);
         if (conflictCheck.conflict) {
           return res.status(status.BadRequest).json({
@@ -1442,9 +1457,10 @@ export const checkAdsExpiryAndNotify = async () => {
 export const adminGetAdsConfig = async (req, res) => {
   try {
     const config = await getAdsConfig();
-    // Decrypt bank details for admin view
+    // Decrypt bank details for admin view - decrypt all fields that might be encrypted
     const decryptedBank = {
       ...config.bankDetails,
+      accountName: decryptValue(config.bankDetails?.accountName || ""),
       accountNumber: decryptValue(config.bankDetails?.accountNumber || ""),
       ifsc: decryptValue(config.bankDetails?.ifsc || ""),
       upiId: decryptValue(config.bankDetails?.upiId || ""),
@@ -1523,10 +1539,19 @@ export const adminUpdateAdsConfig = async (req, res) => {
       runValidators: true,
     }).lean();
 
+    // ✅ Decrypt bank details in response for admin view
+    const decryptedBank = {
+      ...updated.bankDetails,
+      accountName: decryptValue(updated.bankDetails?.accountName || ""),
+      accountNumber: decryptValue(updated.bankDetails?.accountNumber || ""),
+      ifsc: decryptValue(updated.bankDetails?.ifsc || ""),
+      upiId: decryptValue(updated.bankDetails?.upiId || ""),
+    };
+
     return res.status(status.OK).json({
       status: jsonStatus.OK,
       success: true,
-      data: updated,
+      data: { ...updated, bankDetails: decryptedBank },
     });
   } catch (error) {
     res.status(status.InternalServerError).json({

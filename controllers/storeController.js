@@ -1738,6 +1738,97 @@ export const deletePopularProduct = async (req, res) => {
     }
 };
 
+/**
+ * @route   GET /api/retailer/share/store/v1
+ * @desc    Share retailer store details
+ * @access  Private (Retailer)
+ */
+export const shareRetailerStore = async (req, res) => {
+    try {
+        const store = await Store.findOne({ createdBy: req.user._id })
+            .populate("category", "name")
+            .lean();
+
+        if (!store) {
+            return res.status(status.NotFound).json({
+                status: jsonStatus.NotFound,
+                success: false,
+                message: "Store not found"
+            });
+        }
+
+        // Build share URL (using store ID)
+        const shareBaseUrl = process.env.STORE_SHARE_BASE_URL || 
+            (req?.protocol && req?.get ? `${req.protocol}://${req.get("host")}/store` : "https://orsolum.com/store");
+        const shareUrl = `${shareBaseUrl}/${store._id}`;
+
+        // Build preview image URL
+        const cdn = process.env.CDN_BASE_URL || process.env.AWS_CDN_BASE_URL || "";
+        const previewImage = store.coverImage 
+            ? (store.coverImage.startsWith("http") ? store.coverImage : `${cdn}/${store.coverImage}`)
+            : "https://cdn.orsolum.com/static/default-store.png";
+
+        // Format location
+        const location = store.address || "";
+        const cityState = store.shiprocket?.pickup_location 
+            ? [store.shiprocket.pickup_location.city, store.shiprocket.pickup_location.state]
+                .filter(Boolean)
+                .join(", ")
+            : "";
+
+        // Build share message with proper formatting
+        const shareMessage = [
+            `🏪 ${store.name || "Store"}`,
+            store.category?.name ? `📂 Category: ${store.category.name}` : null,
+            location ? `📍 Address: ${location}` : null,
+            cityState ? `🗺️ Location: ${cityState}` : null,
+            store.phone ? `📞 Contact: ${store.phone}` : null,
+            store.email ? `✉️ Email: ${store.email}` : null,
+            store.information ? `ℹ️ About: ${store.information}` : null,
+            `🔗 View Store: ${shareUrl}`
+        ]
+            .filter(Boolean)
+            .join("\n\n");
+
+        res.status(status.OK).json({
+            status: jsonStatus.OK,
+            success: true,
+            data: {
+                store: {
+                    _id: store._id,
+                    name: store.name,
+                    category: store.category?.name || null,
+                    information: store.information,
+                    phone: store.phone,
+                    address: store.address,
+                    email: store.email,
+                    coverImage: store.coverImage,
+                    images: store.images || [],
+                    rating: store.rating || 0,
+                    ratingCount: store.ratingCount || 0,
+                },
+                share: {
+                    url: shareUrl,
+                    message: shareMessage,
+                    previewImage,
+                    meta: {
+                        title: `${store.name || "Store"} • Orsolum`,
+                        description: store.information || `Visit ${store.name || "this store"} on Orsolum`,
+                        previewImage
+                    }
+                }
+            }
+        });
+    } catch (error) {
+        res.status(status.InternalServerError).json({
+            status: jsonStatus.InternalServerError,
+            success: false,
+            message: error.message
+        });
+        return catchError('shareRetailerStore', error, req, res);
+    }
+};
+
 export const searchPopularProduct = async (req, res) => {
     try {
         const { search } = req.query;

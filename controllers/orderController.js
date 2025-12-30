@@ -3436,13 +3436,50 @@ export const orderListV2 = async (req, res) => {
           storeDetails: { $first: "$storeDetails" },
           orderId: { $first: "$orderId" },
           status: { $first: "$status" },
-          paymentStatus: { $first: "$paymentStatus" }, // Include payment status
+          paymentStatus: { $first: "$paymentStatus" }, // Raw payment status from order
           summary: { $first: "$summary" },
           createdAt: { $first: "$createdAt" },
           updatedAt: { $first: "$updatedAt" },
           totalQuantity: { $sum: "$productDetails.quantity" },
           totalFreeQuantity: { $sum: "$productDetails.freeQuantity" },
           productDetails: { $push: "$productDetails" },
+        },
+      },
+      // Lookup payment information to distinguish unpaid vs paid orders
+      {
+        $lookup: {
+          from: "payments",
+          localField: "_id",
+          foreignField: "orderId",
+          as: "paymentDetails",
+          pipeline: [
+            { $match: { type: "LocalStore" } },
+            {
+              $project: {
+                paymentStatus: 1,
+                status: 1,
+                paymentMethod: 1,
+                paymentGateway: 1,
+              },
+            },
+          ],
+        },
+      },
+      {
+        $addFields: {
+          hasPaymentRecord: { $gt: [{ $size: "$paymentDetails" }, 0] },
+          effectivePaymentStatus: {
+            $cond: [
+              { $gt: [{ $size: "$paymentDetails" }, 0] },
+              {
+                $ifNull: [
+                  { $arrayElemAt: ["$paymentDetails.paymentStatus", 0] },
+                  { $arrayElemAt: ["$paymentDetails.status", 0] },
+                ],
+              },
+              "$paymentStatus",
+            ],
+          },
         },
       },
       {
@@ -3457,37 +3494,63 @@ export const orderListV2 = async (req, res) => {
     ]);
 
     // Format response as per UI requirements
-    const formattedResponse = list.map((order) => ({
-      _id: order._id,
-      storeId: order.storeDetails?._id || null,
-      store: order.storeDetails ? {
-        name: order.storeDetails.name || null,
-        address: order.storeDetails.address || null,
-        contact: order.storeDetails.contact || null,
-      } : null,
-      orderId: order.orderId,
-      status: order.status,
-      paymentStatus: order.paymentStatus || "PENDING", // Include payment status
-      totalPrice: order.summary?.grandTotal || 0,
-      discountAmount: order.summary?.discountAmount || 0,
-      shippingFee: order.summary?.shippingFee || 0,
-      createdAt: order.createdAt,
-      totalQuantity: order.totalQuantity || 0, // ✅ Aggregated total quantity
-      totalFreeQuantity: order.totalFreeQuantity || 0, // ✅ Aggregated total free quantity
-      products: (order.productDetails || []).filter(p => p !== null && p !== undefined).map((product) => ({
-        productName: product.productName || null,
-        companyName: product.companyName || null,
-        qty: product.qty || null,
-        productImages: product.productImages || [],
-        price: product.productPrice || 0,
-        mrp: product.mrp || null,
-        quantity: product.quantity || 0,
-        freeQuantity: product.freeQuantity || 0,
-        totalAmount: product.totalAmount || 0,
-        appliedOffers: product.appliedOffers || [],
-        status: order.status,
-      })),
-    }));
+    const formattedResponse = list.map((order) => {
+      const hasPaymentRecord = Boolean(order.hasPaymentRecord);
+      const rawPaymentStatus =
+        order.effectivePaymentStatus || order.paymentStatus || "PENDING";
+
+      // Derive user-facing status:
+      // - If there is NO payment record and payment is still PENDING,
+      //   treat it as a cancelled/unpaid attempt so that app doesn't show it as active "Pending" order.
+      // - For COD or successful prepaid orders, we always have a payment record, so their original status is preserved.
+      let displayStatus = order.status;
+      let displayPaymentStatus = rawPaymentStatus;
+
+      if (!hasPaymentRecord && (!rawPaymentStatus || rawPaymentStatus === "PENDING")) {
+        displayStatus = "Cancelled";
+        displayPaymentStatus = "FAILED";
+      }
+
+      // Allow cancel only when real order exists (hasPaymentRecord) and status is Pending
+      const canCancel = hasPaymentRecord && displayStatus === "Pending";
+
+      return {
+        _id: order._id,
+        storeId: order.storeDetails?._id || null,
+        store: order.storeDetails
+          ? {
+              name: order.storeDetails.name || null,
+              address: order.storeDetails.address || null,
+              contact: order.storeDetails.contact || null,
+            }
+          : null,
+        orderId: order.orderId,
+        status: displayStatus,
+        paymentStatus: displayPaymentStatus,
+        canCancel,
+        totalPrice: order.summary?.grandTotal || 0,
+        discountAmount: order.summary?.discountAmount || 0,
+        shippingFee: order.summary?.shippingFee || 0,
+        createdAt: order.createdAt,
+        totalQuantity: order.totalQuantity || 0, // ✅ Aggregated total quantity
+        totalFreeQuantity: order.totalFreeQuantity || 0, // ✅ Aggregated total free quantity
+        products: (order.productDetails || [])
+          .filter((p) => p !== null && p !== undefined)
+          .map((product) => ({
+            productName: product.productName || null,
+            companyName: product.companyName || null,
+            qty: product.qty || null,
+            productImages: product.productImages || [],
+            price: product.productPrice || 0,
+            mrp: product.mrp || null,
+            quantity: product.quantity || 0,
+            freeQuantity: product.freeQuantity || 0,
+            totalAmount: product.totalAmount || 0,
+            appliedOffers: product.appliedOffers || [],
+            status: displayStatus,
+          })),
+      };
+    });
 
     res
       .status(status.OK)
@@ -3754,6 +3817,30 @@ export const orderDetailsV2 = async (req, res) => {
     const orderDetail = details[0];
     const paymentInfo = orderDetail.paymentDetails || {};
 
+    // Derive effective payment status & whether any payment record exists
+    const hasPaymentRecord =
+      paymentInfo && (paymentInfo.paymentStatus || paymentInfo.status);
+    const rawPaymentStatus =
+      orderDetail.paymentStatus ||
+      paymentInfo.paymentStatus ||
+      paymentInfo.status ||
+      "PENDING";
+
+    // Derive user-facing status:
+    // - If there is NO payment record and payment is still PENDING,
+    //   treat it as a cancelled/unpaid attempt so that app doesn't show it as active "Pending" order.
+    // - For COD or successful prepaid orders, we always have a payment record, so their original status is preserved.
+    let displayStatus = orderDetail.status;
+    let displayPaymentStatus = rawPaymentStatus;
+
+    if (!hasPaymentRecord && (!rawPaymentStatus || rawPaymentStatus === "PENDING")) {
+      displayStatus = "Cancelled";
+      displayPaymentStatus = "FAILED";
+    }
+
+    // Allow cancel only when real order exists (hasPaymentRecord) and status is Pending
+    const canCancel = Boolean(hasPaymentRecord) && displayStatus === "Pending";
+
     // Calculate enhanced summary fields according to standardized response structure
     const summary = orderDetail.summary || {};
 
@@ -3819,8 +3906,9 @@ export const orderDetailsV2 = async (req, res) => {
       orderId: orderDetail.orderId,
       cf_order_id: orderDetail.cf_order_id || paymentInfo.cf_order_id || null,
       estimatedDate: orderDetail.estimatedDate || null,
-      status: orderDetail.status,
-      paymentStatus: orderDetail.paymentStatus || paymentInfo.paymentStatus || paymentInfo.status || "PENDING",
+      status: displayStatus,
+      paymentStatus: displayPaymentStatus,
+      canCancel,
       paymentMethod: paymentInfo.paymentMethod || paymentInfo.paymentGateway || null,
       totalPrice: orderDetail.summary?.grandTotal || 0,
       discountAmount: orderDetail.summary?.discountAmount || 0,

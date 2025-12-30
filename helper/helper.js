@@ -314,12 +314,26 @@ export const handleLocalStoreOrderCallback = async (webhookCallRes) => {
 
 export const handleOnlineStoreOrderCallback = async (webhookCallRes) => {
     try {
-
+        const cf_order_id = webhookCallRes.payment_gateway_details.gateway_order_id;
+        const paymentStatus = webhookCallRes.payment.payment_status;
         let newOrder;
 
-        // create order after payment success
-        if (webhookCallRes.payment.payment_status === "SUCCESS") {
+        // First, try to find existing order by cf_order_id (created in createOnlineOrder)
+        const existingOrder = await OnlineOrder.findOne({ cf_order_id });
 
+        if (existingOrder) {
+            // Update existing order with payment status
+            existingOrder.paymentStatus = paymentStatus;
+            await existingOrder.save();
+
+            // Generate invoice only if payment is successful
+            if (paymentStatus === "SUCCESS") {
+                generateOnlineInvoice(existingOrder._id);
+            }
+
+            newOrder = existingOrder;
+        } else if (webhookCallRes.payment.payment_status === "SUCCESS") {
+            // Fallback: create order if it doesn't exist (legacy flow)
             let { coupon, donate, addressId, userId, coinUsed } = webhookCallRes.order.order_tags;
             donate = donate ? Number(donate) : 0;
             coinUsed = coinUsed ? Number(coinUsed) : 0;
@@ -332,7 +346,8 @@ export const handleOnlineStoreOrderCallback = async (webhookCallRes) => {
                 .populate('unitId');
 
             if (carts.length < 1) {
-                return res.status(400).json({ success: false, message: "Cart is empty" });
+                console.log("Cart is empty in webhook callback");
+                return true; // Return true to avoid webhook retry
             }
 
             const address = await Address.findOne({ createdBy: userId, _id: addressId });
@@ -443,17 +458,26 @@ export const handleOnlineStoreOrderCallback = async (webhookCallRes) => {
                 await new CouponHistory({ couponId: coupon, userId }).save();
             }
 
-            const user = await User.findById(userId);
+            // ✅ Coins will be credited only when order status becomes "Delivered"
+            // Calculate coins earned but don't credit yet
+            const { calculateCoinsEarned } = await import('./coinHelper.js');
+            const coinsEarned = await calculateCoinsEarned(productDetails);
+            
+            // Update order with coins earned (but not credited yet)
+            await OnlineOrder.findByIdAndUpdate(newOrder._id, {
+                'summary.coinsEarned': coinsEarned,
+                'summary.coinsCredited': false
+            });
+        }
 
-            if (user.coins) {
-                await User.findByIdAndUpdate(userId, { coins: user.coins + grandTotal });
-            } else {
-                await User.findByIdAndUpdate(userId, { coins: grandTotal });
-            }
-
-            let newCoinHistory = new CoinHistory({ createdBy: userId, coins: grandTotal, orderId: newOrder._id, type: "Added" });
-            newCoinHistory = await newCoinHistory.save();
-
+        // Update existing order's coins earned if not set
+        if (existingOrder && !existingOrder.summary?.coinsEarned) {
+            const { calculateCoinsEarned } = await import('./coinHelper.js');
+            const coinsEarned = await calculateCoinsEarned(existingOrder.productDetails);
+            await OnlineOrder.findByIdAndUpdate(existingOrder._id, {
+                'summary.coinsEarned': coinsEarned,
+                'summary.coinsCredited': false
+            });
         }
 
         let newPayment = new Payment({ type: webhookCallRes.order.order_tags.forPayment, paymentResonse: webhookCallRes, userId: webhookCallRes.customer_details.customer_id, onlineOrderId: newOrder?._id, orderIdString: newOrder?.orderId, cfoOrder_id: webhookCallRes.payment_gateway_details.gateway_order_id, paymentStatus: webhookCallRes.payment.payment_status, amount: webhookCallRes.payment.payment_amount });
@@ -531,16 +555,42 @@ export const handleAdPaymentCallback = async (webhookCallRes) => {
         const paymentStatus = webhookCallRes.payment.payment_status;
         const { adId, sellerId, location, totalRunDays } = webhookCallRes.order.order_tags;
 
-        // Find ad by payment reference
-        const ad = await Ad.findOne({
+        console.log("🔄 Processing ad payment callback:", {
+            cf_order_id,
+            paymentStatus,
+            adId,
+            sellerId,
+        });
+
+        // Find ad by payment reference OR by adId (fallback)
+        let ad = await Ad.findOne({
             paymentReference: cf_order_id,
             sellerId: new ObjectId(sellerId),
         });
 
+        // If not found by paymentReference, try finding by adId
+        if (!ad && adId) {
+            ad = await Ad.findOne({
+                _id: new ObjectId(adId),
+                sellerId: new ObjectId(sellerId),
+            });
+            console.log("⚠️ Ad not found by paymentReference, trying adId:", ad ? "Found" : "Not found");
+        }
+
         if (!ad) {
-            console.error("Ad not found for payment:", cf_order_id);
+            console.error("❌ Ad not found for payment:", {
+                cf_order_id,
+                adId,
+                sellerId,
+            });
             return false;
         }
+
+        console.log("✅ Ad found:", {
+            adId: ad._id.toString(),
+            currentStatus: ad.status,
+            currentPaymentStatus: ad.paymentStatus,
+        });
 
         // Save payment record
         let newPayment = new Payment({
@@ -552,6 +602,7 @@ export const handleAdPaymentCallback = async (webhookCallRes) => {
             amount: webhookCallRes.payment.payment_amount,
         });
         await newPayment.save();
+        console.log("✅ Payment record saved:", newPayment._id.toString());
 
         // If payment is successful, handle ad activation
         if (paymentStatus === "SUCCESS") {
@@ -570,6 +621,11 @@ export const handleAdPaymentCallback = async (webhookCallRes) => {
                 end.setDate(end.getDate() + Number(totalRunDays || ad.totalRunDays || 1));
                 ad.startDate = scheduledStartDate;
                 ad.endDate = end;
+                
+                console.log("📅 Ad scheduled for future:", {
+                    scheduledStartDate: scheduledStartDate.toISOString(),
+                    endDate: end.toISOString(),
+                });
                 
                 // Send notification about scheduled activation
                 try {
@@ -594,10 +650,50 @@ export const handleAdPaymentCallback = async (webhookCallRes) => {
                 const end = new Date(start);
                 end.setDate(end.getDate() + Number(totalRunDays || ad.totalRunDays || 1));
 
+                // ✅ Check for conflicts before activating (optional - log warning if conflict exists)
+                try {
+                    const adController = await import("../controllers/adController.js");
+                    const { findOverlappingAds } = adController;
+                    const storeIdForCheck = ad.storeId 
+                        ? (ad.storeId.toString ? ad.storeId.toString() : ad.storeId)
+                        : null;
+                    
+                    const { count, conflicts } = await findOverlappingAds({
+                        location: ad.location,
+                        projectedStart: start,
+                        projectedEnd: end,
+                        excludeAdId: ad._id,
+                        storeId: storeIdForCheck,
+                    });
+
+                    const MAX_CONCURRENT_ADS_PER_LOCATION = 1;
+                    if (count >= MAX_CONCURRENT_ADS_PER_LOCATION) {
+                        console.warn("⚠️ Conflict detected, but payment successful. Activating anyway:", {
+                            conflictCount: count,
+                            conflicts: conflicts.map(c => ({
+                                name: c.name,
+                                startDate: c.startDate,
+                                endDate: c.endDate,
+                            })),
+                        });
+                        // Note: We activate anyway since payment is successful
+                        // Admin can manually resolve conflicts if needed
+                    }
+                } catch (conflictCheckError) {
+                    console.warn("⚠️ Could not check for conflicts (non-critical):", conflictCheckError.message);
+                    // Continue with activation even if conflict check fails
+                }
+
                 ad.status = "active";
                 ad.startDate = start;
                 ad.endDate = end;
                 ad.expiryNotified = false;
+                
+                console.log("✅ Activating ad immediately:", {
+                    status: "active",
+                    startDate: start.toISOString(),
+                    endDate: end.toISOString(),
+                });
                 
                 // Send notification about immediate activation
                 try {
@@ -618,7 +714,18 @@ export const handleAdPaymentCallback = async (webhookCallRes) => {
                 }
             }
             
-            await ad.save();
+            // ✅ Save ad with proper error handling
+            try {
+                await ad.save();
+                console.log("✅ Ad saved successfully:", {
+                    adId: ad._id.toString(),
+                    status: ad.status,
+                    paymentStatus: ad.paymentStatus,
+                });
+            } catch (saveError) {
+                console.error("❌ Error saving ad:", saveError);
+                throw saveError;
+            }
 
             // Send notification to admin
             try {
@@ -640,11 +747,19 @@ export const handleAdPaymentCallback = async (webhookCallRes) => {
             // Payment failed
             ad.paymentStatus = "pending";
             await ad.save();
+            console.log("❌ Payment failed, status set to pending");
         }
 
         return true;
     } catch (error) {
-        console.error("error in handleAdPaymentCallback:", error);
+        console.error("❌ Error in handleAdPaymentCallback:", {
+            error: error.message,
+            stack: error.stack,
+            webhookData: {
+                cf_order_id: webhookCallRes?.payment_gateway_details?.gateway_order_id,
+                paymentStatus: webhookCallRes?.payment?.payment_status,
+            },
+        });
         return false;
     }
 };
