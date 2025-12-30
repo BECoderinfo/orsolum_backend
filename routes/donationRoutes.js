@@ -5,12 +5,12 @@ import { adminAuthentication, authenticateToken } from '../middlewares/middlewar
 const router = express.Router();
 
 // Get donation settings (authenticated users - for sellers/retailers to see donation options)
-router.get('/settings', authenticateToken, getDonationSettings);
+router.get('/settings/v1', authenticateToken, getDonationSettings);
 
 // Update donation settings (admin only)
-router.put('/settings', adminAuthentication, updateDonationSettings);
+router.put('/settings/v1', adminAuthentication, updateDonationSettings);
 
 // Validate custom donation amount (for 'Other' option)
-router.post('/validate-custom-amount', authenticateToken, validateCustomDonationAmount);
+router.post('/validate-custom-amount/v1', authenticateToken, validateCustomDonationAmount);
 
 export default router;
