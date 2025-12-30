@@ -256,7 +256,11 @@ export const getValidCoupons = async (req, res) => {
 export const getApplicableCoupons = async (req, res) => {
   try {
     const { storeId, cartTotal } = req.query; // Optional storeId for store-specific coupons, cartTotal for eligibility check
+    const userId = req.user._id;
     const now = new Date();
+
+    // ✅ Check if user has previous orders (for userEligibility check)
+    const hasPreviousOrders = await CouponHistory.exists({ userId });
 
     // Base query for valid coupons
     let query = {
@@ -290,30 +294,67 @@ export const getApplicableCoupons = async (req, res) => {
 
     const coupons = await CouponCode.find(query).sort({ createdAt: -1 });
     
-    // If cartTotal is provided, calculate eligibility for each coupon
-    let enhancedCoupons = coupons;
-    if (cartTotal !== undefined && cartTotal !== null) {
+    // ✅ Filter coupons based on user eligibility and usage history
+    const applicableCoupons = [];
+    
+    for (const coupon of coupons) {
+      // Check user eligibility
+      if (coupon.userEligibility === 'new_user' && hasPreviousOrders) {
+        continue; // Skip if coupon is for new users only but user has previous orders
+      }
+      
+      if (coupon.userEligibility === 'existing_user' && !hasPreviousOrders) {
+        continue; // Skip if coupon is for existing users only but user has no previous orders
+      }
+      
+      // Check if user has already used "one time use" coupon
+      if (coupon.use === 'one') {
+        const userCouponHistory = await CouponHistory.findOne({
+          couponId: coupon._id,
+          userId: userId
+        });
+        
+        if (userCouponHistory) {
+          continue; // Skip if user has already used this coupon
+        }
+      }
+      
+      applicableCoupons.push(coupon);
+    }
+    
+    // ✅ If cartTotal is provided, calculate eligibility for each coupon
+    let enhancedCoupons = applicableCoupons;
+    if (cartTotal !== undefined && cartTotal !== null && cartTotal !== '') {
       const numericCartTotal = Number(cartTotal);
-      enhancedCoupons = coupons.map(coupon => {
-        const isEligible = numericCartTotal >= (coupon.minOrderValue || 0);
-        return {
-          ...coupon.toObject(),
-          isEligible,
-          eligibilityMessage: isEligible 
-            ? 'Coupon is eligible for current cart total' 
-            : `Minimum order value of ₹${coupon.minOrderValue} required (current cart total: ₹${numericCartTotal})`
-        };
-      });
+      if (!isNaN(numericCartTotal)) {
+        enhancedCoupons = applicableCoupons.map(coupon => {
+          const isEligible = numericCartTotal >= (coupon.minOrderValue || 0);
+          return {
+            ...coupon.toObject(),
+            isEligible,
+            eligibilityMessage: isEligible 
+              ? 'Coupon is eligible for current cart total' 
+              : `Minimum order value of ₹${coupon.minOrderValue} required (current cart total: ₹${numericCartTotal})`
+          };
+        });
+      }
     }
 
+    // ✅ Ensure response is always an array, even if empty
+    const responseData = Array.isArray(enhancedCoupons) ? enhancedCoupons : [];
+
     return res.status(200).json(
-      successResponse(enhancedCoupons, 'Applicable coupons retrieved successfully')
+      successResponse(responseData, 'Applicable coupons retrieved successfully')
     );
   } catch (error) {
     console.error('Error getting applicable coupons:', error);
-    return res.status(500).json(
-      errorResponse('Internal server error')
-    );
+    // ✅ Return proper error response with empty array to prevent frontend crash
+    // Frontend expects { success: false, message: "...", data: [] } format
+    return res.status(200).json({
+      success: false,
+      message: error.message || 'Failed to retrieve coupons. Please try again.',
+      data: []
+    });
   }
 };
 
