@@ -7,6 +7,11 @@ const OnlineOrderSchema = new mongoose.Schema({
         ref: 'user',
         required: true
     },
+    sellerId: {
+        type: ObjectId,
+        ref: 'user', // Seller who owns products in this order
+        default: null
+    },
     cf_order_id: {
         type: String
     },

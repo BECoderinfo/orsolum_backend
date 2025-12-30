@@ -30,6 +30,7 @@ import ProductSubCategory from '../models/OnlineStore/SubCategory.js';
 import CouponHistory from '../models/CouponHistory.js';
 import StoreCategory from '../models/StoreCategory.js';
 import Product from '../models/Product.js';
+import ShiprocketService from '../helper/shiprocketService.js';
 
 const { ObjectId } = mongoose.Types;
 
@@ -3083,25 +3084,43 @@ export const onlineStoreCartDetails = async (req, res) => {
                 }
             }
 
-            if (couponCode.minPrice && overallTotalAmount < couponCode.minPrice) {
+            // ✅ Fix: Use minOrderValue instead of minPrice
+            if (couponCode.minOrderValue && overallTotalAmount < couponCode.minOrderValue) {
                 return res.status(status.BadRequest).json({
                     status: jsonStatus.BadRequest,
                     success: false,
-                    message: `Minimum purchase of ₹${couponCode.minPrice} required for this coupon`
+                    message: `Minimum purchase of ₹${couponCode.minOrderValue} required for this coupon`
                 });
             }
 
-            const rawDiscount = (overallTotalAmount * couponCode.discount) / 100;
-            couponCodeDiscount = couponCode.upto
-                ? Math.min(rawDiscount, couponCode.upto)
-                : rawDiscount;
+            // ✅ Fix: Use correct coupon fields from model
+            let rawDiscount = 0;
+            if (couponCode.discountType === "percentage") {
+                rawDiscount = (overallTotalAmount * couponCode.discountValue) / 100;
+                // Apply max discount cap if set
+                if (couponCode.maxDiscountAmount) {
+                    rawDiscount = Math.min(rawDiscount, couponCode.maxDiscountAmount);
+                }
+            } else {
+                // Flat discount
+                rawDiscount = Math.min(couponCode.discountValue, overallTotalAmount);
+            }
+            couponCodeDiscount = rawDiscount;
         }
 
         // Apply shipping fee logic (example: free shipping above ₹500)
         overallShippingFee = overallTotalAmount > 500 ? 0 : 50;
         
-        // ✅ Fix: Calculate grand total correctly - ensure it's never negative
-        overallGrandTotal = Math.max(0, overallTotalAmount - couponCodeDiscount + overallShippingFee + donate);
+        // ✅ Fix: Calculate grand total correctly - ensure it's never negative or zero
+        // Ensure coupon discount doesn't exceed item total
+        const maxCouponDiscount = Math.min(couponCodeDiscount, overallTotalAmount);
+        const subtotalAfterCoupon = Math.max(0, overallTotalAmount - maxCouponDiscount);
+        overallGrandTotal = Math.max(0, subtotalAfterCoupon + overallShippingFee + donate);
+        
+        // ✅ Ensure total is never zero if there are items
+        if (overallTotalAmount > 0 && overallGrandTotal === 0) {
+            overallGrandTotal = Math.max(0.01, overallTotalAmount + overallShippingFee + donate);
+        }
 
         // Check if user has previous orders (to determine if coins should be shown)
         const hasPreviousOrder = await hasPreviousOrders(userId, 'OnlineStore');
@@ -3133,17 +3152,25 @@ export const onlineStoreCartDetails = async (req, res) => {
         const totalPayableValue = parseFloat(overallGrandTotal.toFixed(2));
         const savedValue = parseFloat(couponCodeDiscount.toFixed(2));
 
+        // ✅ Fix: Calculate bill summary with all required fields as per ADDRESS_LOCATION_BILL_SUMMARY_FIXES.md
+        const discountAmountValue = 0; // Store discounts (not applicable for online store)
+        const chargesValue = 0; // Extra charges (not applicable for online store)
+        const platformFeeValue = 0; // Platform fee (not applicable for online store)
+        const subtotalValue = Math.max(0, itemTotalValue - couponDiscountValue);
+        
         const billSummary = {
             itemTotal: itemTotalValue,
-            donationAmount: donationAmountValue,
+            discountAmount: discountAmountValue,
             couponDiscount: couponDiscountValue,
             couponCode: couponCode ? couponCode.code : null,
-            couponId: couponCode ? couponCode._id.toString() : null, // ✅ Add coupon ID for persistence
+            couponId: couponCode ? couponCode._id.toString() : null,
             shippingFee: shippingFeeValue,
+            donationAmount: donationAmountValue,
+            charges: chargesValue,
+            platformFee: platformFeeValue,
             totalPayable: totalPayableValue,
             saved: savedValue,
-            // ✅ Additional breakdown for clarity
-            subtotal: itemTotalValue - couponDiscountValue, // After coupon discount
+            subtotal: subtotalValue, // After coupon discount
             finalTotal: totalPayableValue // Final amount to pay
         };
 
@@ -3253,17 +3280,63 @@ export const createOnlineOrder = async (req, res) => {
                 }
             }
 
-            if (couponCode.minPrice && totalAmount < couponCode.minPrice) {
-                return res.status(400).json({ success: false, message: `Minimum purchase of ${couponCode.minPrice} required for this coupon` });
+            // ✅ Fix: Use minOrderValue instead of minPrice
+            if (couponCode.minOrderValue && totalAmount < couponCode.minOrderValue) {
+                return res.status(400).json({ success: false, message: `Minimum purchase of ₹${couponCode.minOrderValue} required for this coupon` });
             }
 
-            const rawDiscount = (totalAmount * couponCode.discount) / 100;
-            couponCodeDiscount = couponCode.upto ? Math.min(rawDiscount, couponCode.upto) : rawDiscount;
+            // ✅ Fix: Use correct coupon fields from model
+            let rawDiscount = 0;
+            if (couponCode.discountType === "percentage") {
+                rawDiscount = (totalAmount * couponCode.discountValue) / 100;
+                // Apply max discount cap if set
+                if (couponCode.maxDiscountAmount) {
+                    rawDiscount = Math.min(rawDiscount, couponCode.maxDiscountAmount);
+                }
+            } else {
+                // Flat discount
+                rawDiscount = Math.min(couponCode.discountValue, totalAmount);
+            }
+            couponCodeDiscount = rawDiscount;
         }
 
-        // 5️⃣ Shipping fee
-        const shippingFee = totalAmount > 500 ? 0 : 50;
-        const subtotal = totalAmount - couponCodeDiscount + shippingFee + Number(donate);
+        // 5️⃣ Shipping fee - Check shiprocket serviceability or use default
+        let shippingFee = 0;
+        
+        // ✅ Try to get shiprocket shipping fee if address is provided
+        if (address && address.pincode) {
+            try {
+                // Check serviceability for shipping fee
+                const serviceabilityResponse = await ShiprocketService.checkServiceability({
+                    pickup_pincode: process.env.SHIPROCKET_PICKUP_PINCODE || "394101", // Default pickup pincode
+                    delivery_pincode: address.pincode,
+                    weight: Math.max(0.5, productDetails.reduce((sum, p) => sum + (p.quantity || 1), 0) * 0.5),
+                    cod: 1 // COD enabled
+                });
+                
+                if (serviceabilityResponse?.data?.available_courier_companies?.length > 0) {
+                    // Get minimum shipping charge from available couriers
+                    const minShippingCharge = Math.min(
+                        ...serviceabilityResponse.data.available_courier_companies.map(c => c.rate || 0)
+                    );
+                    shippingFee = minShippingCharge > 0 ? minShippingCharge : (totalAmount > 500 ? 0 : 50);
+                } else {
+                    // Fallback to default shipping fee logic
+                    shippingFee = totalAmount > 500 ? 0 : 50;
+                }
+            } catch (shiprocketError) {
+                console.error("Error checking shiprocket serviceability:", shiprocketError);
+                // Fallback to default shipping fee logic
+                shippingFee = totalAmount > 500 ? 0 : 50;
+            }
+        } else {
+            // Default shipping fee logic
+            shippingFee = totalAmount > 500 ? 0 : 50;
+        }
+        
+        // ✅ Ensure coupon discount doesn't exceed item total
+        const maxCouponDiscount = Math.min(couponCodeDiscount, totalAmount);
+        const subtotal = Math.max(0, totalAmount - maxCouponDiscount) + shippingFee + Number(donate);
 
         // 6️⃣ Validate and process coin usage
         let finalCoinUsed = 0;
@@ -3297,10 +3370,17 @@ export const createOnlineOrder = async (req, res) => {
             }
         }
 
-        const grandTotal = subtotal - finalCoinUsed;
+        const grandTotal = Math.max(0, subtotal - finalCoinUsed);
 
-        // ✅ Validate grandTotal
-        if (!grandTotal || grandTotal <= 0) {
+        // ✅ Validate grandTotal - ensure it's never zero if there are items
+        if (totalAmount > 0 && grandTotal <= 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Invalid order calculation. Please contact support." 
+            });
+        }
+        
+        if (grandTotal <= 0) {
             return res.status(400).json({ success: false, message: "Order amount must be greater than zero" });
         }
 
@@ -3334,9 +3414,15 @@ export const createOnlineOrder = async (req, res) => {
 
         const cashFreeSession = await axios.post(process.env.CF_CREATE_PRODUCT_URL, paymentData, { headers });
 
+        // ✅ Determine sellerId from products (if products belong to sellers)
+        // For now, set to null - can be updated when seller-product linking is implemented
+        let sellerId = null;
+        // TODO: Check if products in order belong to a seller and set sellerId accordingly
+        
         // 9️⃣ Save the order in MongoDB
         const newOrder = new OnlineOrder({
             createdBy: userId,
+            sellerId: sellerId, // ✅ Add sellerId support
             address: address.toObject ? address.toObject() : address,
             productDetails,
             orderId: `ONLINE_ORDER_${Date.now()}`,

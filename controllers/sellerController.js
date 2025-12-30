@@ -8,6 +8,7 @@ import { sendSms } from '../helper/sendSms.js';
 import { sendEmail } from '../helper/sendEmail.js';
 import bcrypt from "bcryptjs";
 import Order from '../models/Order.js';
+import OnlineOrder from '../models/OnlineStore/OnlineOrder.js';
 import Product from '../models/Product.js';
 import Store from '../models/Store.js';
 import SlotBooking from '../models/SlotBooking.js';
@@ -966,19 +967,26 @@ export const getSellerOrderList = async (req, res) => {
     }
 
     const storeId = findStore._id;
+    const sellerId = req.user._id;
     const { ObjectId } = mongoose.Types;
 
-    // Build match condition
+    // ✅ Build match condition for local store orders
     let matchObj = {
       storeId: new ObjectId(storeId)
+    };
+
+    // ✅ Build match condition for online orders
+    let onlineMatchObj = {
+      sellerId: new ObjectId(sellerId)
     };
 
     // Apply status filter if provided
     if (statusFilter && statusFilter !== 'all') {
       matchObj.status = statusFilter;
+      onlineMatchObj.status = statusFilter;
     }
 
-    // Build pipeline
+    // ✅ Build pipeline for local store orders
     const pipeline = [
       {
         $match: matchObj
@@ -1026,6 +1034,7 @@ export const getSellerOrderList = async (req, res) => {
           paymentStatus: { $first: "$paymentStatus" },
           invoiceUrl: { $first: "$invoiceUrl" },
           shiprocketShipmentId: { $first: "$shiprocket.shipment_id" },
+          orderType: { $first: "local" }, // ✅ Add order type
           customer: {
             $first: {
               name: {
@@ -1058,51 +1067,161 @@ export const getSellerOrderList = async (req, res) => {
           paymentStatus: 1,
           invoiceUrl: 1,
           shiprocketShipmentId: 1,
+          orderType: 1,
           customer: 1,
           totalItems: 1,
           totalAmount: 1,
           order: { $arrayElemAt: ["$productNames", 0] },
           payment: { $cond: [{ $eq: ["$paymentStatus", "SUCCESS"] }, "Paid", "Unpaid"] }
         }
-      },
-      {
-        $sort: { createdAt: -1 }
       }
     ];
 
-    // Apply search filter
-    if (search) {
-      pipeline.push({
-        $match: {
-          $or: [
-            { orderId: { $regex: search, $options: "i" } },
-            { "customer.name": { $regex: search, $options: "i" } },
-            { order: { $regex: search, $options: "i" } }
-          ]
+    // ✅ Build pipeline for online orders
+    const onlinePipeline = [
+      {
+        $match: onlineMatchObj
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "createdBy",
+          foreignField: "_id",
+          as: "customerInfo"
         }
-      });
+      },
+      {
+        $unwind: {
+          path: "$customerInfo",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $unwind: {
+          path: "$productDetails",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $lookup: {
+          from: "products",
+          localField: "productDetails.productId",
+          foreignField: "_id",
+          as: "productInfo"
+        }
+      },
+      {
+        $unwind: {
+          path: "$productInfo",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $group: {
+          _id: "$_id",
+          orderId: { $first: "$orderId" },
+          createdAt: { $first: "$createdAt" },
+          status: { $first: "$status" },
+          paymentStatus: { $first: "$paymentStatus" },
+          invoiceUrl: { $first: "$invoiceUrl" },
+          shiprocketShipmentId: { $first: null }, // Online orders may not have shiprocket
+          orderType: { $first: "online" }, // ✅ Add order type
+          customer: {
+            $first: {
+              name: {
+                $concat: [
+                  { $ifNull: ["$customerInfo.firstName", ""] },
+                  " ",
+                  { $ifNull: ["$customerInfo.lastName", ""] }
+                ]
+              },
+              phone: "$customerInfo.phone"
+            }
+          },
+          totalItems: {
+            $sum: "$productDetails.quantity"
+          },
+          totalAmount: { $first: "$summary.grandTotal" },
+          productNames: { $push: "$productInfo.productName" }
+        }
+      },
+      {
+        $project: {
+          orderId: 1,
+          createdAt: 1,
+          status: 1,
+          paymentStatus: 1,
+          invoiceUrl: 1,
+          shiprocketShipmentId: 1,
+          orderType: 1,
+          customer: 1,
+          totalItems: 1,
+          totalAmount: 1,
+          order: { $arrayElemAt: ["$productNames", 0] },
+          payment: { $cond: [{ $eq: ["$paymentStatus", "SUCCESS"] }, "Paid", "Unpaid"] }
+        }
+      }
+    ];
+
+    // Apply search filter to both pipelines
+    if (search) {
+      const searchMatch = {
+        $or: [
+          { orderId: { $regex: search, $options: "i" } },
+          { "customer.name": { $regex: search, $options: "i" } },
+          { order: { $regex: search, $options: "i" } }
+        ]
+      };
+      pipeline.push({ $match: searchMatch });
+      onlinePipeline.push({ $match: searchMatch });
     }
 
-    // Get total count before pagination
+    // ✅ Get total count for both order types
     const countPipeline = [...pipeline];
-    const [totalResult] = await Order.aggregate([
+    const onlineCountPipeline = [...onlinePipeline];
+    
+    const [localTotalResult] = await Order.aggregate([
       ...countPipeline,
       { $count: "total" }
     ]);
-    const total = totalResult?.total || 0;
+    
+    const [onlineTotalResult] = await OnlineOrder.aggregate([
+      ...onlineCountPipeline,
+      { $count: "total" }
+    ]);
+    
+    const localTotal = localTotalResult?.total || 0;
+    const onlineTotal = onlineTotalResult?.total || 0;
+    const total = localTotal + onlineTotal;
 
     // Apply pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
     pipeline.push(
       { $skip: skip },
-      { $limit: parseInt(limit) }
+      { $limit: parseInt(limit) },
+      { $sort: { createdAt: -1 } }
+    );
+    
+    onlinePipeline.push(
+      { $skip: skip },
+      { $limit: parseInt(limit) },
+      { $sort: { createdAt: -1 } }
     );
 
-    const orders = await Order.aggregate(pipeline);
+    // ✅ Fetch both local and online orders
+    const [localOrders, onlineOrders] = await Promise.all([
+      Order.aggregate(pipeline),
+      OnlineOrder.aggregate(onlinePipeline)
+    ]);
+
+    // ✅ Combine and sort by createdAt
+    const allOrders = [...localOrders, ...onlineOrders].sort((a, b) => {
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
 
     res.status(200).json({
       success: true,
-      data: orders,
+      data: allOrders,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -1111,6 +1230,7 @@ export const getSellerOrderList = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error("Error in getSellerOrderList:", error);
     res.status(500).json({
       success: false,
       message: error.message

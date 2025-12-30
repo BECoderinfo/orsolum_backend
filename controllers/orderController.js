@@ -1410,7 +1410,17 @@ export const cartDetails = async (req, res) => {
         productsSubtotal: storeTotalAmount,
       });
 
-      const storeShippingFee = storeTotalAmount > 500 ? 0 : 50; // Example shipping logic
+      // ✅ Calculate shipping fee - use store's perOrderShippingFee if set, otherwise use default logic
+      let storeShippingFee = 0;
+      if (store.perOrderShippingFee !== null && store.perOrderShippingFee !== undefined) {
+        // Use store's per-order shipping fee
+        const freeShippingThreshold = store.freeShippingThreshold || 500;
+        storeShippingFee = storeTotalAmount >= freeShippingThreshold ? 0 : store.perOrderShippingFee;
+      } else {
+        // Default shipping logic
+        const freeShippingThreshold = store.freeShippingThreshold || 500;
+        storeShippingFee = storeTotalAmount >= freeShippingThreshold ? 0 : 50;
+      }
       const storeGrandTotal =
         storeTotalAmount - storeDiscountAmount + storeShippingFee + charges.chargesTotal;
 
@@ -1806,7 +1816,14 @@ export const allCartDetails = async (req, res) => {
         }
       });
 
-      store.storeShippingFee = store.storeTotalAmount > 500 ? 0 : 50; // Example shipping logic
+      // ✅ Calculate shipping fee - use store's perOrderShippingFee if set
+      if (store.perOrderShippingFee !== null && store.perOrderShippingFee !== undefined) {
+        const freeShippingThreshold = store.freeShippingThreshold || 500;
+        store.storeShippingFee = store.storeTotalAmount >= freeShippingThreshold ? 0 : store.perOrderShippingFee;
+      } else {
+        const freeShippingThreshold = store.freeShippingThreshold || 500;
+        store.storeShippingFee = store.storeTotalAmount >= freeShippingThreshold ? 0 : 50;
+      }
       store.storeGrandTotal =
         store.storeTotalAmount -
         store.storeDiscountAmount +
@@ -1921,6 +1938,21 @@ export const couponCodeList = async (req, res) => {
     const { _id: userId } = req.user;
     const { search } = req.query;
 
+    // ✅ Fix: Build match condition safely to prevent crash
+    const matchConditions = {
+      $or: [{ use: "many" }, { isUsedByUser: false }],
+      deleted: false,
+    };
+
+    // ✅ Fix: Only add search regex if search parameter exists and is not empty
+    if (search && typeof search === 'string' && search.trim() !== '') {
+      matchConditions.$or = [
+        { name: { $regex: search.trim(), $options: "i" } },
+        { code: { $regex: search.trim(), $options: "i" } }
+      ];
+      matchConditions.deleted = false;
+    }
+
     const list = await CouponCode.aggregate([
       {
         $lookup: {
@@ -1958,14 +1990,7 @@ export const couponCodeList = async (req, res) => {
         },
       },
       {
-        $match: {
-          $or: [{ use: "many" }, { isUsedByUser: false }],
-          deleted: false,
-          name: {
-            $regex: search,
-            $options: "i",
-          },
-        },
+        $match: matchConditions,
       },
       {
         $project: {
@@ -1973,12 +1998,16 @@ export const couponCodeList = async (req, res) => {
           isUsedByUser: 0,
         },
       },
+      {
+        $sort: { createdAt: -1 } // ✅ Sort by newest first
+      }
     ]);
 
     res
       .status(status.OK)
       .json({ status: jsonStatus.OK, success: true, data: list });
   } catch (error) {
+    console.error("Error in couponCodeList:", error);
     res.status(status.InternalServerError).json({
       status: jsonStatus.InternalServerError,
       success: false,
@@ -2837,8 +2866,15 @@ export const createOrderV2 = async (req, res) => {
       productsSubtotal: storeTotal,
     });
 
-    // ✅ Shipping Fee
-    const storeShippingFee = storeTotal > 500 ? 0 : 50;
+    // ✅ Shipping Fee - use store's perOrderShippingFee if set
+    let storeShippingFee = 0;
+    if (store.perOrderShippingFee !== null && store.perOrderShippingFee !== undefined) {
+      const freeShippingThreshold = store.freeShippingThreshold || 500;
+      storeShippingFee = storeTotal >= freeShippingThreshold ? 0 : store.perOrderShippingFee;
+    } else {
+      const freeShippingThreshold = store.freeShippingThreshold || 500;
+      storeShippingFee = storeTotal >= freeShippingThreshold ? 0 : 50;
+    }
 
     // ✅ Grand Total
     const grandTotal =
@@ -6443,8 +6479,15 @@ export const retailerCreateOrder = async (req, res) => {
         : rawDiscount;
     }
 
-    // ✅ Shipping Fee
-    const storeShippingFee = storeTotal > 500 ? 0 : 50;
+    // ✅ Shipping Fee - use store's perOrderShippingFee if set
+    let storeShippingFee = 0;
+    if (store.perOrderShippingFee !== null && store.perOrderShippingFee !== undefined) {
+      const freeShippingThreshold = store.freeShippingThreshold || 500;
+      storeShippingFee = storeTotal >= freeShippingThreshold ? 0 : store.perOrderShippingFee;
+    } else {
+      const freeShippingThreshold = store.freeShippingThreshold || 500;
+      storeShippingFee = storeTotal >= freeShippingThreshold ? 0 : 50;
+    }
 
     // ✅ Grand Total
     const donateValue = Number(donate || 0);

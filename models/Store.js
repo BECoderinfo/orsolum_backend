@@ -102,6 +102,8 @@ const StoreSchema = new mongoose.Schema({
         default: false,
       },
     platformFee: { type: Number, default: null }, // per-store override; falls back to env PLATFORM_FEE
+    perOrderShippingFee: { type: Number, default: null }, // per-order shipping fee (overrides default logic if set)
+    freeShippingThreshold: { type: Number, default: 500 }, // Free shipping above this amount
     extraCharges: [{
         label: { type: String, trim: true },
         amount: { type: Number, default: 0 },
