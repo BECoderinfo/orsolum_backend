@@ -83,7 +83,7 @@ const fetchCategoriesWithLocation = async ({
     long,
     limitCount,
     fallbackToAll = false,  // Changed default to false to respect location filtering
-    maxDistance = 6000  // Updated to 6km average for 5-7km range
+    maxDistance = 5000  // Strict 5km range - no stores beyond 5km
 }) => {
     const parsedLat = toNumberOrNull(lat);
     const parsedLong = toNumberOrNull(long);
@@ -135,7 +135,7 @@ const fetchCategoriesWithLocation = async ({
     return StoreCategory.aggregate(pipeline);
 };
 
-const collectNearbyStoreCategoryIds = async ({ lat, long, maxDistance = 6000 }) => {  // Updated to 6km average for 5-7km range
+const collectNearbyStoreCategoryIds = async ({ lat, long, maxDistance = 5000 }) => {  // Strict 5km range - no stores beyond 5km
     const parsedLat = toNumberOrNull(lat);
     const parsedLong = toNumberOrNull(long);
     if (parsedLat === null || parsedLong === null) return [];
@@ -166,12 +166,9 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => 
     const parsedLat = toNumberOrNull(lat);
     const parsedLong = toNumberOrNull(long);
     
-    let storeCategoryIds = await collectNearbyStoreCategoryIds({ lat, long, maxDistance: 6000 });
+    let storeCategoryIds = await collectNearbyStoreCategoryIds({ lat, long, maxDistance: 5000 });
 
-    // If nothing found in 6km, retry with 8km to avoid empty UI
-    if (!storeCategoryIds.length) {
-        storeCategoryIds = await collectNearbyStoreCategoryIds({ lat, long, maxDistance: 8000 });
-    }
+    // Strict 5km - no fallback to avoid showing stores outside range
 
     // ✅ Strategy 1: Try to fetch by storeCategoryId first (existing logic)
     let pipeline = [
@@ -315,7 +312,7 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => 
                 $geoNear: {
                     near: { type: "Point", coordinates: [parsedLong, parsedLat] },
                     distanceField: "distance",
-                    maxDistance: 6000, // 6 km radius
+                    maxDistance: 5000, // Strict 5 km radius - no stores beyond 5km
                     spherical: true
                 }
             });
@@ -413,14 +410,22 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => 
                 }
             }
 
+            // ✅ Fix: If category image is missing, use first store image as fallback
+            let finalImageUrl = null;
+            if (popularCat.image) {
+                // Use category image if available
+                finalImageUrl = popularCat.image.startsWith("http")
+                    ? popularCat.image
+                    : `${S3_BASE_URL}${popularCat.image}`;
+            } else if (storeImages.length > 0) {
+                // Fallback: Use first store image if category image is missing
+                finalImageUrl = storeImages[0].image;
+            }
+
             return {
                 ...popularCat,
                 image: popularCat.image,
-                imageUrl: popularCat.image
-                    ? popularCat.image.startsWith("http")
-                        ? popularCat.image
-                        : `${S3_BASE_URL}${popularCat.image}`
-                    : null,
+                imageUrl: finalImageUrl,
                 storeImages: storeImages // Attach store images (max 2)
             };
         });
@@ -434,7 +439,7 @@ const fetchLocalPopularCategories = async ({ lat, long, limitCount = null }) => 
                     ? row.image
                     : `${S3_BASE_URL}${row.image}`
                 : null,
-            storeImages: []
+            storeImages: [] // No stores available, so no store images
         }));
     }
 
@@ -1815,7 +1820,7 @@ export const getLocalStoreHomePageData = async (req, res) => {
                 $geoNear: {
                     near: { type: "Point", coordinates: [parsedLong, parsedLat] },
                     distanceField: "distance",
-                    maxDistance: 6000, // 6 km radius for 5-7km range
+                    maxDistance: 5000, // Strict 5 km radius - no stores beyond 5km
                     spherical: true
                 }
             });
@@ -1957,7 +1962,19 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
 
         // ✅ Priority: Always use coordinates from request first (for location refresh)
         // This ensures when user changes location, new data is fetched immediately
+        let locationChanged = false; // Track if location was changed in this request
         if (Number.isFinite(parsedLat) && Number.isFinite(parsedLong)) {
+            // Check if location actually changed
+            const previousLat = userDetails?.lat ? parseFloat(userDetails.lat) : null;
+            const previousLong = userDetails?.long ? parseFloat(userDetails.long) : null;
+            
+            // Consider location changed if coordinates differ significantly (more than 100 meters)
+            if (previousLat === null || previousLong === null || 
+                Math.abs(parsedLat - previousLat) > 0.001 || 
+                Math.abs(parsedLong - previousLong) > 0.001) {
+                locationChanged = true;
+            }
+            
             // Use fresh coordinates immediately
             searchLat = parsedLat;
             searchLong = parsedLong;
@@ -2066,7 +2083,7 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                                 coordinates: [searchLong, searchLat] // Longitude first, then latitude
                             },
                             distanceField: "distance",
-                            maxDistance: 6000, // strict 6 km radius for 5-7km range
+                            maxDistance: 5000, // Strict 5 km radius - no stores beyond 5km
                             spherical: true
                         }
                     },
@@ -2129,7 +2146,20 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     { $limit: 5 } // Only 5 stores for home section
                 ]);
                 
-                // If no stores found in 5km radius, implement fallback workflow
+                // ✅ Strict 5km filtering: No fallback - if no stores in 5km, return empty
+                // This ensures stores from other cities/locations don't show when location changes
+                if (!stores || stores.length === 0) {
+                    console.log(`No stores found within strict 5km radius for (${searchCity || 'N/A'}, ${searchArea || 'N/A'})`);
+                    stores = []; // Return empty array - no fallback to avoid showing stores from other locations
+                    storesMessage = "No stores available within 5km range for this location";
+                } else {
+                    // Stores found within 5km radius - will be filtered again by distance after calculation
+                    storesMessage = "Stores available for this location";
+                }
+                
+                // Disabled fallback logic to ensure strict 5km filtering
+                // When location changes to other city, stores from previous location won't show
+                /*
                 if (!stores || stores.length === 0) {
                     console.log(`No stores found within 5km radius for (${searchCity || 'N/A'}, ${searchArea || 'N/A'}), implementing fallback workflow`);
                     
@@ -2284,10 +2314,8 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                         // Stores found at city/area level
                         storesMessage = "Stores available (city/area level search)";
                     }
-                } else {
-                    // Stores found within 5km radius
-                    storesMessage = "Stores available for this location";
                 }
+                */
             } else if (searchCity || searchArea) {
                 // Build match conditions for city/area-based search
                 let matchConditions = {
@@ -2426,7 +2454,17 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                     estimatedTimeMinutes: estimatedTime
                 };
             });
-            stores = storesWithDistance;
+            
+            // ✅ Strict 5km filtering: Exclude stores beyond 5km (not even 5.01km)
+            // This ensures when location changes to other city, stores from previous location don't show
+            stores = storesWithDistance.filter(store => {
+                // If distance is null or undefined, exclude it (shouldn't happen with coordinates)
+                if (store.distanceKm === null || store.distanceKm === undefined) {
+                    return false;
+                }
+                // Only include stores with distance <= 5km (strict)
+                return store.distanceKm <= 5.0;
+            });
         } else {
             // Without location, keep distance/time null
             stores = stores.map(store => ({
@@ -2482,7 +2520,9 @@ export const getLocalStoreHomePageDataV2 = async (req, res) => {
                 storesMessage,
                 trendingProducts,
                 totalCartCount,
-                location: resolvedLocation
+                location: resolvedLocation,
+                locationChanged: locationChanged, // ✅ Flag to indicate location was changed - frontend should refresh
+                timestamp: new Date().toISOString() // ✅ Timestamp to help frontend detect changes
             }
         });
     } catch (error) {
@@ -2595,7 +2635,7 @@ export const getAllStores = async (req, res) => {
                         coordinates: [parsedLong, parsedLat] // Longitude first, then latitude
                     },
                     distanceField: "distance",
-                    maxDistance: 6000, // strict 6 km radius for 5-7km range
+                    maxDistance: 5000, // Strict 5 km radius - no stores beyond 5km
                     spherical: true,
                     query: { status: "A" } // Only active stores
                 }
@@ -2743,7 +2783,16 @@ export const getAllStores = async (req, res) => {
                     estimatedTimeMinutes: estimatedTime
                 };
             });
-            stores = storesWithDistance;
+            
+            // ✅ Strict 5km filtering: Exclude stores beyond 5km (not even 5.01km)
+            stores = storesWithDistance.filter(store => {
+                // If distance is null or undefined, exclude it (shouldn't happen with coordinates)
+                if (store.distanceKm === null || store.distanceKm === undefined) {
+                    return false;
+                }
+                // Only include stores with distance <= 5km (strict)
+                return store.distanceKm <= 5.0;
+            });
         } else {
             // If user location is not available, set distance and time to null for all stores
             stores = stores.map(store => ({

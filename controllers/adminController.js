@@ -1829,7 +1829,8 @@ export const onlineOrderDetails = async (req, res) => {
                     'productDetails.productName': '$productInfo.name',
                     'productDetails.productImages': '$productInfo.images',
                     'productDetails.manufacturer': '$productInfo.manufacturer',
-                    'productDetails.information': '$productInfo.information'
+                    'productDetails.information': '$productInfo.information',
+                    'productDetails.productIdObj': '$productInfo'
                 }
             },
             {
@@ -1856,7 +1857,18 @@ export const onlineOrderDetails = async (req, res) => {
                         $push: {
                             $cond: [
                                 { $ne: ['$productDetails.productId', null] },
-                                '$productDetails',
+                                {
+                                    productId: '$productDetails.productId',
+                                    productName: '$productDetails.productName',
+                                    productImages: '$productDetails.productImages',
+                                    manufacturer: '$productDetails.manufacturer',
+                                    information: '$productDetails.information',
+                                    mrp: '$productDetails.mrp',
+                                    qty: '$productDetails.qty',
+                                    productPrice: '$productDetails.productPrice',
+                                    quantity: '$productDetails.quantity',
+                                    productIdObj: '$productDetails.productIdObj'
+                                },
                                 '$$REMOVE'
                             ]
                         }
